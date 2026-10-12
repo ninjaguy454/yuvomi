@@ -257,6 +257,44 @@ export function seriesMaterializationPlan(d,task,{completedOn,expirationAnchor=f
   return window?{state,definition,...window}:null;
 }
 
+/** Shared operational selection, independent of authorization and rewards. */
+export function seriesRotationAssignment(source,definition,{advance=false}={}) {
+  const fields=definition.task,roster=definition.rotation_user_ids;
+  const rotating=fields.assignment_mode==='round_robin'&&roster.length>0;
+  const index=rotating?(Number(source.rotation_index||0)+(advance?1:0))%roster.length:Number(source.rotation_index||0);
+  const primary=rotating?roster[(index+Number(fields.rotation_group?fields.rotation_slot||0:0))%roster.length]
+    :definition.assigned_user_ids[0]??null;
+  return {rotation_index:index,rotation_cycle:Number(source.rotation_cycle||0)+(advance&&fields.rotation_group?1:0),
+    primary_user_id:primary,assigned_user_ids:rotating?[primary]:[...definition.assigned_user_ids]};
+}
+
+function translatedSeriesDate(date,oldAnchor,newAnchor) {
+  if(!date||!oldAnchor||!newAnchor)return null;
+  const delta=Date.parse(`${newAnchor}T00:00:00Z`)-Date.parse(`${oldAnchor}T00:00:00Z`);
+  return Number.isFinite(delta)?new Date(Date.parse(`${date}T00:00:00Z`)+delta).toISOString().slice(0,10):null;
+}
+
+/** Extracted from fresh materialization; callers supply its existing skill
+ * validator and date context. No database registration or turn is consumed. */
+export function prepareSeriesOccurrenceWork(source,definition,window,{qualify,asOfDate}={}) {
+  const selection=seriesRotationAssignment(source,definition,{advance:true});
+  const rootAssigned=qualify(selection.assigned_user_ids,definition.skill_ids,window.due_date,false);
+  const primary=!definition.skill_ids.length||rootAssigned.includes(selection.primary_user_id)
+    ?selection.primary_user_id:rootAssigned[0]??null;
+  const relative=window.relative??(definition.task.due_date_offset_days!=null);
+  const nextAnchor=relative?window.start_date:window.due_date;
+  const actions=definition.subtasks.map(action=>{
+    const oldAnchor=(relative?definition.task.start_date:definition.task.due_date)||action.task.due_date;
+    const dueDate=action.task.due_date?translatedSeriesDate(action.task.due_date,oldAnchor,nextAnchor)??window.due_date:null;
+    const assigned=qualify(action.assigned_user_ids,action.skill_ids,dueDate||asOfDate,true);
+    return {action_key:action.action_key,primary_user_id:assigned[0]??null,assigned_user_ids:assigned,
+      window:{start_date:translatedSeriesDate(action.task.start_date,oldAnchor,nextAnchor)??action.task.start_date,
+        start_time:action.task.start_time,due_date:dueDate,due_time:action.task.due_time}};
+  });
+  return {...selection,primary_user_id:primary,assigned_user_ids:rootAssigned,actions,
+    window:{start_date:window.start_date,start_time:definition.task.start_time,due_date:window.due_date,due_time:definition.task.due_time}};
+}
+
 /** Plan the successor of the supplied nominal occurrence, without inserting
  * or editing anything. Callers can chain returned dates to reconcile existing
  * untouched future occurrences under one selected definition. */

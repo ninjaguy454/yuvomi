@@ -1,6 +1,6 @@
 /** Transactional reconciliation of already materialized series occurrences.
  * The existing recurrence generator remains the only generator. */
-import { planSeriesOccurrence, recordOccurrenceDefinition, registerSeriesAction, normalizeSeriesDefinition, seriesActionAuthorization } from './task-series.js';
+import { planSeriesOccurrence, recordOccurrenceDefinition, registerSeriesAction, normalizeSeriesDefinition, seriesActionAuthorization, definitionEqual, seriesRotationAssignment } from './task-series.js';
 import { assertTaskScoringMutation, taskScoringIdentity } from './task-scoring.js';
 import { assertTaskMutation, taskCapabilities } from './task-access.js';
 import { actorPermissions } from '../permissions.js';
@@ -8,6 +8,7 @@ import { TaskStateError } from './task-lifecycle.js';
 import { setTaskSkills, assertTaskSkillAssignments } from './task-skills.js';
 import { setTags } from '../utils/task-tags.js';
 import { applyTaskActivityBinding, clearTaskActivityBinding } from './task-activity-bindings.js';
+import { captureTaskActivityBindingDefinition, updateTaskActivitySnapshotSkills } from './task-activity-snapshot.js';
 import { reconcileTaskSupervision, assertTaskSupervisionAssignee } from './task-supervision.js';
 import { assertTaskAssignmentAvailability } from './assignment-responsibilities.js';
 import { setTaskLocation } from './task-locations.js';
@@ -22,6 +23,20 @@ const ACTION_FIELDS = ['title','description','category','priority','start_date',
 const actorId = actor => typeof actor === 'number' ? actor : actor.authUserId || actor.session?.userId;
 const read = (d,id) => d.prepare('SELECT * FROM tasks WHERE id=?').get(id);
 const clone = value => JSON.parse(JSON.stringify(value));
+
+export function sameSeriesBindingPolicy(left,right,{includeRequirements=false}={}) {
+  const policy=binding=>{
+    if(!binding)return null;
+    const value=clone(binding);
+    if(value.snapshot){
+      if(includeRequirements)value.snapshot.required_skill_ids=[...value.snapshot.required_skill_ids].sort((a,b)=>a-b);
+      else delete value.snapshot.required_skill_ids;
+      delete value.snapshot.checklist;delete value.snapshot.rotation_rendering;
+    }
+    return value;
+  };
+  return definitionEqual({task:{},subtasks:[],binding:policy(left)},{task:{},subtasks:[],binding:policy(right)});
+}
 
 export function futureActionCapabilities(d,actor,root,action) {
   const auth=seriesActionAuthorization(d,action);
@@ -54,6 +69,8 @@ export function proposedFutureSeriesDefinition(d,actor,root,before,patch,{valida
     if(Object.hasOwn(input,'scoring_mode'))target.task.scoring_review_required=0;
   };
   apply(after,fields,rootAllowed);
+  if(Object.hasOwn(fields,'skill_ids')&&after.binding?.snapshot)
+    after.binding.snapshot.required_skill_ids=[...after.skill_ids];
   const seen=new Set(),available=new Map(before.subtasks.map(a=>[a.action_key,a]));
   const requireAction=key=>{
     const action=available.get(key);
@@ -96,6 +113,21 @@ export function proposedFutureSeriesDefinition(d,actor,root,before,patch,{valida
   return after;
 }
 
+export function resolveSeriesDraftClientKeys(steps) {
+  const reserved=new Set();
+  for(const step of steps)if(step.clientKey!==undefined) {
+    if(typeof step.clientKey!=='string'||!/^[A-Za-z0-9_-]{1,80}$/.test(step.clientKey)||reserved.has(step.clientKey))
+      throw new TaskStateError('Choose a unique valid draft work key.',{},400);
+    reserved.add(step.clientKey);
+  }
+  return steps.map((step,index)=>{
+    if(step.id!=null||step.clientKey!==undefined)return {...step};
+    const base=`draft_${index}`;let key=base,suffix=0;
+    while(reserved.has(key))key=`${base}_${++suffix}`;
+    reserved.add(key);return {...step,clientKey:key};
+  });
+}
+
 export function proposedSeriesDefinition(before, { fields, editedSubtasks, assigned, rotation, skills, tags, binding, location, authorId=null, assignmentExplicit=false }) {
   const after=clone(before);
   Object.assign(after.task, fields);
@@ -107,9 +139,9 @@ export function proposedSeriesDefinition(before, { fields, editedSubtasks, assig
   if(after.binding?.snapshot) {
     after.binding.snapshot.required_skill_ids=[...skills];
   }
-  if(editedSubtasks)after.subtasks=editedSubtasks.next.map((step,order)=>{
+  if(editedSubtasks)after.subtasks=resolveSeriesDraftClientKeys(editedSubtasks.next).map((step,order)=>{
     const existing=before.subtasks.find(child=>child.source_task_id===step.id);
-    const row=existing?clone(existing):{action_key:`new:${step.clientKey??`draft_${order}`}`,source_task_id:null,
+    const row=existing?clone(existing):{action_key:`new:${step.clientKey}`,source_task_id:null,
       task:{description:null,category:after.task.category,priority:'none',start_date:after.task.start_date,start_time:after.task.start_time,
         due_date:after.task.due_date,due_time:after.task.due_time,points:0,visibility:after.task.visibility,locked:0,
         expiration_policy:'keep_overdue',is_recurring:0,recurrence_rule:null,recurrence_from_completion:0,
@@ -174,13 +206,7 @@ export function assertSeriesDefinitionMutation(d,actor,task,before,after,{future
     }
   };
   assertConfiguration(previous,next,rootCapabilities);
-  const bindingPolicy=binding=>{
-    if(!binding)return null;
-    const policy=clone(binding);
-    if(policy.snapshot){delete policy.snapshot.required_skill_ids;delete policy.snapshot.checklist;delete policy.snapshot.rotation_rendering;}
-    return policy;
-  };
-  if(!same(bindingPolicy(previous.binding),bindingPolicy(next.binding))) {
+  if(!sameSeriesBindingPolicy(previous.binding,next.binding)) {
     requireCapability(rootCapabilities,'change_assignment');requireCapability(rootCapabilities,'reassign');
     if(previous.binding?.activity_template_id!==next.binding?.activity_template_id) {
       requireCapability(rootCapabilities,'change_required_skills');
@@ -262,9 +288,11 @@ function shiftDate(date,oldAnchor,newAnchor) {
 
 function reconcileOccurrence(d,task,definition,window,actor) {
   const data=definition.data,fields={...data.task,rotation_bindings_json:data.task.rotation_bindings_json||'[]',start_date:window.start_date,due_date:window.due_date};
-  const roster=data.rotation_user_ids;
-  const assigned=!data.binding&&fields.assignment_mode==='round_robin'&&roster.length
-    ? [roster[((task.rotation_index||0)+(fields.rotation_group?fields.rotation_slot||0:0))%roster.length]] : data.assigned_user_ids;
+  const existingBinding=data.binding?captureTaskActivityBindingDefinition(d,task.id):null;
+  const retainBinding=!!existingBinding&&sameSeriesBindingPolicy(existingBinding,data.binding,{includeRequirements:true});
+  const actualAssigned=retainBinding?d.prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(task.id).map(row=>row.user_id):[];
+  const assigned=retainBinding?(task.assigned_to?[task.assigned_to,...actualAssigned.filter(id=>id!==task.assigned_to)]:actualAssigned)
+    :seriesRotationAssignment(task,data).assigned_user_ids;
   const body={...fields,assigned_to:assigned,skill_ids:data.skill_ids,tags:data.tags,subtasks:[]};
   assertTaskMutation(d,actor,task,body,{operation:'update'});
   const capabilities=taskCapabilities(d,actor,task);
@@ -306,7 +334,11 @@ function reconcileOccurrence(d,task,definition,window,actor) {
     registerSeriesAction(d,id,task.id,action.action_key);
     assignments(d,id,action.assigned_user_ids);setTaskSkills(d,id,action.skill_ids);setTags(d,id,action.tags);
   }
-  if(data.binding)applyTaskActivityBinding(d,task.id,{activityTemplateId:data.binding.activity_template_id,
+  // A pristine bound target already consumed its turn. Preserve that actual
+  // assignment when its policy is unchanged, then re-evaluate supervision
+  // against the edited frozen requirements and complete concrete checklist.
+  if(retainBinding)updateTaskActivitySnapshotSkills(d,task.id,data.binding.snapshot.required_skill_ids??data.skill_ids);
+  else if(data.binding)applyTaskActivityBinding(d,task.id,{activityTemplateId:data.binding.activity_template_id,
     subjectUserId:data.binding.subject_user_id,assignmentOverrideUserId:data.binding.assignment_override_user_id,
     activitySnapshot:data.binding.snapshot,commitRotation:false,allowInactive:true,
     materializeChecklist:false,dateKey:window.due_date});

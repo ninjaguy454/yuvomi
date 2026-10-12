@@ -22,8 +22,9 @@ import { addCalendarDays, calendarDayOffset, resolveActivitySchedule } from '../
 import { registerRecurrenceOccurrence, registerRecurrenceAction, recurrenceFrontier, isRecurrenceFrontier, isTerminalRecurrenceOccurrence } from '../services/task-recurrence-frontier.js';
 import { ensureSeriesDefinition, seriesMaterializationPlan, recordOccurrenceDefinition, registerSeriesAction, authoritativeTaskRecurrence,
   seriesMetadata, taskSeriesState, captureSeriesDefinition, appendSeriesDefinition, definitionEqual, seriesDefinitionForGeneration,
-  normalizeSeriesSchedule, effectiveSeriesScoringDefinition, seriesActionAuthorization } from '../services/task-series.js';
-import { proposedSeriesDefinition, proposedFutureSeriesDefinition, futureActionCapabilities, futureRootCapabilities, assertSeriesEdit, assertSeriesDefinitionMutation, reconcileSeriesFuture, seriesOccurrencePreservationReason } from '../services/task-series-edit.js';
+  normalizeSeriesSchedule, effectiveSeriesScoringDefinition, seriesActionAuthorization, planSeriesOccurrence,
+  prepareSeriesOccurrenceWork, seriesRotationAssignment } from '../services/task-series.js';
+import { proposedSeriesDefinition, proposedFutureSeriesDefinition, resolveSeriesDraftClientKeys, sameSeriesBindingPolicy, futureActionCapabilities, futureRootCapabilities, assertSeriesEdit, assertSeriesDefinitionMutation, reconcileSeriesFuture, seriesOccurrencePreservationReason } from '../services/task-series-edit.js';
 import {taskScoringSummary,previewTaskScoring,assertTaskScoringMutation,taskScoringRoot,taskScoringRows,taskScoringIdentity} from '../services/task-scoring.js';
 import { readTaskActivityDefinition, updateTaskActivitySnapshotSkills, captureActivityTemplateDefinition } from '../services/task-activity-snapshot.js';
 import { syncTaskRewards } from '../services/rewards.js';
@@ -79,7 +80,7 @@ import { TaskSkillError, normalizeSkillIds, loadTaskSkillIds, setTaskSkills, cop
 import { assertTaskAssignmentAvailability, TaskAssignmentAvailabilityError } from '../services/assignment-responsibilities.js';
 import { assertTaskMutation, attachTaskCapabilities, taskCapabilities, taskVisibilityWhere, taskSupervisionManagementAllowed, withTaskReadProjection, withTaskReadSnapshot } from '../services/task-access.js';
 import { assertTaskRevision, changeTaskStatus, reopenExpiredTask, assertTaskWindowAction, configureTaskRecurrence, recordTaskActivity, taskActivity, TaskStateError } from '../services/task-lifecycle.js';
-import { attachTaskSupervision, reconcileTaskSupervision, assertTaskSupervisionAssignee, deleteTaskSupervisionProjections, taskSupervisionRootId } from '../services/task-supervision.js';
+import { attachTaskSupervision, reconcileTaskSupervision, assertTaskSupervisionAssignee, deleteTaskSupervisionProjections, taskSupervisionRootId, prepareProspectiveTaskExecution } from '../services/task-supervision.js';
 import { EXPIRATION_POLICIES, taskDeadlineMs, taskStartMs, taskWindowAncestors } from '../services/task-window.js';
 import { taskChangesStream } from '../services/task-changes.js';
 import { assertCapability } from '../permissions.js';
@@ -277,11 +278,12 @@ function futureEditContext(req,task) {
   if(!futureRootCapabilities(db.get(),req,task,definition).view)throw new TaskStateError('This future definition is unavailable.',{},404);
   assertSeriesDefinitionMutation(db.get(),req,task,before,definition,{futureOnly:true});
   validateFutureDefinitionWindows(req,task,definition);
+  validateFutureDefinitionConfiguration(task,before,definition);
   return {state,stored,before,definition};
 }
 function futureScoringWires(req,task,before,after) {
   const visible=definition=>definition.subtasks.filter(action=>futureActionCapabilities(db.get(),req,task,action).view);
-  const old=visible(before),next=visible(after),keys=[...new Set([...old,...next].map(a=>a.action_key))].sort();
+  const old=visible(before),next=visible(after),keys=[...new Set([...before.subtasks,...after.subtasks].map(a=>a.action_key))].sort();
   const maximum=Math.max(...taskScoringRows(db.get(),taskScoringRoot(db.get(),task.id)).map(row=>row.id));
   const ids=new Map(keys.map((key,i)=>[key,maximum+i+1]));
   const wire=(definition,actions)=>({scoring_mode:definition.task.scoring_mode,points:definition.task.points,
@@ -325,6 +327,8 @@ function assertScoringProgressIntent(task,body,edited,{performersChanged=scoring
   if(changed&&status!==task.status)throw new TaskStateError('Save scoring settings first, then change progress separately.',{reason:'scoring_progress_separate'});
 }
 function finalizeFutureActionKeys(definition) {
+  if(new Set(definition.subtasks.map(action=>action.action_key)).size!==definition.subtasks.length)
+    throw new TaskStateError('Choose unique future work keys.',{},400);
   const created=[];
   for(const action of definition.subtasks)if(action.action_key.startsWith('new:')) {
     const client_key=action.action_key.slice(4);action.action_key=`series-action:${randomUUID()}`;
@@ -337,6 +341,7 @@ function assertCompatibleFutureDefinition(req,task,series,definition) {
   assertSeriesDefinitionMutation(db.get(),req,task,before,definition,{futureOnly:true});
   if(!futureRootCapabilities(db.get(),req,task,definition).view)throw new TaskStateError('This future definition is unavailable.',{},404);
   validateFutureDefinitionWindows(req,task,definition);
+  validateFutureDefinitionConfiguration(task,before,definition);
   if(futureReviewRequired(definition))throw new TaskStateError('Choose a scoring mode for future work before saving.',{reason:'scoring_review_required'});
   return before;
 }
@@ -417,16 +422,169 @@ function validateFutureDefinitionWindows(req,task,definition) {
       ? 'The future definition has an invalid schedule. Review it with its creator.' : error,{},400);
   }
 }
+function validateFutureDefinitionConfiguration(task,before,definition) {
+  const fields=definition.task,roster=definition.rotation_user_ids,mode=fields.assignment_mode??'fixed';
+  if(definition.binding&&mode==='round_robin')throw new TaskStateError('The Activity Template owns this Task assignment. Keep its fixed Task assignment mode.',{},400);
+  const error=roundRobinConfigError(db.get(),{assignmentMode:mode,isRecurring:!!fields.is_recurring,
+    recurrenceRule:fields.recurrence_rule,parentTaskId:task.parent_task_id,rotationUserIds:roster});
+  if(error)throw new TaskStateError(error,{},400);
+  const group=mode==='round_robin'?normalizeRotationGroup(fields.rotation_group):null;
+  const slot=group?parseRotationSlot(fields.rotation_slot):0;
+  const priorGroup=normalizeRotationGroup(before.task.rotation_group);
+  if(priorGroup&&group&&priorGroup.localeCompare(group,undefined,{sensitivity:'accent'})!==0)
+    throw new TaskStateError('Move a grouped task by removing it from the group first.',{},400);
+  const groupError=rotationGroupConfigError(db.get(),{taskId:task.id,joining:!!group&&!priorGroup,
+    assignmentMode:mode,rotationGroup:group,rotationSlot:slot,rotationUserIds:roster,
+    recurrenceRule:fields.recurrence_rule,recurrenceFromCompletion:fields.recurrence_from_completion,
+    dueDate:fields.due_date,dueTime:fields.due_time,startDate:fields.start_date,dueDateOffset:fields.due_date_offset_days,
+    futureDefinitions:true});
+  if(groupError)throw new TaskStateError(groupError,{},400);
+  if(priorGroup&&Number(before.task.rotation_slot||0)!==slot
+    &&currentRotationGroupState(db.get(),group,task.id).peers.some(peer=>peer.status!=='open'))
+    throw new TaskStateError('Cannot change a rotation-group position after its current cycle has started.',{},409);
+}
 function previewFutureDefinitions(req,task,before,definition,{viewerId,authorizedTaskIds,scope='future_only'}) {
   const wires=futureScoringWires(req,task,before,definition),proposal={...wires.after};
   if(proposal.scoring_mode==='legacy')delete proposal.scoring_mode;
+  const prepared=prepareFutureScoringExecution(task,before,definition,wires);
   const preview=previewTaskScoring(db.get(),task.id,proposal,{scope:'future_only',viewerId,beforeDefinition:wires.before,
-    authorizedTaskIds,authorizedTemplateIds:[...wires.ids.values()],includeUnits:true});
+    authorizedTaskIds,authorizedTemplateIds:[...wires.ids.values()],includeUnits:true,
+    beforeExecutionContext:prepared.before,afterExecutionContext:prepared.after});
   const metadata=(value,actions)=>new Map([['root',value.task],...actions.map(action=>[action.action_key,action.task])]);
   decorateScoringUnits(preview,metadata(before,wires.old),metadata(definition,wires.next),{futureIds:new Map([...wires.ids].map(([key,id])=>[id,key]))});
-  preview.scope=scope;preview.review_required=!!definition.task.scoring_review_required;
-  if(futureReviewRequired(definition)){preview.valid=false;preview.warnings=[{reason:'scoring_review_required',message:'Choose a scoring mode for future work.'}];}
+  preview.scope=scope;preview.review_required=!!definition.task.scoring_review_required;preview.forecast_context=prepared.forecast_context;
+  if(futureReviewRequired(definition)){preview.valid=false;preview.warnings.push({reason:'scoring_review_required',message:'Choose a scoring mode for future work.'});}
   return preview;
+}
+
+function qualifySeriesAssignments(ids,skills,date,allowDelegation=false) {
+  return ids.filter(userId=>{
+    try {assertTaskSkillAssignments(db.get(),skills,[userId],date,{allowDelegation});return true;}
+    catch(error){if(error instanceof TaskSkillError)return false;throw error;}
+  });
+}
+function prospectiveUnavailable(condition='next_occurrence_unavailable') {
+  return new TaskStateError('The next occurrence cannot be forecast yet. Review its schedule or assignment before trying again.',
+    {reason:'scoring_projection_unavailable',conditions:[condition]});
+}
+function executionTask(fields) {
+  const {id,parent_task_id,...task}=fields;
+  return {...task,status:'open',archived_at:null};
+}
+function phaseExecutionInput(task,state,record,definition,ids,asOfDate,target,{beforePhase=false}={}) {
+  const d=db.get(),context={kind:'next_occurrence',generation:state.occurrence.generation+1,as_of_date:asOfDate,
+    assumed_completion_date:null,preparation:target?'existing_untouched':'fresh',conditions:[]};
+  let prepared,selection={preferred_supervisor_user_ids:[],attempted_supervisor_user_ids:[]};
+  if(target) {
+    const targetTask=target.task,baseline=captureSeriesDefinition(d,targetTask.id,{registerActions:false});
+    const window=beforePhase||definitionEqual(baseline,definition)
+      ?{start_date:target.occurrence.planned_start_date,due_date:target.occurrence.planned_due_date}
+      :definition.task.recurrence_from_completion
+        ?{start_date:target.occurrence.planned_start_date,due_date:target.occurrence.planned_due_date}
+        :planSeriesOccurrence(d,record,state.occurrence);
+    if(!window)throw prospectiveUnavailable('recurrence_ended');
+    const actual=new Map(d.prepare(`SELECT t.*,a.action_key FROM tasks t JOIN task_recurrence_actions a ON a.task_id=t.id
+      WHERE a.occurrence_task_id=?`).all(targetTask.id).map(row=>[row.action_key,row]));
+    const joins=id=>d.prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(id).map(row=>row.user_id);
+    const assignment=seriesRotationAssignment(targetTask,definition);
+    if(!beforePhase&&definition.binding&&!sameSeriesBindingPolicy(baseline.binding,definition.binding))
+      throw prospectiveUnavailable('binding_policy_changed');
+    const sameAssignment=definitionEqual(baseline,definition)||definition.binding;
+    let rootAssigned=beforePhase||sameAssignment?joins(targetTask.id):assignment.assigned_user_ids;
+    let primary=beforePhase||sameAssignment?targetTask.assigned_to:assignment.primary_user_id;
+    if(!beforePhase&&definition.binding&&!sameSeriesBindingPolicy(baseline.binding,definition.binding,{includeRequirements:true})) {
+      const binding=definition.binding,activity=binding.snapshot;
+      if(!binding.assignment_override_user_id&&['eligible_random','random'].includes(activity.assignment_policy||activity.assignment_strategy))
+        throw prospectiveUnavailable('random_assignment_unresolved');
+      const resolved=previewTaskActivityBinding(d,{activityTemplateId:binding.activity_template_id,subjectUserId:binding.subject_user_id,
+        assignmentOverrideUserId:binding.assignment_override_user_id,activitySnapshot:activity,allowInactive:true,
+        task:{...window,start_time:definition.task.start_time,due_time:definition.task.due_time},dateKey:window.due_date||asOfDate}).resolution;
+      primary=resolved.primary?.id??null;
+      rootAssigned=(resolved.participants?.length?resolved.participants:resolved.primary?[resolved.primary]:[]).map(member=>member.id);
+      context.conditions.push('binding_assignment_reprepared');
+    }
+    const oldAnchor=definition.task.due_date_offset_days!=null?definition.task.start_date:definition.task.due_date;
+    const newAnchor=definition.task.due_date_offset_days!=null?window.start_date:window.due_date;
+    const shift=date=>!date||!oldAnchor||!newAnchor?date??null
+      :new Date(Date.parse(`${date}T00:00:00Z`)+Date.parse(`${newAnchor}T00:00:00Z`)-Date.parse(`${oldAnchor}T00:00:00Z`)).toISOString().slice(0,10);
+    prepared={primary_user_id:primary??null,assigned_user_ids:rootAssigned,
+      window:{...window,start_time:definition.task.start_time,due_time:definition.task.due_time},
+      actions:definition.subtasks.map(action=>{
+        const row=actual.get(action.action_key);
+        return {action_key:action.action_key,primary_user_id:beforePhase&&row?row.assigned_to??null:action.assigned_user_ids[0]??null,
+          assigned_user_ids:beforePhase&&row?joins(row.id):[...action.assigned_user_ids],
+          window:beforePhase&&row?{start_date:row.start_date,start_time:row.start_time,due_date:row.due_date,due_time:row.due_time}
+            :{start_date:shift(action.task.start_date),start_time:action.task.start_time,due_date:shift(action.task.due_date),due_time:action.task.due_time}};
+      })};
+    selection={
+      preferred_supervisor_user_ids:d.prepare("SELECT user_id FROM task_responsibilities WHERE task_id=? AND role='supervisor' AND status='active'").all(targetTask.id).map(row=>row.user_id),
+      attempted_supervisor_user_ids:[...new Set(d.prepare("SELECT responsible_user_id FROM planning_obligations WHERE task_id=? AND role='supervisor' AND status IN ('declined','timed_out')").all(targetTask.id).map(row=>row.responsible_user_id))],
+      prior_units:[]
+    };
+    for(const prior of d.prepare('SELECT action_task_id,learner_user_id,supervisor_user_id FROM task_supervision_actions WHERE source_task_id=?').all(targetTask.id)) {
+      const key=prior.action_task_id===targetTask.id?'root':[...actual.values()].find(row=>row.id===prior.action_task_id)?.action_key;
+      if(!key)throw prospectiveUnavailable();
+      if(key!=='root'&&!definition.subtasks.some(action=>action.action_key===key))continue;
+      selection.prior_units.push({ref:key==='root'?{kind:'definition_root'}:{kind:'template',template_id:ids.get(key)},
+        learner_user_id:prior.learner_user_id,supervisor_user_id:prior.supervisor_user_id});
+    }
+  } else {
+    const completionRelative=!!definition.task.recurrence_from_completion&&!['expired','skipped'].includes(task.status);
+    context.assumed_completion_date=completionRelative?asOfDate:null;
+    if(completionRelative)context.conditions.push('completion_date_assumed');
+    const window=planSeriesOccurrence(d,record,state.occurrence,{completedOn:asOfDate,skipped:task.status==='skipped',withoutCompletion:['expired','skipped'].includes(task.status)});
+    if(!window)throw prospectiveUnavailable(definition.task.is_recurring?'next_occurrence_unavailable':'recurrence_ended');
+    prepared=prepareSeriesOccurrenceWork(task,definition,window,{qualify:qualifySeriesAssignments,asOfDate});
+    if(definition.binding) {
+      const binding=definition.binding,activity=binding.snapshot;
+      if(!binding.assignment_override_user_id&&['eligible_random','random'].includes(activity.assignment_policy||activity.assignment_strategy))
+        throw prospectiveUnavailable('random_assignment_unresolved');
+      const resolved=previewTaskActivityBinding(d,{activityTemplateId:binding.activity_template_id,subjectUserId:binding.subject_user_id,
+        assignmentOverrideUserId:binding.assignment_override_user_id,activitySnapshot:activity,
+        allowInactive:true,task:prepared.window,dateKey:window.due_date||asOfDate}).resolution;
+      prepared.primary_user_id=resolved.primary?.id??null;
+      prepared.assigned_user_ids=(resolved.participants?.length?resolved.participants:resolved.primary?[resolved.primary]:[]).map(member=>member.id);
+    }
+    // Manual materialization adds explicit child owners as parent participants.
+    // Binding materialization subsequently replaces those joins with its own
+    // resolved assignment; helper eligibility still sees every child below.
+    if(!definition.binding)prepared.assigned_user_ids=[...new Set([...prepared.assigned_user_ids,...prepared.actions.flatMap(action=>action.assigned_user_ids)])];
+  }
+  const actions=new Map(prepared.actions.map(action=>[action.action_key,action]));
+  const input={context,root:{ref:{kind:'definition_root'},role:'source_root',task:executionTask(definition.task),
+    primary_user_id:prepared.primary_user_id,assigned_user_ids:prepared.assigned_user_ids,skill_ids:definition.skill_ids,
+    window:prepared.window,is_optional:!!definition.task.is_optional,binding:definition.binding,planning:definition.planning},
+    actions:definition.subtasks.map(action=>({ref:{kind:'template',template_id:ids.get(action.action_key)},role:'source_action',
+      task:executionTask(action.task),primary_user_id:actions.get(action.action_key).primary_user_id,
+      assigned_user_ids:actions.get(action.action_key).assigned_user_ids,skill_ids:action.skill_ids,
+      window:actions.get(action.action_key).window,is_optional:!!action.task.is_optional})),selection};
+  return {execution:prepareProspectiveTaskExecution(d,input),window:prepared.window,context};
+}
+function prepareFutureScoringExecution(task,before,after,wires) {
+  try {return prepareFutureScoringExecutionChecked(task,before,after,wires);}
+  catch(error){if(error instanceof TaskStateError&&error.details?.reason==='scoring_projection_unavailable')throw error;
+    throw prospectiveUnavailable('projection_evidence_unavailable');}
+}
+function prepareFutureScoringExecutionChecked(task,before,after,wires) {
+  const d=db.get(),state=taskSeriesState(d,task.id),asOfDate=todayInHouseholdZone();
+  const stored=seriesDefinitionForGeneration(d,state.series_id,state.occurrence.generation+1);
+  const targetOccurrence=d.prepare("SELECT * FROM task_recurrence_occurrences WHERE series_id=? AND generation=? AND state='materialized'")
+    .get(state.series_id,state.occurrence.generation+1);
+  let target=null;
+  if(targetOccurrence) {
+    const targetTask=d.prepare('SELECT * FROM tasks WHERE id=?').get(targetOccurrence.task_id);
+    if(!targetTask||seriesOccurrencePreservationReason(d,targetOccurrence,targetTask))throw prospectiveUnavailable('target_preserved');
+    target={occurrence:targetOccurrence,task:targetTask};
+  }
+  const old=phaseExecutionInput(task,state,{...stored,data:before},before,wires.ids,asOfDate,target,{beforePhase:true});
+  const record=definitionEqual(before,after)?{...stored,data:after}:{...stored,id:null,data:after};
+  const next=phaseExecutionInput(task,state,record,after,wires.ids,asOfDate,target);
+  const project=(prepared,actions)=>({...prepared.execution,units:prepared.execution.units.filter(unit=>unit.ref.kind==='definition_root'
+    ||actions.some(action=>wires.ids.get(action.action_key)===unit.ref.template_id))});
+  return {before:project(old,wires.old),after:project(next,wires.next),forecast_context:{kind:'next_occurrence',effective_generation:state.occurrence.generation+1,
+    as_of_date:asOfDate,before:{...old.window,preparation:old.context.preparation},after:{...next.window,preparation:next.context.preparation},
+    conditions:[...new Set([...old.context.conditions,...next.context.conditions,
+      ...[...old.execution.warnings,...next.execution.warnings].map(warning=>warning.reason)])]}};
 }
 function decorateScoringSettlements(preview,actor) {
   if(!preview.settlements)return;
@@ -703,12 +861,9 @@ function editedSubtasksInput(task, body, actor, { definitionOnly = false } = {})
   if(task.parent_task_id)throw new TaskSkillError('Edit subtasks on the original Task.');
   const normalized=initialSubtasksInput(body,{preserveProvenance:true,allowAssignments:parseRotationBindings(body.rotation_bindings).length>0 || parseRotationBindings(task.rotation_bindings_json).length>0});
   const existing=ordinaryActivitySubtasks(db.get(),task.id).filter(child=>!child.archived_at);
-  const seen=new Set(),draftKeys=new Set();
+  const seen=new Set();
   const next=normalized.map((item,index)=>{
     const clientKey=body.subtasks[index].client_key;
-    if(clientKey!==undefined&&(typeof clientKey!=='string'||!/^[A-Za-z0-9_-]{1,80}$/.test(clientKey)||draftKeys.has(clientKey)))
-      throw new TaskSkillError('Choose a unique valid draft work key.');
-    if(clientKey!==undefined)draftKeys.add(clientKey);
     let id=body.subtasks[index].id;
     // Idempotent retry from an older create form without child IDs.
     if(id==null && normalized.length===existing.length
@@ -736,7 +891,7 @@ function editedSubtasksInput(task, body, actor, { definitionOnly = false } = {})
   });
   for(const child of existing.filter(row=>!seen.has(row.id)))
     assertTaskMutation(db.get(),actor,child,{}, {operation:'delete'});
-  return {next,remove:existing.filter(row=>!seen.has(row.id))};
+  return {next:resolveSeriesDraftClientKeys(next),remove:existing.filter(row=>!seen.has(row.id))};
 }
 
 function applyEditedSubtasks(task, edited, actorId) {
@@ -969,7 +1124,7 @@ function currentRotationGroupState(d, rotationGroup, taskId = null) {
 function rotationGroupConfigError(d, {
   taskId = null, joining = false, assignmentMode, rotationGroup, rotationSlot,
   rotationUserIds, recurrenceRule, recurrenceFromCompletion, dueDate, dueTime,
-  startDate = null, dueDateOffset = null,
+  startDate = null, dueDateOffset = null, futureDefinitions = false,
 }) {
   if (!rotationGroup) return null;
   if (assignmentMode !== 'round_robin') return 'Rotation groups require round-robin assignment.';
@@ -982,8 +1137,11 @@ function rotationGroupConfigError(d, {
   if (joining && state.peers.some((peer) => peer.status !== 'open')) {
     return 'Cannot join a rotation group after its current cycle has started.';
   }
-  for (const peer of state.peers) {
-    if (!sameIdOrder(loadRotationUserIds(d, peer.id), rotationUserIds)) {
+  for (const concrete of state.peers) {
+    const series=futureDefinitions?taskSeriesState(d,concrete.id):null;
+    const definition=series?effectiveSeriesScoringDefinition(d,seriesDefinitionForGeneration(d,series.series_id,series.occurrence.generation+1)).data:null;
+    const peer=definition?{...concrete,...definition.task}:concrete;
+    if (!sameIdOrder(definition?.rotation_user_ids??loadRotationUserIds(d, peer.id), rotationUserIds)) {
       return 'Every task in a rotation group must use the same ordered member list.';
     }
     if (!sameRecurrenceDateAnchor(peer, { start_date: startDate, due_date_offset_days: dueDateOffset })) {
@@ -2939,22 +3097,9 @@ function spawnRecurrenceFollowupSingle(task, {expirationAnchor=false}={}) {
       'This completion would repeat an already materialized recurrence date. Complete this occurrence later or review its recurrence dates.',
       {reason:'recurrence_date_conflict',occurrence_date:nextDate});
 
-  const existingAssignments = definition.assigned_user_ids;
   const rotationUserIds = definition.rotation_user_ids;
-  const roundRobin = task.assignment_mode === 'round_robin' && rotationUserIds.length > 0;
-  const nextRotationIndex = roundRobin
-    ? (Number(task.rotation_index || 0) + 1) % rotationUserIds.length
-    : Number(task.rotation_index || 0);
-  const scheduledAssignedTo = roundRobin
-    ? rotationUserIds[(nextRotationIndex + Number(task.rotation_group ? task.rotation_slot || 0 : 0)) % rotationUserIds.length]
-    : (task.assigned_to ?? existingAssignments[0] ?? null);
-  const qualified=(ids,skills,date,allowDelegation=false)=>ids.filter(userId=>{
-    try {assertTaskSkillAssignments(db.get(),skills,[userId],date,{allowDelegation});return true;}
-    catch(error){if(error instanceof TaskSkillError)return false;throw error;}
-  });
-  const followupAssignments = qualified(roundRobin ? [scheduledAssignedTo] : existingAssignments,definition.skill_ids,nextDate);
-  const nextAssignedTo = !definition.skill_ids.length || followupAssignments.includes(scheduledAssignedTo)
-    ? scheduledAssignedTo : (followupAssignments[0] ?? null);
+  const prepared=prepareSeriesOccurrenceWork(sourceTask,definition,plan,{qualify:qualifySeriesAssignments,asOfDate:completedOn});
+  const nextRotationIndex=prepared.rotation_index,followupAssignments=prepared.assigned_user_ids,nextAssignedTo=prepared.primary_user_id;
   // Die Tags gehören zur Aufgabe, nicht zum einzelnen Durchlauf (#586).
   // Ohne das Mitnehmen verlöre eine wöchentliche Aufgabe ihre Etiketten
   // beim ersten Abhaken - und zwar lautlos, weil die Folgeinstanz sonst
@@ -3005,12 +3150,8 @@ function spawnRecurrenceFollowupSingle(task, {expirationAnchor=false}={}) {
 
     for (const savedSub of existingSubtasks) {
       const sub=savedSub.task;
-      const subAnchorDate = (relativeSchedule ? task.start_date : task.due_date) || sub.due_date;
-      const subNextAnchor = relativeSchedule ? nextStartDate : nextDate;
-      const subDueDate = sub.due_date ? (shiftedStartDate(sub.due_date, subAnchorDate, subNextAnchor) ?? nextDate) : null;
-      const priorSubAssignments = savedSub.assigned_user_ids;
-      const subAssignments = qualified(priorSubAssignments,savedSub.skill_ids,subDueDate || todayInHouseholdZone(),true);
-      const subAssignedTo = subAssignments[0] ?? null;
+      const preparedSub=prepared.actions.find(action=>action.action_key===savedSub.action_key);
+      const subDueDate=preparedSub.window.due_date,subAssignments=preparedSub.assigned_user_ids,subAssignedTo=preparedSub.primary_user_id;
       const subTags = savedSub.tags;
       const priorAction=db.get().prepare(`SELECT t.id FROM task_recurrence_actions a JOIN tasks t ON t.id=a.task_id
         WHERE a.occurrence_task_id=? AND a.action_key=?`).get(sourceTask.id,savedSub.action_key);
@@ -3027,7 +3168,7 @@ function spawnRecurrenceFollowupSingle(task, {expirationAnchor=false}={}) {
         VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?, ?, ?, ?,?,?)
       `).run(
         sub.title, sub.description, sub.category, sub.priority,
-        shiftedStartDate(sub.start_date, subAnchorDate, subNextAnchor) ?? sub.start_date,
+        preparedSub.window.start_date,
         subDueDate,
         sub.due_time, subAssignedTo, creator, newTask.lastInsertRowid,
         sub.points, sub.visibility, originId, checklistItemId, sub.start_time, sub.expiration_policy || 'keep_overdue', sub.is_optional || 0,sub.sort_order||0,sub.locked||0

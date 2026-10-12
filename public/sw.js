@@ -18,7 +18,7 @@
 const APP_RELEASE   = '2.54.0-kitchen.5';
 
 // Release sequence-preserving Skip and retain the reviewed subtask Points editor.
-const CACHE_VERSION = `${APP_RELEASE}-vidamia.76`;
+const CACHE_VERSION = `${APP_RELEASE}-vidamia.77`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;

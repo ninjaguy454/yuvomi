@@ -2,6 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {scoringFixture} from './helpers/task-scoring-route-fixture.js';
 const {taskSeriesState,seriesDefinitionForGeneration}=await import('../server/services/task-series.js');
+const {default:taskRouter}=await import('../server/routes/tasks.js');
+const previewRequests=[];
+const originalRouterHandle=taskRouter.handle;
+taskRouter.handle=function(req,res,next){
+  if(req.method==='POST'&&/\/scoring-preview\/?$/.test(req.url)){
+    const input=structuredClone(req.body);
+    res.once('finish',()=>previewRequests.push({input,after:structuredClone(req.body)}));
+  }
+  return originalRouterHandle.call(this,req,res,next);
+};
 
 const recurring={assigned_to:[2],due_date:'2026-11-01',is_recurring:true,recurrence_rule:'FREQ=DAILY'};
 const future={edit_scope:'future_only',future_patch:{}};
@@ -13,11 +23,13 @@ const successor=(f,id)=>f.d.prepare('SELECT * FROM tasks WHERE recurrence_origin
 const rotationState=f=>({activity:f.d.prepare('SELECT * FROM activity_rotation_state ORDER BY activity_template_id,purpose').all(),
   assignment:f.d.prepare('SELECT * FROM assignment_rotation_state ORDER BY rotation_key').all()});
 async function purePreview(f,id,body=future,actor=1){
-  const snapshot=f.snapshot(),changes=f.changes(),input=structuredClone(body);
+  const snapshot=f.snapshot(),changes=f.changes(),input=structuredClone(body),requestCount=previewRequests.length;
   const response=await f.preview(id,body,actor);
   assert.equal(f.snapshot(),snapshot,'all schema/table/sequence data is unchanged');
   assert.equal(f.changes(),changes,'preview performs no writes, including rollback writes');
   assert.deepEqual(body,input);
+  assert.equal(previewRequests.length,requestCount+1);const request=previewRequests.at(-1);
+  assert.deepEqual(request.after,request.input,'actual parsed router request stays unchanged');
   return response;
 }
 function unitTotals(units){
@@ -254,4 +266,135 @@ test('explicit frozen root requirement intent enforces required-skill permission
   const {f,root,skill}=await boundFixture(t);f.grant('change_required_skills','none');
   const snapshot=f.snapshot(),body={edit_scope:'future_only',future_patch:{fields:{skill_ids:[skill]}}};
   assert.equal((await purePreview(f,root,body,2)).status,403);assert.equal((await f.edit(root,body,2)).status,403);assert.equal(f.snapshot(),snapshot);
+});
+
+const groupPatch=(slot=0,fields={})=>({edit_scope:'future_only',future_patch:{fields:{assignment_mode:'round_robin',
+  rotation_user_ids:[2,3],rotation_group:'Pending cohort',rotation_slot:slot,...fields}}});
+async function groupRoot(f,fields={}){
+  const title='Round3 routine '+f.d.prepare('SELECT COUNT(*) n FROM tasks').get().n;
+  const created=await f.create({...recurring,title,points:5,scoring_mode:'whole_task',...fields});
+  assert.equal(created.status,201,JSON.stringify(created));return created.data.id;
+}
+async function rejectedFuture(f,id,body,actor=1){
+  const state=f.snapshot(),changes=f.changes(),input=structuredClone(body),p=await purePreview(f,id,body,actor),saved=await f.edit(id,body,actor);
+  assert.equal(p.status,400,JSON.stringify(p));assert.equal(saved.status,400,JSON.stringify(saved));
+  assert.equal(f.snapshot(),state);assert.equal(f.changes(),changes);assert.deepEqual(body,input);
+  return p;
+}
+test('round3 pending-only same slot is discovered before group filtering and rejected atomically',async t=>{
+  const f=await scoringFixture(t),one=await groupRoot(f,{title:'SECRET private peer',visibility:'private'}),two=await groupRoot(f);
+  assert.equal((await f.edit(one,groupPatch())).status,200);assert.equal(f.row(one).rotation_group,null);
+  const p=await rejectedFuture(f,two,groupPatch(0,{rotation_group:'pending COHORT'}));
+  assert.match(p.error,/position is already used/);assert.ok(!JSON.stringify(p).includes('SECRET'));
+  const member=await purePreview(f,two,groupPatch(),2);assert.equal(member.status,400);assert.equal(member.error,p.error);
+});
+test('round3 departing future peer frees future slot but preserves ordinary current collision',async t=>{
+  const f=await scoringFixture(t),one=await groupRoot(f,{assignment_mode:'round_robin',rotation_user_ids:[2,3],rotation_group:'Pending cohort',rotation_slot:0}),two=await groupRoot(f);
+  assert.equal((await f.edit(one,{edit_scope:'future_only',future_patch:{fields:{assignment_mode:'fixed',rotation_group:null}}})).status,200);
+  assert.equal(f.row(one).rotation_group,'Pending cohort');
+  const state=f.snapshot(),ordinary=await f.edit(two,{edit_scope:'future',...groupPatch().future_patch.fields});
+  assert.equal(ordinary.status,400);assert.match(ordinary.error,/position is already used/);assert.equal(f.snapshot(),state);
+  const p=await purePreview(f,two,groupPatch());assert.equal(p.status,200,JSON.stringify(p));
+  assert.equal((await f.edit(two,groupPatch())).status,200);
+  assert.equal((await f.finish(one)).status,200);assert.equal(successor(f,one).rotation_group,null);
+  assert.equal((await purePreview(f,two)).status,200,'departed current history cannot mark this future group as started');
+  assert.equal((await f.finish(two)).status,200);const next=successor(f,two);
+  assert.equal(next.rotation_slot,0);assert.equal(next.assigned_to,3);assert.deepEqual(p.data.after,(await f.call('GET','/tasks/'+next.id)).data.scoring.potential);
+});
+test('round3 distinct pending slots materialize the exact forecast performers and current work stays fixed',async t=>{
+  const f=await scoringFixture(t),one=await groupRoot(f),two=await groupRoot(f),sources=[f.row(one),f.row(two)],cursors=rotationState(f);
+  assert.equal((await f.edit(one,groupPatch(0))).status,200);assert.equal((await f.edit(two,groupPatch(1))).status,200);
+  assert.deepEqual([f.row(one),f.row(two)],sources);assert.deepEqual(rotationState(f),cursors);
+  const previews=[await purePreview(f,one),await purePreview(f,two)];
+  assert.equal((await f.finish(one)).status,200);assert.equal(successor(f,one),undefined,'cohort waits for both current roots');
+  assert.equal((await f.finish(two)).status,200);
+  for(const [root,performer,slot,p] of [[one,3,0,previews[0]],[two,2,1,previews[1]]]){
+    assert.equal(p.status,200,JSON.stringify(p));assert.deepEqual(p.data.after,[{user_id:performer,points:5}]);
+    assert.deepEqual(unitTotals(p.data.after_units),p.data.after);
+    const next=successor(f,root);assert.equal(next.assigned_to,performer);assert.equal(next.rotation_slot,slot);
+    assert.deepEqual(p.data.after,(await f.call('GET','/tasks/'+next.id)).data.scoring.potential);
+    const state=taskSeriesState(f.d,root);assert.equal(f.d.prepare('SELECT COUNT(*) n FROM task_recurrence_occurrences WHERE series_id=? AND generation=1').get(state.series_id).n,1);
+  }
+});
+for(const fields of [{rotation_user_ids:[3,2]},{recurrence_rule:'FREQ=WEEKLY'},{recurrence_from_completion:true},{due_date:'2026-11-02'},{due_time:'14:00'}])
+  test('round3 pending-only peer applies established roster/schedule validation: '+JSON.stringify(fields),async t=>{
+    const f=await scoringFixture(t),one=await groupRoot(f),two=await groupRoot(f);
+    assert.equal((await f.edit(one,groupPatch(0))).status,200);await rejectedFuture(f,two,groupPatch(1,fields));
+  });
+test('round3 pending relative peers use frozen Task start/span authority without forged date metadata',async t=>{
+  const f=await scoringFixture(t),activity=Number(f.d.prepare("INSERT INTO activity_templates(name,title_template,assignment_strategy,assignment_policy,fixed_user_id,subject_required,presence_policy,due_date_offset_days,recurrence_rule,created_by) VALUES('Relative peer','Relative peer','fixed','fixed',2,0,'ignore',2,'FREQ=DAILY',1)").run().lastInsertRowid);
+  const roots=[];
+  for(const title of ['Relative one','Relative two']){
+    const r=await f.create({activity_template_id:activity,title,start_date:'2026-11-01',points:5,scoring_mode:'whole_task'});
+    assert.equal(r.status,201,JSON.stringify(r));assert.equal(f.row(r.data.id).due_date_offset_days,2);
+    assert.equal((await f.edit(r.data.id,{edit_scope:'future',activity_template_id:null})).status,200);roots.push(r.data.id);
+  }
+  assert.equal((await f.edit(roots[0],groupPatch())).status,200);
+  const error=await rejectedFuture(f,roots[1],groupPatch(1,{start_date:'2026-11-02',due_date:'2026-11-04'}));
+  assert.match(error.error,/same relative start and due schedule/);
+  assert.equal((await purePreview(f,roots[1],groupPatch(1))).status,200);
+});
+test('round3 unrelated pending group is absent and proven series history is deduplicated',async t=>{
+  const f=await scoringFixture(t),one=await groupRoot(f),two=await groupRoot(f);
+  assert.equal((await f.edit(one,groupPatch())).status,200);
+  assert.equal((await purePreview(f,two,groupPatch(0,{rotation_group:'Unrelated group'}))).status,200);
+  assert.equal((await f.finish(one)).status,200);const next=successor(f,one);assert.equal((await f.finish(next.id)).status,200);
+  const state=taskSeriesState(f.d,one),frontier=f.d.prepare('SELECT t.* FROM tasks t JOIN task_recurrence_occurrences o ON o.task_id=t.id WHERE o.series_id=? ORDER BY o.generation DESC LIMIT 1').get(state.series_id);
+  const self=await purePreview(f,frontier.id);assert.equal(self.status,200,JSON.stringify(self));
+  const noopState=f.snapshot(),noopChanges=f.changes(),noop=await f.edit(frontier.id,future);assert.equal(noop.status,200);assert.equal(noop.unchanged,true);assert.equal(f.snapshot(),noopState);assert.equal(f.changes(),noopChanges);
+  const p=await purePreview(f,two,groupPatch(1));assert.equal(p.status,200,JSON.stringify(p));
+  assert.equal((await f.edit(two,groupPatch(1))).status,200);
+  const collision=await groupRoot(f);await rejectedFuture(f,collision,groupPatch(0));
+});
+function qualification(f){
+  const skill=Number(f.d.prepare("INSERT INTO skills(name,minimum_age,age_promotion,created_by) VALUES('Independent root qualification',0,'normal',1)").run().lastInsertRowid);
+  for(const [user,value] of [[1,'normal'],[2,'normal'],[3,'excluded']])f.d.prepare("INSERT INTO user_skill_proficiency(user_id,skill_id,proficiency,source,updated_by) VALUES(?,?,?,'manual',1)").run(user,skill,value);
+  return skill;
+}
+async function participantTarget(f,{optional=false}={}){
+  const root=await groupRoot(f,{points:7,visibility:'assignees',skill_ids:[qualification(f)]});
+  const add={edit_scope:'future_only',future_patch:{actions:{add:[{client_key:'secret_child',fields:{title:'SECRET child owner',assigned_user_ids:[3],points:0,visibility:'private',is_optional:optional}}]}}};
+  return {root,add};
+}
+for(const optional of [false,true])test('round3 fresh manual root qualification excludes only derived child responsibility: '+optional,async t=>{
+  const f=await scoringFixture(t),{root,add}=await participantTarget(f,{optional}),source=f.row(root),cursors=rotationState(f);
+  const preview=await purePreview(f,root,{...add,include_edit_definition:true});
+  const saved=await f.edit(root,add);assert.equal(saved.status,200,JSON.stringify(saved));const key=saved.series_edit.created_actions[0].action_key;
+  assert.deepEqual(f.row(root),source);assert.deepEqual(rotationState(f),cursors);assert.deepEqual(pending(f,root).assigned_user_ids,[2]);
+  const p=await purePreview(f,root,{...future,include_edit_definition:true},2);
+  assert.equal((await purePreview(f,root,future,3)).status,404);
+  assert.equal((await f.finish(root)).status,200);const target=successor(f,root),actual=(await f.call('GET','/tasks/'+target.id,undefined,2)).data.scoring.potential;
+  assert.deepEqual(actual,[{user_id:2,points:7},{user_id:3,points:7}]);
+  assert.equal(preview.status,200,JSON.stringify(preview));assert.equal(p.status,200,JSON.stringify(p));
+  assert.deepEqual(preview.data.after,actual);assert.deepEqual(p.data.after,actual);assert.deepEqual(unitTotals(p.data.after_units),actual);
+  assert.equal(p.data.after_units.length,1);assert.ok(!JSON.stringify(p).includes('SECRET'));assert.ok(!JSON.stringify(p).includes(key));assert.ok(!JSON.stringify(p).includes('skill_assignee_user_ids'));
+});
+test('round3 derived participation preserves enrollment and strict independent qualification controls',async t=>{
+  const f=await scoringFixture(t),{root,add}=await participantTarget(f);assert.equal((await f.edit(root,add)).status,200);
+  f.d.prepare('UPDATE reward_participants SET enabled=0 WHERE user_id=3').run();
+  const p=await purePreview(f,root);assert.equal(p.status,200,JSON.stringify(p));assert.deepEqual(p.data.after,[{user_id:2,points:7}]);
+  for(const assigned_to of [[3],[2,3]]){
+    const state=f.snapshot(),bad=await f.edit(root,{assigned_to});assert.equal(bad.status,400,JSON.stringify(bad));assert.match(bad.error,/permitted to perform/);assert.equal(f.snapshot(),state);
+  }
+});
+for(const patch of [{},{fields:{points:7}}])test('round3 untouched actual target canonical no-op retains derived participants: '+JSON.stringify(patch),async t=>{
+  const f=await scoringFixture(t),{root,add}=await participantTarget(f);assert.equal((await f.edit(root,add)).status,200);assert.equal((await f.finish(root)).status,200);
+  const target=successor(f,root),actual=(await f.call('GET','/tasks/'+target.id,undefined,2)).data.scoring.potential;
+  assert.deepEqual(actual,[{user_id:2,points:7},{user_id:3,points:7}]);
+  const body={edit_scope:'future_only',include_edit_definition:true,future_patch:patch},p=await purePreview(f,root,body,2);
+  assert.equal(p.status,200,JSON.stringify(p));assert.deepEqual(await purePreview(f,root,body,2),p);
+  assert.equal(p.data.forecast_context.after.preparation,'existing_untouched');assert.deepEqual(p.data.before,actual);
+  const state=f.snapshot(),changes=f.changes(),saved=await f.edit(root,body,2);assert.equal(saved.status,200);assert.equal(saved.unchanged,true);assert.equal(f.snapshot(),state);assert.equal(f.changes(),changes);
+  assert.deepEqual(pending(f,root).authorization.assigned_user_ids,[2]);assert.equal((await purePreview(f,root,body,3)).status,404);
+  assert.ok(!JSON.stringify(p).includes('SECRET'));assert.equal(p.data.after_units.length,1);assert.deepEqual(unitTotals(p.data.after_units),p.data.after);
+  assert.deepEqual(p.data.after,actual,'unchanged save retains full actual target recipient facts');
+});
+test('round3 real creator points edit reconciles ordinary target without blanket participant union',async t=>{
+  const f=await scoringFixture(t),{root,add}=await participantTarget(f);assert.equal((await f.edit(root,add)).status,200);assert.equal((await f.finish(root)).status,200);
+  const target=successor(f,root),source=f.row(root),cursors=rotationState(f),ledger=f.d.prepare('SELECT * FROM reward_ledger ORDER BY id').all(),settlements=f.d.prepare('SELECT * FROM task_scoring_settlements ORDER BY id').all();
+  const body={edit_scope:'future_only',future_patch:{fields:{points:8}}},p=await purePreview(f,root,body);
+  assert.equal(p.status,200,JSON.stringify(p));assert.deepEqual(p.data.before,[{user_id:2,points:7},{user_id:3,points:7}]);assert.deepEqual(p.data.after,[{user_id:2,points:8}]);
+  const saved=await f.edit(root,body);assert.equal(saved.status,200);assert.ok(saved.series_edit.updated.includes(target.id));
+  assert.deepEqual((await f.call('GET','/tasks/'+target.id)).data.scoring.potential,p.data.after);assert.deepEqual(f.d.prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(target.id),[{user_id:2}]);
+  assert.deepEqual(f.row(root),source);assert.deepEqual(rotationState(f),cursors);assert.deepEqual(f.d.prepare('SELECT * FROM reward_ledger ORDER BY id').all(),ledger);assert.deepEqual(f.d.prepare('SELECT * FROM task_scoring_settlements ORDER BY id').all(),settlements);
 });

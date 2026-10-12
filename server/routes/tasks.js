@@ -440,7 +440,7 @@ function validateFutureDefinitionConfiguration(task,before,definition) {
     futureDefinitions:true});
   if(groupError)throw new TaskStateError(groupError,{},400);
   if(priorGroup&&Number(before.task.rotation_slot||0)!==slot
-    &&currentRotationGroupState(db.get(),group,task.id).peers.some(peer=>peer.status!=='open'))
+    &&futureRotationGroupState(db.get(),group,task.id).progressPeers.some(peer=>peer.status!=='open'))
     throw new TaskStateError('Cannot change a rotation-group position after its current cycle has started.',{},409);
 }
 function previewFutureDefinitions(req,task,before,definition,{viewerId,authorizedTaskIds,scope='future_only'}) {
@@ -471,14 +471,15 @@ function executionTask(fields) {
   const {id,parent_task_id,...task}=fields;
   return {...task,status:'open',archived_at:null};
 }
-function phaseExecutionInput(task,state,record,definition,ids,asOfDate,target,{beforePhase=false}={}) {
+function phaseExecutionInput(task,state,record,definition,ids,asOfDate,target,{beforePhase=false,canonicalUnchanged=false}={}) {
   const d=db.get(),context={kind:'next_occurrence',generation:state.occurrence.generation+1,as_of_date:asOfDate,
     assumed_completion_date:null,preparation:target?'existing_untouched':'fresh',conditions:[]};
-  let prepared,selection={preferred_supervisor_user_ids:[],attempted_supervisor_user_ids:[]};
+  let prepared,skillAssignees,selection={preferred_supervisor_user_ids:[],attempted_supervisor_user_ids:[]};
   if(target) {
     const targetTask=target.task,baseline=captureSeriesDefinition(d,targetTask.id,{registerActions:false});
-    const window=beforePhase||definitionEqual(baseline,definition)
-      ?{start_date:target.occurrence.planned_start_date,due_date:target.occurrence.planned_due_date}
+    const preserveActual=beforePhase||canonicalUnchanged;
+    const window=preserveActual
+      ?{start_date:targetTask.start_date,due_date:targetTask.due_date}
       :definition.task.recurrence_from_completion
         ?{start_date:target.occurrence.planned_start_date,due_date:target.occurrence.planned_due_date}
         :planSeriesOccurrence(d,record,state.occurrence);
@@ -489,7 +490,7 @@ function phaseExecutionInput(task,state,record,definition,ids,asOfDate,target,{b
     const assignment=seriesRotationAssignment(targetTask,definition);
     if(!beforePhase&&definition.binding&&!sameSeriesBindingPolicy(baseline.binding,definition.binding))
       throw prospectiveUnavailable('binding_policy_changed');
-    const sameAssignment=definitionEqual(baseline,definition)||definition.binding;
+    const sameAssignment=canonicalUnchanged||definition.binding;
     let rootAssigned=beforePhase||sameAssignment?joins(targetTask.id):assignment.assigned_user_ids;
     let primary=beforePhase||sameAssignment?targetTask.assigned_to:assignment.primary_user_id;
     if(!beforePhase&&definition.binding&&!sameSeriesBindingPolicy(baseline.binding,definition.binding,{includeRequirements:true})) {
@@ -508,12 +509,12 @@ function phaseExecutionInput(task,state,record,definition,ids,asOfDate,target,{b
     const shift=date=>!date||!oldAnchor||!newAnchor?date??null
       :new Date(Date.parse(`${date}T00:00:00Z`)+Date.parse(`${newAnchor}T00:00:00Z`)-Date.parse(`${oldAnchor}T00:00:00Z`)).toISOString().slice(0,10);
     prepared={primary_user_id:primary??null,assigned_user_ids:rootAssigned,
-      window:{...window,start_time:definition.task.start_time,due_time:definition.task.due_time},
+      window:{...window,start_time:preserveActual?targetTask.start_time:definition.task.start_time,due_time:preserveActual?targetTask.due_time:definition.task.due_time},
       actions:definition.subtasks.map(action=>{
         const row=actual.get(action.action_key);
-        return {action_key:action.action_key,primary_user_id:beforePhase&&row?row.assigned_to??null:action.assigned_user_ids[0]??null,
-          assigned_user_ids:beforePhase&&row?joins(row.id):[...action.assigned_user_ids],
-          window:beforePhase&&row?{start_date:row.start_date,start_time:row.start_time,due_date:row.due_date,due_time:row.due_time}
+        return {action_key:action.action_key,primary_user_id:preserveActual&&row?row.assigned_to??null:action.assigned_user_ids[0]??null,
+          assigned_user_ids:preserveActual&&row?joins(row.id):[...action.assigned_user_ids],
+          window:preserveActual&&row?{start_date:row.start_date,start_time:row.start_time,due_date:row.due_date,due_time:row.due_time}
             :{start_date:shift(action.task.start_date),start_time:action.task.start_time,due_date:shift(action.task.due_date),due_time:action.task.due_time}};
       })};
     selection={
@@ -548,11 +549,15 @@ function phaseExecutionInput(task,state,record,definition,ids,asOfDate,target,{b
     // Manual materialization adds explicit child owners as parent participants.
     // Binding materialization subsequently replaces those joins with its own
     // resolved assignment; helper eligibility still sees every child below.
-    if(!definition.binding)prepared.assigned_user_ids=[...new Set([...prepared.assigned_user_ids,...prepared.actions.flatMap(action=>action.assigned_user_ids)])];
+    if(!definition.binding){
+      skillAssignees=[...prepared.assigned_user_ids];
+      prepared.assigned_user_ids=[...new Set([...prepared.assigned_user_ids,...prepared.actions.flatMap(action=>action.assigned_user_ids)])];
+    }
   }
   const actions=new Map(prepared.actions.map(action=>[action.action_key,action]));
   const input={context,root:{ref:{kind:'definition_root'},role:'source_root',task:executionTask(definition.task),
     primary_user_id:prepared.primary_user_id,assigned_user_ids:prepared.assigned_user_ids,skill_ids:definition.skill_ids,
+    ...(skillAssignees?{skill_assignee_user_ids:skillAssignees}:{}),
     window:prepared.window,is_optional:!!definition.task.is_optional,binding:definition.binding,planning:definition.planning},
     actions:definition.subtasks.map(action=>({ref:{kind:'template',template_id:ids.get(action.action_key)},role:'source_action',
       task:executionTask(action.task),primary_user_id:actions.get(action.action_key).primary_user_id,
@@ -577,8 +582,11 @@ function prepareFutureScoringExecutionChecked(task,before,after,wires) {
     target={occurrence:targetOccurrence,task:targetTask};
   }
   const old=phaseExecutionInput(task,state,{...stored,data:before},before,wires.ids,asOfDate,target,{beforePhase:true});
-  const record=definitionEqual(before,after)?{...stored,data:after}:{...stored,id:null,data:after};
-  const next=phaseExecutionInput(task,state,record,after,wires.ids,asOfDate,target);
+  // Match appendSeriesDefinition's canonical no-op, not the concrete target's
+  // child-derived participant joins or a projected legacy scoring definition.
+  const canonicalUnchanged=!!stored&&definitionEqual(stored.data,after);
+  const record=canonicalUnchanged?{...stored,data:after}:{...stored,id:null,data:after};
+  const next=phaseExecutionInput(task,state,record,after,wires.ids,asOfDate,target,{canonicalUnchanged});
   const project=(prepared,actions)=>({...prepared.execution,units:prepared.execution.units.filter(unit=>unit.ref.kind==='definition_root'
     ||actions.some(action=>wires.ids.get(action.action_key)===unit.ref.template_id))});
   return {before:project(old,wires.old),after:project(next,wires.next),forecast_context:{kind:'next_occurrence',effective_generation:state.occurrence.generation+1,
@@ -1121,6 +1129,41 @@ function currentRotationGroupState(d, rotationGroup, taskId = null) {
   return { rotationIndex, rotationCycle, peers };
 }
 
+/** Future constraints use canonical policy, once per proven series. Keep live
+ * current-cycle evidence separate; this read never registers an occurrence. */
+function futureRotationGroupState(d,rotationGroup,taskId=null) {
+  const current=currentRotationGroupState(d,rotationGroup,taskId);
+  if(!rotationGroup)return {...current,progressPeers:[]};
+  const selectedSeries=taskId?taskSeriesState(d,taskId)?.series_id:null;
+  const frontiers=d.prepare(`SELECT t.*,o.series_id AS future_series_id,o.generation AS future_generation
+    FROM task_recurrence_occurrences o JOIN tasks t ON t.id=o.task_id
+    WHERE o.state='materialized' AND t.parent_task_id IS NULL
+      AND NOT EXISTS(SELECT 1 FROM task_recurrence_occurrences later JOIN tasks next ON next.id=later.task_id
+        WHERE later.series_id=o.series_id AND later.state='materialized'
+          AND (later.generation>o.generation OR later.generation=o.generation AND later.task_id>o.task_id))`).all();
+  const occurrence=d.prepare('SELECT series_id FROM task_recurrence_occurrences WHERE task_id=?');
+  const peers=[],effectiveSeries=new Set(),legacyIds=new Set();
+  for(const concrete of frontiers) {
+    if(concrete.id===Number(taskId)||concrete.future_series_id===selectedSeries)continue;
+    const definition=effectiveSeriesScoringDefinition(d,seriesDefinitionForGeneration(d,concrete.future_series_id,concrete.future_generation+1))?.data;
+    const peer=definition?{...concrete,...definition.task,series_rotation_user_ids:definition.rotation_user_ids}:concrete;
+    const group=normalizeRotationGroup(peer.rotation_group);
+    if(peer.assignment_mode!=='round_robin'||!peer.is_recurring||!group
+      ||group.localeCompare(rotationGroup,undefined,{sensitivity:'accent'})!==0)continue;
+    peers.push(peer);effectiveSeries.add(concrete.future_series_id);
+  }
+  // Provenance-free current peers retain the established concrete fallback.
+  // Retired/deleted historical occurrences are not independent future series.
+  for(const peer of current.peers)if(!occurrence.get(peer.id)) {
+    peers.push(peer);legacyIds.add(peer.id);
+  }
+  const progressPeers=current.peers.filter(peer=>{
+    const series=occurrence.get(peer.id)?.series_id;
+    return series!==selectedSeries&&(effectiveSeries.has(series)||legacyIds.has(peer.id));
+  });
+  return {...current,peers,progressPeers};
+}
+
 function rotationGroupConfigError(d, {
   taskId = null, joining = false, assignmentMode, rotationGroup, rotationSlot,
   rotationUserIds, recurrenceRule, recurrenceFromCompletion, dueDate, dueTime,
@@ -1133,15 +1176,12 @@ function rotationGroupConfigError(d, {
     return 'Rotation group position must refer to a member in the round-robin list.';
   }
 
-  const state = currentRotationGroupState(d, rotationGroup, taskId);
-  if (joining && state.peers.some((peer) => peer.status !== 'open')) {
+  const state = futureDefinitions?futureRotationGroupState(d,rotationGroup,taskId):currentRotationGroupState(d, rotationGroup, taskId);
+  if (joining && (state.progressPeers??state.peers).some((peer) => peer.status !== 'open')) {
     return 'Cannot join a rotation group after its current cycle has started.';
   }
-  for (const concrete of state.peers) {
-    const series=futureDefinitions?taskSeriesState(d,concrete.id):null;
-    const definition=series?effectiveSeriesScoringDefinition(d,seriesDefinitionForGeneration(d,series.series_id,series.occurrence.generation+1)).data:null;
-    const peer=definition?{...concrete,...definition.task}:concrete;
-    if (!sameIdOrder(definition?.rotation_user_ids??loadRotationUserIds(d, peer.id), rotationUserIds)) {
+  for (const peer of state.peers) {
+    if (!sameIdOrder(peer.series_rotation_user_ids??loadRotationUserIds(d, peer.id), rotationUserIds)) {
       return 'Every task in a rotation group must use the same ordered member list.';
     }
     if (!sameRecurrenceDateAnchor(peer, { start_date: startDate, due_date_offset_days: dueDateOffset })) {

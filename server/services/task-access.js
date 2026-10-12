@@ -32,7 +32,7 @@ export function withTaskReadSnapshot(d, actor, read) {
 
 export function withTaskReadProjection(d, actor, read) {
   const previous = readProjections.get(d), me = actorId(actor);
-  const scope = previous?.actorId === me ? previous : {actorId:me, capabilities:new Map(), tables:new Map(),
+  const scope = previous?.actorId === me ? previous : {actorId:me, capabilities:new Map(), tables:new Map(), statements:new Map(),
     changesStatement:d.prepare('SELECT total_changes() AS count')};
   if (scope.changes === undefined) scope.changes = scope.changesStatement.get().count;
   readProjections.set(d, scope);
@@ -58,7 +58,7 @@ function currentReadProjection(d) {
   // owned snapshot; a savepoint rollback must not revive temporary decisions.
   if (snapshot && changes !== snapshot.changes) { snapshot.invalid=true; return null; }
   if (changes !== scope.changes) {
-    scope.capabilities.clear(); scope.tables.clear(); scope.permissions = null; scope.changes = changes;
+    scope.capabilities.clear(); scope.tables.clear(); scope.statements.clear(); scope.permissions = null; scope.changes = changes;
   }
   return scope;
 }
@@ -71,6 +71,18 @@ function readPermissions(d, actor) {
   if (!scope) return actorPermissions(d, actor);
   scope.permissions ||= actorPermissions(d, actor);
   return scope.permissions;
+}
+
+/** Reuse compilation, never rows or bound values, during synchronous Task reads.
+ * Handles leave scope with the response. Caller-owned transactions and any
+ * unexpected owned-snapshot write retain the existing uncached read behavior.
+ */
+export function taskReadStatement(d, sql) {
+  const scope = currentReadProjection(d);
+  if (scope?.statements.has(sql)) return scope.statements.get(sql);
+  const statement = d.prepare(sql);
+  if (scope && statement.readonly && scope.statements.size < 64) scope.statements.set(sql, statement);
+  return statement;
 }
 
 const ids = value => [...new Set((Array.isArray(value) ? value : value == null || value === '' ? [] : [value]).map(Number))].sort((a, b) => a - b);
@@ -319,12 +331,12 @@ function nonDefaultCreateValue(field, value) {
   return true;
 }
 
-function projectionTable(d, name) {
+export function taskReadTableExists(d, name) {
   const scope = currentReadProjection(d);
   if (scope?.tables.has(name)) return scope.tables.get(name);
   const exists = !!d.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name);
   if (scope) scope.tables.set(name, exists);
   return exists;
 }
-function supervisionTable(d) { return projectionTable(d, 'task_supervision_actions'); }
-function supportTable(d) { return projectionTable(d, 'task_activity_support_tasks'); }
+function supervisionTable(d) { return taskReadTableExists(d, 'task_supervision_actions'); }
+function supportTable(d) { return taskReadTableExists(d, 'task_activity_support_tasks'); }

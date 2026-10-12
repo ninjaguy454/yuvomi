@@ -1,15 +1,16 @@
 import {taskWindowAncestors} from './task-window.js';
 import {peekRewardOccurrenceProvenance} from './task-recurrence-frontier.js';
 import {visibilityWhere} from './visibility.js';
+import {taskReadStatement,taskReadTableExists} from './task-access.js';
 
 export class TaskScoringError extends Error {
   constructor(message,status=400,reason=null){super(message);this.status=status;this.reason=reason;}
 }
-const table=(d,name)=>!!d.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name);
-const readTask=(d,id)=>d.prepare('SELECT * FROM tasks WHERE id=?').get(id);
+const table=taskReadTableExists;
+const readTask=(d,id)=>taskReadStatement(d,'SELECT * FROM tasks WHERE id=?').get(id);
 const unique=values=>[...new Set(values)].sort((a,b)=>a-b);
 export function taskScoringAssignments(d,task){
-  const ids=d.prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(task.id).map(r=>r.user_id);
+  const ids=taskReadStatement(d,'SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(task.id).map(r=>r.user_id);
   return ids.length?ids:task.assigned_to?[task.assigned_to]:[];
 }
 function publicTaskAncestry(d,task){
@@ -28,21 +29,21 @@ function taskVisibilitySnapshot(d,task){
   // Visibility follows the Task creator and actual assignment joins. Reward
   // recipients may use scalar/inherited fallbacks that confer no read access.
   return {visibility:task.visibility||'all',created_by:task.created_by,
-    assigned:d.prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(task.id).map(row=>row.user_id),public_ancestry:publicTaskAncestry(d,task)};
+    assigned:taskReadStatement(d,'SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(task.id).map(row=>row.user_id),public_ancestry:publicTaskAncestry(d,task)};
 }
-function workflowOwner(d,id){return table(d,'workflow_instance_tasks')&&!!d.prepare("SELECT 1 FROM workflow_instance_tasks WHERE task_id=? AND role='primary'").get(id);}
-function workflowContainer(d,id){return table(d,'workflow_instances')&&!!d.prepare('SELECT 1 FROM workflow_instances WHERE parent_task_id=?').get(id);}
+function workflowOwner(d,id){return table(d,'workflow_instance_tasks')&&!!taskReadStatement(d,"SELECT 1 FROM workflow_instance_tasks WHERE task_id=? AND role='primary'").get(id);}
+function workflowContainer(d,id){return table(d,'workflow_instances')&&!!taskReadStatement(d,'SELECT 1 FROM workflow_instances WHERE parent_task_id=?').get(id);}
 export function taskScoringProjection(d,id){
-  return table(d,'task_activity_support_tasks')&&!!d.prepare(`SELECT 1 FROM task_activity_support_tasks WHERE task_id=?
+  return table(d,'task_activity_support_tasks')&&!!taskReadStatement(d,`SELECT 1 FROM task_activity_support_tasks WHERE task_id=?
     UNION ALL SELECT 1 FROM task_supervision_actions WHERE counterpart_task_id=? LIMIT 1`).get(id,id)
-    ||table(d,'workflow_instance_tasks')&&!!d.prepare("SELECT 1 FROM workflow_instance_tasks WHERE task_id=? AND role='supervisor'").get(id);
+    ||table(d,'workflow_instance_tasks')&&!!taskReadStatement(d,"SELECT 1 FROM workflow_instance_tasks WHERE task_id=? AND role='supervisor'").get(id);
 }
 /** Activity owners are independent work scopes below a Workflow container.
  * Ordinary nested structures remain one legacy scope until explicitly reviewed. */
 export function taskScoringRoot(d,taskId){
   let task=readTask(d,taskId);if(!task)return null;
   if(table(d,'task_activity_support_tasks')){
-    const source=d.prepare(`SELECT source_task_id FROM task_activity_support_tasks WHERE task_id=?
+    const source=taskReadStatement(d,`SELECT source_task_id FROM task_activity_support_tasks WHERE task_id=?
       UNION ALL SELECT source_task_id FROM task_supervision_actions WHERE counterpart_task_id=? LIMIT 1`).get(task.id,task.id);
     if(source)task=readTask(d,source.source_task_id)||task;
   }
@@ -53,14 +54,14 @@ export function taskScoringRoot(d,taskId){
   return task;
 }
 export function taskScoringRows(d,root){
-  const rows=d.prepare(`WITH RECURSIVE scope(id) AS (SELECT ? UNION SELECT t.id FROM tasks t JOIN scope s ON t.parent_task_id=s.id)
+  const rows=taskReadStatement(d,`WITH RECURSIVE scope(id) AS (SELECT ? UNION SELECT t.id FROM tasks t JOIN scope s ON t.parent_task_id=s.id)
     SELECT t.* FROM tasks t JOIN scope s ON s.id=t.id ORDER BY t.id`).all(root.id);
   return rows.filter(row=>!taskScoringProjection(d,row.id)&&taskScoringRoot(d,row.id)?.id===root.id);
 }
 export function taskScoringIdentity(d,id){return peekRewardOccurrenceProvenance(d,id).logicalKey;}
 function scopeSettlements(d,root){
   if(!table(d,'task_scoring_settlements'))return [];
-  return d.prepare(`SELECT s.*,EXISTS(SELECT 1 FROM task_scoring_settlement_releases r WHERE r.settlement_id=s.id) AS released
+  return taskReadStatement(d,`SELECT s.*,EXISTS(SELECT 1 FROM task_scoring_settlement_releases r WHERE r.settlement_id=s.id) AS released
     FROM task_scoring_settlements s WHERE root_task_id=? OR root_logical_key=? ORDER BY id`).all(root.id,taskScoringIdentity(d,root.id));
 }
 function aggregate(recipients){
@@ -70,7 +71,7 @@ function aggregate(recipients){
 const recipients=row=>JSON.parse(row.recipients_json);
 function everEarned(settlements){return settlements.some(row=>row.earned_once||recipients(row).some(member=>member.points>0));}
 function blockedWindow(d,id){return taskWindowAncestors(d,id).some(row=>['expired','skipped'].includes(row.status));}
-function enrolled(d){return new Set(d.prepare('SELECT user_id FROM reward_participants WHERE enabled=1').all().map(row=>row.user_id));}
+function enrolled(d){return new Set(taskReadStatement(d,'SELECT user_id FROM reward_participants WHERE enabled=1').all().map(row=>row.user_id));}
 
 /** One recipient/source resolver is shared by previews and every award caller.
  * The legacy branch intentionally retains the existing actor/learner fallback.
@@ -81,7 +82,7 @@ export function taskRewardDefinition(d,taskOrId,{root=null,assigned=null,parentA
   const mode=root?.scoring_mode||'legacy',points=task.points||0,eligible=enrolled(d);
   const own=assigned??taskScoringAssignments(d,task);
   const prospective=executionFacts!==undefined;
-  const action=prospective?executionFacts.supervision:table(d,'task_supervision_actions')?d.prepare('SELECT * FROM task_supervision_actions WHERE action_task_id=?').get(task.id):null;
+  const action=prospective?executionFacts.supervision:table(d,'task_supervision_actions')?taskReadStatement(d,'SELECT * FROM task_supervision_actions WHERE action_task_id=?').get(task.id):null;
   let payable=prospective?!['helper_projection','container'].includes(executionFacts.role):!taskScoringProjection(d,task.id)&&!workflowContainer(d,task.id);
   if(mode==='whole_task')payable&&=task.id===root.id;
   if(mode==='subtasks')payable&&=task.parent_task_id===root.id;
@@ -91,11 +92,11 @@ export function taskRewardDefinition(d,taskOrId,{root=null,assigned=null,parentA
     targets=(prospective?executionFacts.role==='source_root':action.action_task_id===action.source_task_id)?[]:eligible.has(action.supervisor_user_id)?[action.supervisor_user_id]:[];
   }else if(mode==='legacy'){
     // The original resolver only used join assignments before its overrides.
-    const join=assigned??d.prepare('SELECT user_id FROM task_assignments WHERE task_id=?').all(task.id).map(r=>r.user_id);
+    const join=assigned??taskReadStatement(d,'SELECT user_id FROM task_assignments WHERE task_id=?').all(task.id).map(r=>r.user_id);
     targets=join.filter(id=>eligible.has(id));
     if(!targets.length){
       if(action?.learner_user_id)targets=eligible.has(action.learner_user_id)?[action.learner_user_id]:[];
-      else if(!prospective&&table(d,'task_activity_support_tasks')&&task.assigned_to&&d.prepare('SELECT 1 FROM task_activity_support_tasks WHERE source_task_id=?').get(task.id))targets=eligible.has(task.assigned_to)?[task.assigned_to]:[];
+      else if(!prospective&&table(d,'task_activity_support_tasks')&&task.assigned_to&&taskReadStatement(d,'SELECT 1 FROM task_activity_support_tasks WHERE source_task_id=?').get(task.id))targets=eligible.has(task.assigned_to)?[task.assigned_to]:[];
       else targets=actingUserId&&eligible.has(actingUserId)?[actingUserId]:[];
     }
   }else{
@@ -109,7 +110,7 @@ export function taskRewardDefinition(d,taskOrId,{root=null,assigned=null,parentA
 }
 function visible(d,task,viewerId){
   if(task.id<0)return viewerId==null||task.visibility==='all'||task.created_by===viewerId||task.visibility==='assignees'&&(task._assigned||[]).includes(viewerId);
-  return viewerId==null||!!d.prepare(`SELECT 1 FROM tasks t WHERE t.id=@id AND ${visibilityWhere('t','task_assignments','task_id','@viewer')}`).get({id:task.id,viewer:viewerId});
+  return viewerId==null||!!taskReadStatement(d,`SELECT 1 FROM tasks t WHERE t.id=@id AND ${visibilityWhere('t','task_assignments','task_id','@viewer')}`).get({id:task.id,viewer:viewerId});
 }
 function context(d,taskId,viewerId=null){
   const root=taskScoringRoot(d,taskId),task=readTask(d,taskId);

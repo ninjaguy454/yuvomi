@@ -4,7 +4,7 @@ import { activityPresenceWindow, evaluateAvailability, availabilityInstantMs } f
 import { todayKey, householdTimeZone } from '../utils/timezone.js';
 import { enqueueNotification } from './notification-inbox.js';
 import { syncWorkflowInstanceForTask } from './activity-workflows.js';
-import { taskCapabilities, taskSupervisionManagementAllowed } from './task-access.js';
+import { taskCapabilities, taskSupervisionManagementAllowed,taskReadRecord,taskReadStatement,taskReadTableExists } from './task-access.js';
 import { createHash } from 'node:crypto';
 import { createTaskOptionalContextReader } from './task-optional.js';
 import { taskActivitySnapshot, activitySnapshotSkills, parseTaskActivitySnapshot } from './task-activity-snapshot.js';
@@ -20,8 +20,8 @@ const actionWindowsByView = new WeakMap();
 export class TaskSupervisionError extends Error {
   constructor(message, details = {}) { super(message); this.status = 409; this.code = 'supervision_required'; this.details = details; }
 }
-function supported(d) { return !!d.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_supervision_actions'").get(); }
-function task(d, id) { return d.prepare('SELECT * FROM tasks WHERE id = ?').get(id); }
+function supported(d) { return taskReadTableExists(d,'task_supervision_actions'); }
+function task(d, id) { return taskReadRecord(d,id); }
 function memberName(member) { return member?.display_name || 'The assignee'; }
 
 function describeSkillEligibility(assessed, action, learner) {
@@ -59,7 +59,7 @@ function describeSupervisionScope(scope, actions) {
 
 export function taskSupervisionRootId(d, taskId) {
   if (!supported(d)) return Number(taskId);
-  const mapped = d.prepare('SELECT source_task_id FROM task_supervision_actions WHERE action_task_id = ? OR counterpart_task_id = ?').get(taskId, taskId)
+  const mapped = taskReadStatement(d,'SELECT source_task_id FROM task_supervision_actions WHERE action_task_id = ? OR counterpart_task_id = ?').get(taskId, taskId)
     || d.prepare('SELECT source_task_id FROM task_activity_support_tasks WHERE task_id = ?').get(taskId);
   let own = task(d, mapped?.source_task_id || taskId);
   if (!own) return Number(taskId);
@@ -104,7 +104,7 @@ function context(d, source, action) {
     if (!row) break;
     chain.push(row); seen.add(row.id);
   }
-  const pc = chain.map(item => d.prepare('SELECT * FROM task_planning_context WHERE task_id = ?').get(item.id)).find(Boolean) || {};
+  const pc = chain.map(item => taskReadStatement(d,'SELECT * FROM task_planning_context WHERE task_id = ?').get(item.id)).find(Boolean) || {};
   const occurrence = { ...source, ...action };
   for (const key of ['due_date', 'due_time', 'start_date', 'start_time']) occurrence[key] = chain.find(item => item[key])?.[key] || null;
   const dateKey = occurrence.due_date || occurrence.start_date || todayKey(d);
@@ -250,7 +250,7 @@ export function inspectTaskSupervision(d, taskId) {
   const { proficiencyFor, availabilityFor } = eligibilityReaders(d);
   for (const row of rows) {
     const prior = saved.find(item => Number(item.action_task_id) === Number(row.id))
-      || d.prepare('SELECT * FROM task_supervision_actions WHERE action_task_id=?').get(row.id);
+      || taskReadStatement(d,'SELECT * FROM task_supervision_actions WHERE action_task_id=?').get(row.id);
     const { occurrence, dateKey, presence, learnerId, archived, expired, expired_at,skipped,skipped_at } = context(d, source, row);
     actionWindows.set(row.id, { start_date: occurrence.start_date, start_time: occurrence.start_time,
       due_date: occurrence.due_date, due_time: occurrence.due_time });

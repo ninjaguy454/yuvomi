@@ -78,7 +78,7 @@ import * as v from '../middleware/validate.js';
 import { TaskSkillError, normalizeSkillIds, loadTaskSkillIds, setTaskSkills, copyTaskSkills,
   attachTaskSkills, assertTaskSkillAssignments, qualifiedTaskAssignees } from '../services/task-skills.js';
 import { assertTaskAssignmentAvailability, TaskAssignmentAvailabilityError } from '../services/assignment-responsibilities.js';
-import { assertTaskMutation, attachTaskCapabilities, taskCapabilities, taskVisibilityWhere, taskSupervisionManagementAllowed, withTaskReadProjection, withTaskReadSnapshot } from '../services/task-access.js';
+import { assertTaskMutation, attachTaskCapabilities, taskCapabilities, taskVisibilityWhere, taskSupervisionManagementAllowed, withTaskReadProjection, withTaskReadSnapshot,taskReadRecord,taskReadStatement } from '../services/task-access.js';
 import { assertTaskRevision, changeTaskStatus, reopenExpiredTask, assertTaskWindowAction, configureTaskRecurrence, recordTaskActivity, taskActivity, TaskStateError } from '../services/task-lifecycle.js';
 import { attachTaskSupervision, reconcileTaskSupervision, assertTaskSupervisionAssignee, deleteTaskSupervisionProjections, taskSupervisionRootId, prepareProspectiveTaskExecution } from '../services/task-supervision.js';
 import { EXPIRATION_POLICIES, taskDeadlineMs, taskStartMs, taskWindowAncestors } from '../services/task-window.js';
@@ -233,8 +233,8 @@ function attachScoring(task,viewerId,authorizedTaskIds,includeHistoricalSettleme
 export function authorizedScoringHistoryIds(task,viewerId,ids,{publicOnly=false}={}) {
   if(taskScoringRoot(db.get(),task.id)?.id!==task.id)return ids;
   const allowed=new Set(ids);
-  for(const settlement of db.get().prepare('SELECT task_id,visibility_json FROM task_scoring_settlements WHERE root_task_id=? OR root_logical_key=?').all(task.id,taskScoringIdentity(db.get(),task.id))) {
-    const extant=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(settlement.task_id);
+  for(const settlement of taskReadStatement(db.get(),'SELECT task_id,visibility_json FROM task_scoring_settlements WHERE root_task_id=? OR root_logical_key=?').all(task.id,taskScoringIdentity(db.get(),task.id))) {
+    const extant=taskReadRecord(db.get(),settlement.task_id);
     const snapshot=JSON.parse(settlement.visibility_json);
     const historical=extant||{visibility:snapshot.visibility,created_by:snapshot.created_by,assigned_to:snapshot.assigned};
     const actors=Array.isArray(viewerId)?viewerId:[viewerId];
@@ -1376,12 +1376,12 @@ function loadSubtasks(taskId, me, supervisionViews) {
 }
 
 const rotationReadCacheKey = Symbol('taskRotationReadCache');
-export function hydrateTask(task, me, supervisionViews = new Map()) {
+export function hydrateTask(task, me, supervisionViews = new Map(), starts = null) {
   if (!task) return task;
   task = db.get().prepare(`SELECT t.*,u.display_name AS assigned_name,u.avatar_color AS assigned_color,
     u.avatar_data AS assigned_avatar,${ASSIGNED_USERS_SQL}
     FROM tasks t LEFT JOIN users u ON u.id=t.assigned_to WHERE t.id=?`).get(task.id);
-  const offer=taskOfferState(db.get(),me,task);
+  const offer=taskOfferState(db.get(),me,task,{starts});
   addAssignedUsers(task);
   task.subtasks=loadSubtasks(task.id,me,supervisionViews);
   if(task.parent_task_id)task.parent_revision=db.get().prepare('SELECT revision FROM tasks WHERE id=?').get(task.parent_task_id)?.revision;
@@ -1841,7 +1841,7 @@ router.get('/', (req, res) => {
       const payload=withTaskReadSnapshot(db.get(),me,()=>{
         const candidates=listTaskOffers(db.get(),req,{includeFuture:true,query:req.query});
         const starts=taskStartProjection(db.get(),{tasks:candidates});
-        const hydrated=candidates.filter(starts.visible).slice(0,500).map(task=>hydrateTask(task,me));
+        const hydrated=candidates.filter(starts.visible).slice(0,500).map(task=>hydrateTask(task,me,new Map(),starts));
         return {data:hydrated.map(starts.project),visibility:starts.metadata([...candidates,...hydrated])};
       });
       return res.set('Cache-Control','private, no-store').json(payload);
@@ -2002,7 +2002,7 @@ router.get('/', (req, res) => {
     attachTaskLocations(db.get(), rows);
     attachTaskActionLinks(rows);
     const supervisionViews=new Map(); // One synchronous, read-only response.
-    const hydrated = withTaskReadProjection(db.get(),me,()=>attachDocumentCounts(rows.map(row=>hydrateTask(row,me,supervisionViews)),me));
+    const hydrated = withTaskReadProjection(db.get(),me,()=>attachDocumentCounts(rows.map(row=>hydrateTask(row,me,supervisionViews,startProjection)),me));
     return { data: include_future ? hydrated : hydrated.map(startProjection.project),
       visibility:startProjection.metadata([...candidates,...hydrated],{includeFuture:!!include_future}) };
     });
@@ -2039,37 +2039,39 @@ router.post('/:id/accept',(req,res)=>{
 router.get('/:id', (req, res) => {
   try {
     const me = req.authUserId || req.session.userId;
-    const task = db.get().prepare(`
-      SELECT t.*, u.display_name AS assigned_name, u.avatar_color AS assigned_color,
-        u.avatar_data AS assigned_avatar, ${ASSIGNED_USERS_SQL}
-      FROM tasks t
-      LEFT JOIN users u ON t.assigned_to = u.id
-      WHERE t.id = ?
-        AND ${taskVisibilityWhere(db.get(), me, 't')}
-    `).get(req.params.id, me, me);
+    const payload = withTaskReadSnapshot(db.get(),me,()=>{
+      const task = db.get().prepare(`
+        SELECT t.*, u.display_name AS assigned_name, u.avatar_color AS assigned_color,
+          u.avatar_data AS assigned_avatar, ${ASSIGNED_USERS_SQL}
+        FROM tasks t
+        LEFT JOIN users u ON t.assigned_to = u.id
+        WHERE t.id = ?
+          AND ${taskVisibilityWhere(db.get(), me, 't')}
+      `).get(req.params.id, me, me);
 
-    if (!task) return res.status(404).json({ error: 'Task not found.', code: 404 });
+      if (!task) return null;
 
-    addAssignedUsers(task);
-    attachDocumentCounts([task], me);
-    // Die verknüpften Dokumente beim Namen, nicht nur gezählt (#733). Die
-    // Detailansicht zeigte hier seit jeher eine Zeile „Dokumente" an, las dafür
-    // aber ein Feld, das die API nie gefüllt hat - die Zeile war deshalb immer
-    // leer, egal wie viele Dokumente an der Aufgabe hingen. Die Liste kommt aus
-    // derselben Funktion wie GET /:id/documents, also mit derselben
-    // Sichtbarkeitsprüfung.
-    task.documents = loadTaskDocuments(task.id, me);
-    attachTaskActivityBindings(db.get(), [task]);
-    attachTaskLocations(db.get(), [task]);
-    attachTaskActionLinks([task]);
-    attachTags([task]);
-    res.json({ data: withTaskReadProjection(db.get(),me,()=>{
+      addAssignedUsers(task);
+      attachDocumentCounts([task], me);
+      // Die verknüpften Dokumente beim Namen, nicht nur gezählt (#733). Die
+      // Detailansicht zeigte hier seit jeher eine Zeile „Dokumente" an, las dafür
+      // aber ein Feld, das die API nie gefüllt hat - die Zeile war deshalb immer
+      // leer, egal wie viele Dokumente an der Aufgabe hingen. Die Liste kommt aus
+      // derselben Funktion wie GET /:id/documents, also mit derselben
+      // Sichtbarkeitsprüfung.
+      task.documents = loadTaskDocuments(task.id, me);
+      attachTaskActivityBindings(db.get(), [task]);
+      attachTaskLocations(db.get(), [task]);
+      attachTaskActionLinks([task]);
+      attachTags([task]);
       const data={...task,...hydrateTask(task,me)},cache=new Map();
       data.rotations=data.rotations.map(context=>({...context,recorded_completions:context.occurrence.id
         ?rotationCompletionEvidence(db.get(),context.occurrence.id,{viewer:me,cache}):[]}));
       if(data.rotations.length)data.workflow_rotation_operations=workflowRotationOperations(db.get(),task,me);
       return data;
-    }) });
+    });
+    if (!payload) return res.status(404).json({ error: 'Task not found.', code: 404 });
+    res.json({data:payload});
   } catch (err) {
     if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('GET /:id error:', err);
@@ -3443,7 +3445,9 @@ router.patch('/:id/status', (req,res) => {
     }
     const result=changeTaskStatus(db.get(),Number(req.params.id),req.body.status,
       {actorId:req.authUserId||req.session.userId,body:req.body});
-    const task=withTaskReadProjection(db.get(),req.authUserId||req.session.userId,()=>{
+    const task=withTaskReadSnapshot(db.get(),req.authUserId||req.session.userId,()=>{
+      if(!mayAccessTask(result.task,req.authUserId||req.session.userId))
+        throw new TaskStateError('Task not found.',{},404);
       const supervisionViews=new Map();
       const task=hydrateTask(result.task,req.authUserId||req.session.userId,supervisionViews);
       if(result.parent_task && mayAccessTask(result.parent_task,req.authUserId||req.session.userId))

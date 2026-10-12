@@ -1,6 +1,7 @@
 /** Prize authority and link lookup; independent of Task lifecycle/Rewards writes. */
 import {actorId,actorPermissions,PermissionError} from '../permissions.js';
 import {tokenAllows} from '../scopes.js';
+import {taskReadStatement,taskReadTableExists} from './task-access.js';
 
 const parentRoles=new Set(['dad','mom','parent']);
 export const rewardDevicePrincipal=actor=>actor?.devicePrincipal?.kind==='device'?actor.devicePrincipal:actor?.kind==='device'?actor:null;
@@ -11,8 +12,8 @@ export function rewardHouseholdUser(d,id) {
 }
 export function rewardFulfillmentLink(d,taskId) {
   if(!Number.isSafeInteger(Number(taskId))||Number(taskId)<=0)return null;
-  if(!d.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='reward_fulfillment_task_links'").get())return null;
-  return d.prepare(`SELECT l.*,COALESCE(r.status,'cancelled') AS redemption_status FROM reward_fulfillment_task_links l
+  if(!taskReadTableExists(d,'reward_fulfillment_task_links'))return null;
+  return taskReadStatement(d,`SELECT l.*,COALESCE(r.status,'cancelled') AS redemption_status FROM reward_fulfillment_task_links l
     LEFT JOIN reward_redemptions r ON r.id=l.redemption_id WHERE l.task_id=?`).get(taskId);
 }
 

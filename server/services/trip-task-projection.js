@@ -1,17 +1,17 @@
-import {taskVisibilityWhere} from './task-access.js';
+import {taskVisibilityWhere,taskReadStatement,taskReadTableExists} from './task-access.js';
 import {todayKey} from '../utils/timezone.js';
 
-function supported(d){return !!d.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='trip_task_groups'").get();}
+function supported(d){return taskReadTableExists(d,'trip_task_groups');}
 
 /** The next deadline is a read projection. The parent's saved deadline stays editable. */
 export function attachTripTaskProjection(d,task,actor){
  if(!supported(d)||!task)return task;
- const group=d.prepare('SELECT * FROM trip_task_groups WHERE parent_task_id=?').get(task.id);
- const step=d.prepare('SELECT trip_id,step_key,phase,state FROM trip_task_steps WHERE task_id=?').get(task.id);
+ const group=taskReadStatement(d,'SELECT * FROM trip_task_groups WHERE parent_task_id=?').get(task.id);
+ const step=taskReadStatement(d,'SELECT trip_id,step_key,phase,state FROM trip_task_steps WHERE task_id=?').get(task.id);
  if(step)task.trip_step=step;
  if(!group)return task;
  task.trip_group={trip_id:group.trip_id,state:group.state,revision:group.revision};
- const next=group.state==='active'?d.prepare(`SELECT c.id,c.title,c.due_date,c.due_time FROM tasks c
+ const next=group.state==='active'?taskReadStatement(d,`SELECT c.id,c.title,c.due_date,c.due_time FROM tasks c
    WHERE c.parent_task_id=@parent AND c.archived_at IS NULL AND c.status NOT IN ('done','expired','skipped')
      AND (c.start_date IS NULL OR c.start_date<=@today)
      AND NOT EXISTS(SELECT 1 FROM trip_task_steps s WHERE s.task_id=c.id AND s.state!='active')

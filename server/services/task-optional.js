@@ -1,25 +1,26 @@
 /** Optionality belongs to the action branch, including linked helper views. */
+import {taskReadStatement,taskReadRecord} from './task-access.js';
 export function taskOptionalContext(d, taskId) {
-  const mapping=d.prepare('SELECT action_task_id FROM task_supervision_actions WHERE counterpart_task_id=?').get(taskId);
+  const mapping=taskReadStatement(d,'SELECT action_task_id FROM task_supervision_actions WHERE counterpart_task_id=?').get(taskId);
   const originalId=mapping?.action_task_id||Number(taskId);
-  return optionalAncestry(originalId,id=>d.prepare('SELECT * FROM tasks WHERE id=?').get(id));
+  return optionalAncestry(originalId,id=>taskReadRecord(d,id));
 }
 
 /** Reuse authoritative ordinary rows during one synchronous, read-only
  * inspection only. Callers discard this reader before any mutation; lifecycle
- * guards continue to use the uncached taskOptionalContext above. */
+ * guards have no read projection and retain uncached canonical reads. */
 export function createTaskOptionalContextReader(d, ordinaryRows) {
   const rows=new Map(ordinaryRows.map(row=>[Number(row.id),row]));
   const originalIds=new Set(rows.keys()),results=new Map();
   const rowFor=id=>{
-    if(!rows.has(id))rows.set(id,d.prepare('SELECT * FROM tasks WHERE id=?').get(id));
+    if(!rows.has(id))rows.set(id,taskReadRecord(d,id));
     return rows.get(id);
   };
   return taskId=>{
     const id=Number(taskId);
     if(!results.has(id)){
       const originalId=originalIds.has(id)?id:
-        d.prepare('SELECT action_task_id FROM task_supervision_actions WHERE counterpart_task_id=?').get(id)?.action_task_id||id;
+        taskReadStatement(d,'SELECT action_task_id FROM task_supervision_actions WHERE counterpart_task_id=?').get(id)?.action_task_id||id;
       results.set(id,optionalAncestry(originalId,rowFor));
     }
     return results.get(id);

@@ -32,7 +32,7 @@ function capability(userId,key,access) {
     ON CONFLICT(subject_type,subject_id,capability_key) DO UPDATE SET access=excluded.access`).run(String(userId),key,access);
 }
 
-test('one synchronous projection reuses persisted Task capabilities and current actor permissions', () => {
+test('one owned synchronous snapshot reuses persisted Task capabilities and current actor permissions', () => {
   const prepare=d.prepare.bind(d);let actorReads=0,taskReads=0;
   d.prepare=(sql,...args)=>{
     if(sql==='SELECT id, role, family_role FROM users WHERE id = ?')actorReads++;
@@ -40,7 +40,7 @@ test('one synchronous projection reuses persisted Task capabilities and current 
     return prepare(sql,...args);
   };
   try {
-    withTaskReadProjection(d,first,()=>{
+    withTaskReadSnapshot(d,first,()=>{
       for(let index=0;index<30;index++) {
         assert.equal(taskCapabilities(d,first,task).complete,true);
         taskVisibilityWhere(d,first);

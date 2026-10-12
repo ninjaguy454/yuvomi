@@ -32,7 +32,7 @@ export function withTaskReadSnapshot(d, actor, read) {
 
 export function withTaskReadProjection(d, actor, read) {
   const previous = readProjections.get(d), me = actorId(actor);
-  const scope = previous?.actorId === me ? previous : {actorId:me, capabilities:new Map(), tables:new Map(), statements:new Map(), facts:new Map(), factCount:0,
+  const scope = previous?.actorId === me ? previous : {actorId:me, capabilities:new Map(), tables:new Map(), statements:new Map(), records:new Map(), facts:new Map(), factCount:0,
     changesStatement:d.prepare('SELECT total_changes() AS count')};
   if (scope.changes === undefined) scope.changes = scope.changesStatement.get().count;
   readProjections.set(d, scope);
@@ -58,12 +58,14 @@ function currentReadProjection(d) {
   // owned snapshot; a savepoint rollback must not revive temporary decisions.
   if (snapshot && changes !== snapshot.changes) { snapshot.invalid=true; return null; }
   if (changes !== scope.changes) {
-    scope.capabilities.clear(); scope.tables.clear(); scope.statements.clear(); scope.facts.clear(); scope.factCount=0; scope.permissions = null; scope.changes = changes;
+    scope.capabilities.clear(); scope.tables.clear(); scope.statements.clear(); scope.records.clear(); scope.facts.clear(); scope.factCount=0; scope.permissions = null; scope.changes = changes;
   }
   return scope;
 }
 function projectionFor(d, actor) {
-  const scope = currentReadProjection(d);
+  // Authority and visibility are row facts too. A plain projection can see
+  // another connection's commit between reads, so it must recheck them.
+  const scope = readSnapshots.has(d) ? currentReadProjection(d) : null;
   return scope?.actorId === actorId(actor) ? scope : null;
 }
 function readPermissions(d, actor) {
@@ -87,10 +89,12 @@ export function taskReadStatement(d, sql) {
 
 /** Internal immutable facts only, never a personalized response or lifecycle
  * decision. The namespace belongs to the reader. Entries share the statement
- * guard and are bounded/disposed with the synchronous projection.
+ * guard and are bounded/disposed with our owned synchronous read snapshot.
+ * Another connection's commits do not advance total_changes(), so plain
+ * projections may reuse compilation but must read facts again.
  */
 export function taskReadFacts(d, namespace, key, read) {
-  const scope=currentReadProjection(d), entries=scope?.facts.get(namespace);
+  const scope=readSnapshots.has(d)?currentReadProjection(d):null, entries=scope?.facts.get(namespace);
   if(entries?.has(key))return entries.get(key);
   const changes=scope?.changes, value=read();
   if(value&&typeof value.then==='function')throw new TypeError('Task read facts must be synchronous.');
@@ -100,9 +104,24 @@ export function taskReadFacts(d, namespace, key, read) {
   return value;
 }
 
+/** Canonical scalar Task columns within one guarded read only. Return a copy
+ * so proposed edits/presentation cannot change another reader's facts. Unknown
+ * object/blob columns disable reuse; no derived/authorized rows enter here.
+ */
+export function taskReadRecord(d, id) {
+  // Row facts require our owned SQLite snapshot, including protection from
+  // another connection's commits (which do not advance this total_changes).
+  const scope=readSnapshots.has(d)?currentReadProjection(d):null, changes=scope?.changes;
+  if(scope?.records.has(id)){const row=scope.records.get(id);return row?{...row}:row;}
+  const row=taskReadStatement(d,'SELECT * FROM tasks WHERE id = ?').get(id);
+  if(scope&&currentReadProjection(d)===scope&&scope.changes===changes&&scope.records.size<2048
+    &&(!row||Object.values(row).every(value=>value===null||['string','number','bigint'].includes(typeof value))))scope.records.set(id,row?{...row}:row);
+  return row?{...row}:row;
+}
+
 const ids = value => [...new Set((Array.isArray(value) ? value : value == null || value === '' ? [] : [value]).map(Number))].sort((a, b) => a - b);
 const equal = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
-const assignments = (d, task) => task?.id ? ids(d.prepare('SELECT user_id FROM task_assignments WHERE task_id = ?').all(task.id).map(row => row.user_id).concat(task.assigned_to || [])) : ids(task?.assigned_to);
+const assignments = (d, task) => task?.id ? ids(taskReadStatement(d,'SELECT user_id FROM task_assignments WHERE task_id = ?').all(task.id).map(row => row.user_id).concat(task.assigned_to || [])) : ids(task?.assigned_to);
 export const taskDevicePrincipal = actor => actor?.devicePrincipal?.kind === 'device' ? actor.devicePrincipal : actor?.kind === 'device' ? actor : null;
 const deviceAllows = (principal, key) => principal.permissions?.capabilities?.[key] === 'allow';
 /** A shared display has no personal visibility or inherited member identity. */
@@ -173,16 +192,16 @@ export function taskCapabilities(d, actor, sourceTask) {
   const scope = projectionFor(d, actor), id = sourceTask?.id == null ? null : Number(sourceTask.id);
   if (scope && id != null && scope.capabilities.has(id)) return {...scope.capabilities.get(id)};
   const me = actorId(actor), p = readPermissions(d, actor), allow = key => p.capabilities[`tasks.${key}`] === 'allow';
-  const stored = sourceTask?.id ? d.prepare('SELECT * FROM tasks WHERE id = ?').get(sourceTask.id) : null;
+  const stored = sourceTask?.id ? taskReadRecord(d,sourceTask.id) : null;
   const task = stored || sourceTask;
-  const parent = task?.parent_task_id ? d.prepare('SELECT * FROM tasks WHERE id = ?').get(task.parent_task_id) : null;
+  const parent = task?.parent_task_id ? taskReadRecord(d,task.parent_task_id) : null;
   const assigned = assignments(d, task);
-  const mappedSource = task?.id && supervisionTable(d) ? d.prepare(`SELECT t.* FROM task_supervision_actions a
+  const mappedSource = task?.id && supervisionTable(d) ? taskReadStatement(d,`SELECT t.* FROM task_supervision_actions a
     JOIN tasks t ON t.id=a.action_task_id WHERE a.counterpart_task_id=?`).get(task.id) : null;
   const projection = !!mappedSource || (task?.id && supportTable(d)
-    && !!d.prepare('SELECT 1 FROM task_activity_support_tasks WHERE task_id=?').get(task.id));
+    && !!taskReadStatement(d,'SELECT 1 FROM task_activity_support_tasks WHERE task_id=?').get(task.id));
   const parentOwn = parent && (Number(parent.created_by) === me || assignments(d, parent).includes(me));
-  const supervised = task?.id && supervisionTable(d) ? d.prepare(`SELECT sa.action_task_id, sa.counterpart_task_id, sa.source_task_id
+  const supervised = task?.id && supervisionTable(d) ? taskReadStatement(d,`SELECT sa.action_task_id, sa.counterpart_task_id, sa.source_task_id
     FROM task_supervision_actions sa JOIN tasks supervised_action ON supervised_action.id=sa.action_task_id
     JOIN task_responsibilities current_helper ON current_helper.task_id=sa.source_task_id
       AND current_helper.user_id=sa.supervisor_user_id AND current_helper.role='supervisor' AND current_helper.status='active'
@@ -225,7 +244,7 @@ export function attachTaskCapabilities(d, actor, tasks) {
 
 /** Choosing a helper changes the canonical Task's whole supervised scope. */
 export function taskSupervisionManagementAllowed(d, actor, sourceTaskId) {
-  const source = d.prepare('SELECT * FROM tasks WHERE id = ?').get(sourceTaskId);
+  const source = taskReadRecord(d,sourceTaskId);
   if (!source) return false;
   const p = readPermissions(d, actor), me = actorId(actor);
   const capabilities = taskCapabilities(d, actor, source);

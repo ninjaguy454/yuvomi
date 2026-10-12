@@ -16,6 +16,7 @@ import { todayKey } from '../utils/timezone.js';
 import { loadActivityChecklist, materializeActivityChecklist } from './activity-template-checklist.js';
 import { substituteVariableTemplate, templateReferences } from './variable-resolution.js';
 import { parseTaskActivitySnapshot, readTaskActivityDefinition, taskActivitySnapshot } from './task-activity-snapshot.js';
+import {taskReadRecord} from './task-access.js';
 export { captureTaskActivityBindingDefinition, updateTaskActivitySnapshotSkills } from './task-activity-snapshot.js';
 
 export class TaskActivityBindingError extends Error {}
@@ -32,7 +33,7 @@ function activityTemplate(d, id) {
 }
 
 function taskRow(d, id) {
-  return d.prepare('SELECT * FROM tasks WHERE id = ?').get(id) ?? null;
+  return taskReadRecord(d,id) ?? null;
 }
 
 function setAssignments(d, taskId, userIds) {

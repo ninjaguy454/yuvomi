@@ -136,18 +136,18 @@ export function rewardOccurrenceProvenance(d,taskId) {
 
 /** The identical earning identity for pure previews, including a regenerated
  * action whose predecessor was deleted. Never register provenance on a read. */
-export function peekRewardOccurrenceProvenance(d,taskId,{prepare=sql=>d.prepare(sql)}={}) {
+export function peekRewardOccurrenceProvenance(d,taskId,{prepare=sql=>d.prepare(sql),readTask=id=>prepare('SELECT * FROM tasks WHERE id=?').get(id)}={}) {
   // Read projections can reuse compilation without making this migration-safe
   // module depend on lifecycle/authorization modules. No rows are retained.
   const readOccurrence=id=>prepare('SELECT * FROM task_recurrence_occurrences WHERE task_id=?').get(id);
-  const task=prepare('SELECT * FROM tasks WHERE id=?').get(taskId);
+  const task=readTask(taskId);
   const fallback={logicalKey:JSON.stringify(['task',taskId]),retired:false};
   if(!task)return fallback;
   const existing=prepare('SELECT * FROM task_recurrence_actions WHERE task_id=?').get(taskId);
   if(existing){const occurrence=readOccurrence(existing.occurrence_task_id);if(occurrence)return {logicalKey:JSON.stringify(['recurrence',occurrence.series_id,occurrence.occurrence_key,existing.action_key]),retired:occurrence.state==='retired'};}
   if(prepare(`SELECT 1 FROM task_activity_support_tasks WHERE task_id=? UNION ALL SELECT 1 FROM task_supervision_actions WHERE counterpart_task_id=? LIMIT 1`).get(taskId,taskId))return fallback;
   let root=task;const ancestors=new Set();
-  while(root.parent_task_id&&!ancestors.has(root.id)){ancestors.add(root.id);root=prepare('SELECT * FROM tasks WHERE id=?').get(root.parent_task_id);if(!root)return fallback;}
+  while(root.parent_task_id&&!ancestors.has(root.id)){ancestors.add(root.id);root=readTask(root.parent_task_id);if(!root)return fallback;}
   if(root.parent_task_id)return fallback;
   let occurrence=readOccurrence(root.id);
   if(!occurrence){
@@ -155,7 +155,7 @@ export function peekRewardOccurrenceProvenance(d,taskId,{prepare=sql=>d.prepare(
     let prior=root,seriesId=root.id;const seen=new Set();
     while(prior?.recurrence_origin_id&&!seen.has(prior.id)){
       seen.add(prior.id);seriesId=Math.min(seriesId,prior.recurrence_origin_id);const stored=readOccurrence(prior.recurrence_origin_id);
-      if(stored){seriesId=stored.series_id;break;}prior=prepare('SELECT * FROM tasks WHERE id=?').get(prior.recurrence_origin_id);
+      if(stored){seriesId=stored.series_id;break;}prior=readTask(prior.recurrence_origin_id);
     }
     occurrence={series_id:seriesId,occurrence_key:occurrenceKey(root),state:'materialized'};
   }
@@ -164,7 +164,7 @@ export function peekRewardOccurrenceProvenance(d,taskId,{prepare=sql=>d.prepare(
     let prior=task;actionKey=`action:${task.id}`;const seen=new Set();
     while(prior?.recurrence_origin_id&&!seen.has(prior.id)){
       seen.add(prior.id);const stored=prepare('SELECT * FROM task_recurrence_actions WHERE task_id=?').get(prior.recurrence_origin_id);
-      if(stored){actionKey=stored.action_key;break;}prior=prepare('SELECT * FROM tasks WHERE id=?').get(prior.recurrence_origin_id);if(prior)actionKey=`action:${prior.id}`;
+      if(stored){actionKey=stored.action_key;break;}prior=readTask(prior.recurrence_origin_id);if(prior)actionKey=`action:${prior.id}`;
     }
   }
   return {logicalKey:JSON.stringify(['recurrence',occurrence.series_id,occurrence.occurrence_key,actionKey]),retired:occurrence.state==='retired'};

@@ -19,6 +19,8 @@ import { parseLocalDateKey } from '/utils/date.js';
 import { nowFields } from '/utils/timezone.js';
 import { actionableSubtasks, structuralSubtasks } from '/utils/task-progress.js';
 import { isPreviewable } from '/utils/document-preview.js';
+import { esc } from '/utils/html.js';
+import { memberLabel } from '/utils/member-label.js';
 
 // --------------------------------------------------------
 // Prioritaet und Status
@@ -71,7 +73,47 @@ export function isClosedOccurrence(task) { return isExpired(task)||isSkipped(tas
 
 /** Keep the configured reward intact for the next occurrence or an explicit reopen. */
 export function taskCompletionPoints(task) {
-  return isClosedOccurrence(task) ? 0 : Number(task?.points || 0);
+  if (task?.scoring === undefined) return isClosedOccurrence(task) ? 0 : Number(task?.points || 0);
+  return task?.scoring?.personal_total ?? null;
+}
+
+/** Consume authorized server arrays for this named person, without eligibility inference. */
+export function taskScoringAmounts(task, userId = null) {
+  const scoring = task?.scoring;
+  if (!scoring) return { available: null, earned: null, total: null, unknown: false, unavailable: true };
+  const sum = rows => (rows || []).filter(row => Number(row.user_id) === Number(userId)).reduce((value, row) => value + row.points, 0);
+  return { earned: userId == null ? null : sum(scoring.earned), available: userId == null ? null : sum(scoring.potential),
+    total: userId == null ? scoring.personal_total : sum(scoring.earned) + sum(scoring.potential),
+    unknown: (scoring.settlements || []).some(row => row.points === null), unavailable: false };
+}
+
+export function isTaskScoringOwner(task) {
+  if (!task) return true;
+  if (task.scoring === null) return false;
+  return task.scoring?.root_task_id != null ? Number(task.scoring.root_task_id) === Number(task.id) : !task.parent_task_id;
+}
+
+export function taskScoringLabel(task, userId = null) {
+  if(task?.scoring===undefined)return t('tasks.pointsSummary',{count:taskCompletionPoints(task)});
+  const amounts=taskScoringAmounts(task,userId);
+  if(amounts.unavailable || amounts.total===null)return t('tasks.scoringPersonalUnavailable');
+  const label=userId==null?t('tasks.pointsSummary',{count:amounts.total}):`${t('tasks.scoringEarned')} ${amounts.earned} · ${t('tasks.scoringAvailable')} ${amounts.available}`;
+  return amounts.unknown?`${label} · ${t('tasks.scoringUnknown')}`:label;
+}
+
+/** Preserve every public settlement row; only previews guarantee immutable IDs and labels. */
+export function renderTaskScoringHistory(task, users = []) {
+  const rows=task?.scoring?.settlements || [];
+  if(!rows.length)return '';
+  const label=id=>memberLabel(users.find(user=>Number(user.id)===Number(id)) || {id}) || t('tasks.commentUnknownAuthor');
+  const items=rows.map(row=>{
+    const identity=row.settlement_id==null?'':` data-scoring-settlement="${esc(row.settlement_id)}"`;
+    const amount=row.points===null?esc(t('tasks.scoringUnknown')):row.points;
+    const recipients=(row.recipients || []).map(recipient=>`${esc(label(recipient.user_id))}: ${recipient.points}`).join(' · ');
+    const outcome=row.points===null?'':esc(t(row.outcome==='zero'?'tasks.scoringZero':row.outcome==='no_recipients'?'tasks.scoringNoRecipients':'tasks.scoringEarned'));
+    return `<li${identity}>${esc(row.title || t('tasks.scoringHistory'))}: ${amount}${row.is_optional?` · ${esc(t('tasks.scoringOptional'))}`:''}${row.settled_at?` · ${esc(formatDate(row.settled_at))}`:''}<div>${recipients || outcome}</div></li>`;
+  }).join('');
+  return `<details class="task-detail-scoring-history"><summary>${esc(t('tasks.scoringHistory'))}</summary><ul>${items}</ul></details>`;
 }
 
 /**
@@ -216,7 +258,7 @@ export function subtaskParticipants(subtask, users = []) {
 }
 
 /** Completion and point totals shared by cards and the canonical detail view. */
-export function completionCounts(task) {
+function completionCountsLegacy(task) {
   const actions = actionableSubtasks(task);
   const subtasks = actions.filter(child => !child.is_optional);
   const optional = actions.filter(child => !!child.is_optional);
@@ -241,6 +283,13 @@ export function completionCounts(task) {
     earnedPoints: task?.status === 'done' ? Number(task?.points || 0) : 0,
     totalPoints: Number(task?.points || 0),
   };
+}
+
+export function completionCounts(task, userId = null) {
+  const counts=completionCountsLegacy(task);
+  if(task?.scoring===undefined)return counts;
+  const amounts=taskScoringAmounts(task,userId);
+  return {...counts,earnedPoints:amounts.earned,totalPoints:amounts.total};
 }
 
 /** Human-readable location used by sorting, grouping, cards, and Task Details. */

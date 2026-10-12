@@ -57,7 +57,7 @@ import { zonedDateKey } from '/utils/timezone.js';
 import { historyDayLabel } from '/utils/day-label.js';
 import {
   FALLBACK_CATEGORY, PRIORITY_LABELS, STATUS_LABELS,
-  isArchived, isExpired, isClosedOccurrence, taskCompletionPoints, canEditTaskDefinition, catLabel, normalizeTagList,
+  isArchived, isExpired, isClosedOccurrence, taskCompletionPoints, taskScoringLabel, renderTaskScoringHistory, canEditTaskDefinition, catLabel, normalizeTagList,
   docMime, docHref, docIcon, formatDueDate,
   normalizeParticipant, taskParticipants, subtaskParticipants, completionCounts, taskLocationLabel,
 } from '/utils/task-fields.js';
@@ -305,7 +305,7 @@ function subtaskContextNode(subtask, supervision, ctx) {
     : supervision && supervision.state !== 'not_required' ? 'Supervision required' : '';
   if (supervision?.state === 'unresolved') skills = skills.replaceAll('Supervision required', 'Supervision needed');
   const compact = [skills, label && !skills.includes(label) ? label : '',
-    Number(subtask.points) ? t('tasks.pointsSummary', { count: Number(subtask.points) }) : ''].filter(Boolean).join(' · ');
+    taskCompletionPoints(subtask) !== null ? taskScoringLabel(subtask,ctx.currentUserId) : t('tasks.scoringPersonalUnavailable')].filter(Boolean).join(' · ');
   if (!compact) return null;
   if (!skills && (!supervision || supervision.state === 'not_required')) {
     const meta = document.createElement('span'); meta.className = 'detail-subtask__meta'; meta.textContent = compact; return meta;
@@ -432,7 +432,7 @@ function responsibilityListNode(task, ctx) {
 
 function progressNode(task, ctx) {
   if (!actionableSubtasks(task).length) return null;
-  const progress = completionCounts(task);
+  const progress = completionCounts(task,ctx.currentUserId);
   const pending = ctx.pendingSubtasks || new Map(ctx.pendingSubtask ? [[Number(ctx.pendingSubtask.id), ctx.pendingSubtask]] : []);
   // The overlay never changes canonical progress, earned points or history.
   for (const child of actionableSubtasks(task)) {
@@ -453,7 +453,7 @@ function progressNode(task, ctx) {
   const ownSteps = hasDelegated && !task.is_supervision_projection
     ? Number(task.assigned_to) === Number(ctx.currentUserId) ? 'Your steps: ' : 'Learner steps: ' : '';
   label.textContent = `${ownSteps}${progress.done} of ${progress.total}${progress.optionalTotal ? ' required' : ''} complete${progress.total ? ` · ${Math.round(progress.done / progress.total * 100)}%` : ''}${progress.optionalTotal ? ` · ${progress.optionalDone} of ${progress.optionalTotal} optional` : ''}`;
-  if (progress.totalPoints > 0) {
+  if (task.scoring===undefined && progress.totalPoints > 0) {
     label.append(document.createTextNode(` · ${t('tasks.progressPointsValue', progress)}`));
   }
   wrap.append(meter, label);
@@ -1272,8 +1272,10 @@ function statusSummaryNode(task, ctx) {
   if (priority) summary.appendChild(priority);
   const metrics = document.createElement('div'); metrics.className = 'task-detail-metrics';
   const points = document.createElement('span'); points.className = 'task-detail-points';
-  points.textContent = t('tasks.pointsSummary', { count: taskCompletionPoints(task) });
+  points.textContent = taskScoringLabel(task,ctx.currentUserId);
   metrics.appendChild(points);
+  const frozen=renderTaskScoringHistory(task,ctx.users || []);
+  if(frozen){const history=document.createElement('div');history.innerHTML=frozen;metrics.appendChild(history);}
   const progress = progressNode(task, ctx);
   if (progress) metrics.appendChild(progress);
   summary.appendChild(metrics);
@@ -1559,7 +1561,7 @@ function renderTaskDetail(task, reminders = [], ctx) {
   if (ctx.offerInspection) {
     const metrics = document.createElement('div'); metrics.className = 'task-detail-metrics';
     const points = document.createElement('span'); points.className = 'task-detail-points';
-    points.textContent = t('tasks.pointsSummary', { count: taskCompletionPoints(task) }); metrics.append(points);
+    points.textContent = taskScoringLabel(task,ctx.currentUserId); metrics.append(points);
     const children = document.createElement('ul'); children.className = 'detail-subtasks';
     for (const child of actionableSubtasks(task)) {
       const row = document.createElement('li'); row.textContent = child.title;

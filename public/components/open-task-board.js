@@ -5,7 +5,7 @@ import { moduleAccess } from '/permissions.js';
 import { authenticationSnapshot, sameAuthentication } from '/utils/device-context.js';
 import { watchTaskChanges, latestTaskLoader, createTaskStartRefresh } from '/utils/task-live.js';
 import { renderTaskCountdown, bindTaskCountdowns } from '/utils/task-countdown.js';
-import { taskCompletionPoints } from '/utils/task-fields.js';
+import { taskScoringLabel } from '/utils/task-fields.js';
 
 /** A task projection beside Notes, with independent permission and lifecycle. */
 export function mountOpenTaskBoard(container, { user } = {}) {
@@ -43,7 +43,7 @@ export function mountOpenTaskBoard(container, { user } = {}) {
     renderedProjection = projection;
     container.replaceChildren(); container.hidden = !allowed();
     if (!allowed()) return;
-    container.insertAdjacentHTML('beforeend', `<section class="open-task-board" aria-label="${esc(t('tasks.bountyTasks'))}"><div class="open-task-board__header"><h2>${esc(t('tasks.bountyTasks'))}</h2><a href="/tasks?offers=1&view=list">${esc(t('tasks.openTasksAll'))}</a></div><p class="open-task-board__description text-muted">${esc(t('tasks.bountyTasksDescription'))}</p><div class="open-task-board__list">${error ? `<p role="alert">${esc(error)}</p>` : tasks.length ? tasks.map(task => `<button type="button" class="open-task-board__card" data-open-task="${Number(task.id)}"><strong>${esc(task.title)}</strong><span class="open-task-board__meta"><span class="text-muted">${esc(t('tasks.pointsSummary', { count: taskCompletionPoints(task) }))}</span>${renderTaskCountdown(task, { className: 'text-muted' })}</span></button>`).join('') : `<p>${esc(t('tasks.openTasksEmpty'))}</p>`}</div></section>`);
+    container.insertAdjacentHTML('beforeend', `<section class="open-task-board" aria-label="${esc(t('tasks.bountyTasks'))}"><div class="open-task-board__header"><h2>${esc(t('tasks.bountyTasks'))}</h2><a href="/tasks?offers=1&view=list">${esc(t('tasks.openTasksAll'))}</a></div><p class="open-task-board__description text-muted">${esc(t('tasks.bountyTasksDescription'))}</p><div class="open-task-board__list">${error ? `<p role="alert">${esc(error)}</p>` : tasks.length ? tasks.map(task => `<button type="button" class="open-task-board__card" data-open-task="${Number(task.id)}"><strong>${esc(task.title)}</strong><span class="open-task-board__meta"><span class="text-muted">${esc(taskScoringLabel(task,user?.id ?? null))}</span>${renderTaskCountdown(task, { className: 'text-muted' })}</span></button>`).join('') : `<p>${esc(t('tasks.openTasksEmpty'))}</p>`}</div></section>`);
     container.querySelectorAll('[data-open-task]').forEach(button => {
       button.onclick = async () => {
         button.disabled = true;

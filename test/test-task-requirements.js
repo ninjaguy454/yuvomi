@@ -12,6 +12,9 @@ app.use(express.json());
 app.use(express.static(fileURLToPath(new URL('../public', import.meta.url))));
 app.use('/api/v1', (req, res) => {
   requests.push({ method: req.method, path: req.path, body: req.body });
+  if(req.method==='PATCH'&&req.path==='/tasks/2/status')return res.json({data:{id:2,revision:4,parent_revision:2,status:req.body.status,parent_task:{id:1,revision:2,title:'Prepare dinner',status:'done',created_by:1,
+    description:'Follow these instructions first.',permissions:{complete:true,edit:true,comment:true},skill_ids:[1],skills:[{id:1,name:'Kitchen safety'}],
+    subtasks:[{id:2,revision:4,parent_revision:2,title:'Chop vegetables',status:req.body.status,permissions:{complete:true},skill_ids:[1],skills:[{id:1,name:'Kitchen safety'}]}]}}});
   if (req.method === 'PUT' && req.path === '/tasks/2') return res.json({ data: {
     id: 2, ...req.body, skills: (req.body.skill_ids || []).map((id) => ({ id, name: `Skill ${id}` })),
     skill_assignment_needed: (req.body.skill_ids || []).length > 0,

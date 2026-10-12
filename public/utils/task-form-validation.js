@@ -1,4 +1,8 @@
-import { parseDateInput, isDateInputValid, parseTimeInput } from '/i18n.js';
+import { t, parseDateInput, isDateInputValid, parseTimeInput } from '/i18n.js';
+
+export function validTaskPoints(value) {
+  return ['number', 'string'].includes(typeof value) && String(value).trim() !== '' && Number.isInteger(Number(value)) && Number(value) >= 0 && Number(value) <= 10000;
+}
 
 let pointsFieldId = 0;
 
@@ -30,12 +34,11 @@ export function taskFormErrors(form) {
     if(!row.querySelector('[data-rotation-label]')?.value.trim())add('task-rotations','Give each rotation purpose a name.');
     if(!row.querySelector('[data-rotation-group]')?.value)add('task-rotations','Choose a Rotation Group.');
   }
-  for (const field of form.querySelectorAll('[data-task-subtask-points]')) {
-    if (field.disabled || !field.closest('[data-task-subtask-row]')?.querySelector('[data-task-subtask-title]')?.value.trim()) continue;
-    const points = Number(field.value);
-    if (field.validity?.badInput || !Number.isInteger(points) || points < 0 || points > 10000) {
+  for (const field of form.querySelectorAll('#task-points, [data-task-subtask-points]')) {
+    if (field.disabled || field.closest('[hidden]') || field.matches('[data-task-subtask-points]') && !field.closest('[data-task-subtask-row]')?.querySelector('[data-task-subtask-title]')?.value.trim()) continue;
+    if (field.validity?.badInput || !validTaskPoints(field.value)) {
       field.id ||= `task-subtask-points-${++pointsFieldId}`;
-      add(field.id, 'Subtask points must be a whole number from 0 to 10000.');
+      add(field.id, t('tasks.scoringInvalidPoints'));
     }
   }
   return errors;
@@ -43,6 +46,8 @@ export function taskFormErrors(form) {
 
 /** Server errors still get a visible announcement and the closest relevant field. */
 export function taskErrorField(message = '') {
+  if (/point/i.test(message)) return 'task-points';
+  if (/scoring|reward|settled/i.test(message)) return 'task-scoring-mode';
   if (/assignee|assignment|assign someone/i.test(message)) return 'task-fixed-assignment';
   if (/start (date|time)/i.test(message)) return 'task-start-date';
   if (/due|deadline|expiration/i.test(message)) return 'task-due-date';

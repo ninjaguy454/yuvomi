@@ -73,7 +73,7 @@
 }
 
 .task-subtask-editor__main > input { width: 100%; min-width: 0; }
-.task-subtask-editor__main:has([data-task-subtask-points]) {
+.task-subtask-editor__main:has(.task-subtask-editor__points:not([hidden])) {
   grid-template-columns: 28px minmax(0, 1fr) auto auto var(--target-base);
 }
 .task-subtask-editor__points {
@@ -89,14 +89,28 @@
   min-height: 44px;
 }
 @media (max-width: 639px) {
-  .task-subtask-editor__main:has([data-task-subtask-points]) {
+  .task-subtask-editor__main:has(.task-subtask-editor__points:not([hidden])) {
     grid-template-columns: 28px minmax(0, 1fr) auto var(--target-base);
   }
-  .task-subtask-editor__main:has([data-task-subtask-points]) > [data-task-subtask-title] { grid-column: 2 / 4; grid-row: 1; }
-  .task-subtask-editor__main:has([data-task-subtask-points]) > .task-subtask-editor__actions { grid-column: 4; grid-row: 1; }
+  .task-subtask-editor__main:has(.task-subtask-editor__points:not([hidden])) > [data-task-subtask-title] { grid-column: 2 / 4; grid-row: 1; }
+  .task-subtask-editor__main:has(.task-subtask-editor__points:not([hidden])) > .task-subtask-editor__actions { grid-column: 4; grid-row: 1; }
   .task-subtask-editor__points { grid-column: 2; grid-row: 2; }
-  .task-subtask-editor__main:has([data-task-subtask-points]) > .task-subtask-editor__optional { grid-column: 3 / 5; grid-row: 2; }
+  .task-subtask-editor__main:has(.task-subtask-editor__points:not([hidden])) > .task-subtask-editor__optional { grid-column: 3 / 5; grid-row: 2; }
 }
+
+.task-scoring { grid-column: 1 / -1; min-width: 0; }
+.task-scoring__modes { border: 0; padding: 0; margin: var(--space-2) 0; display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.task-scoring__modes legend { width: 100%; }
+.task-scoring__modes label { display: flex; align-items: center; gap: var(--space-2); min-height: 44px; padding: var(--space-2); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md); cursor: pointer; }
+.task-scoring__modes label:has(:checked) { background: var(--color-bg-secondary); }
+.task-scoring__modes label:has(:focus-visible) { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+.task-scoring select, #task-points { min-height: 44px; }
+.task-scoring [hidden], .task-subtask-editor__points[hidden], #task-points-field[hidden] { display: none !important; }
+.task-scoring-preview { min-width: 0; overflow-wrap: anywhere; }
+.task-scoring-preview__phases { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: var(--space-3); }
+.task-scoring-preview ul { padding-left: var(--space-4); }
+.task-scoring-preview li { margin-block: var(--space-2); }
+@media (max-width:639px) { .task-scoring-preview__phases { grid-template-columns: minmax(0,1fr); } }
 
 .task-subtask-editor__handle {
   display: inline-flex;

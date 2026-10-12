@@ -11,6 +11,7 @@ import { rewardRequest } from '/utils/reward-request.js';
 import { watchRewardChanges } from '/utils/reward-live.js';
 import { displayTimeZone, setDisplayTimeZone } from '/utils/timezone.js';
 import { bindTaskCountdowns } from '/utils/task-countdown.js';
+import { taskScoringLabel, renderTaskScoringHistory } from '/utils/task-fields.js';
 
 const LABELS = { tasks:'Tasks', calendar:'Upcoming events', meals:'Today’s meals', shopping:'Shopping',
   presence:'Household presence', points:'Points', rewards:'Rewards', notes:'Announcements', weather:'Weather' };
@@ -223,6 +224,7 @@ export async function mountWallDashboard(container, { user, signal, renderers })
     const who=actorValid()?`Acting as ${memberLabel(actor.member || actor.user || actor) || 'member'}`:'Identify yourself to take an action';
     let html=`<p class="wall-action-identity">${esc(who)}</p>`;
     if(kind==='tasks'){
+      html+=`<p>${esc(taskScoringLabel(data,actorValid()?Number(actor.user?.id || actor.member?.id || actor.id):null))}</p>${renderTaskScoringHistory(data)}`;
       const actions=(data.subtasks || data.children || []).filter(s=>data.is_supervision_projection || !s.is_supervision_projection);
       const progress={completed:data.subtask_done,total:data.subtask_total};html+=`<p>${esc(data.status==='done'?'Completed':data.status==='in_progress'?'In progress':'Not started')}${progress.total?` · ${progress.completed ?? 0} of ${progress.total} steps`:''}${data.waiting_on_helper?' · Your steps are complete; waiting on helper work':''}</p>`;
       if(data.description)html+=`<p class="wall-detail-instructions">${esc(data.description)}</p>`;

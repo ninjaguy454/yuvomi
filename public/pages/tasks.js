@@ -37,8 +37,8 @@ import { renderSkillPicker, bindSkillPicker, renderSubtaskEditor, bindSubtaskEdi
 import { createManualTaskDraft, taskDraftSnapshot, taskDraftToActivity } from '/utils/task-draft.js';
 import { renderRotationBindings, bindRotationBindings } from '/components/rotation-bindings.js';
 import { resolveActivityDueDate } from '/utils/activity-schedule.js';
-import { taskEditDefinition, taskEditResultMessage } from '/utils/task-edit-scope.js';
-import { taskFormErrors, taskErrorField, showTaskFormErrors } from '/utils/task-form-validation.js';
+import { taskEditDefinition, taskEditResultMessage, taskFuturePatch, hasTaskScoringChanges, renderTaskScoringPreview, taskScoringErrorMessage } from '/utils/task-edit-scope.js';
+import { taskFormErrors, validTaskPoints, taskErrorField, showTaskFormErrors } from '/utils/task-form-validation.js';
 import { resolveReminderPreset } from '/utils/reminder-offset.js';
 import { renderPageSearch, wirePageSearch } from '/utils/page-search.js';
 import { renderDocumentAttachField, bindDocumentAttachField } from '/components/document-attach.js';
@@ -56,7 +56,7 @@ import { isWallModeEnabled } from '/utils/wall-mode.js';
 import { historyDayLabel } from '/utils/day-label.js';
 import {
   PRIORITIES, PRIO_ORDER, STATUSES, FILTER_STATUSES, PRIORITY_LABELS, STATUS_LABELS,
-  FALLBACK_CATEGORY, isArchived, isExpired, isClosedOccurrence, taskCompletionPoints, formatDueDate, normalizeTagList,
+  FALLBACK_CATEGORY, isArchived, isExpired, isClosedOccurrence, taskCompletionPoints, taskScoringAmounts, taskScoringLabel, renderTaskScoringHistory, isTaskScoringOwner, formatDueDate, normalizeTagList,
   normalizeParticipant, taskParticipants, subtaskParticipants,
   completionCounts, taskLocationLabel,
   catLabel as catLabelOf, catSortIndex as catSortIndexOf,
@@ -155,7 +155,8 @@ function participantCompletion(task, userId) {
   const assigned = actionableSubtasks(task).filter((subtask) =>
     !subtask.is_optional && subtaskParticipants(subtask, state.users).some((user) => Number(user.id) === Number(userId))
   );
-  if (!assigned.length) return completionCounts(task);
+  if (!assigned.length) return completionCounts(task,userId);
+  if(task.scoring!==undefined){const amounts=taskScoringAmounts(task,userId);return {done:assigned.filter(child=>child.status==='done').length,total:assigned.length,earnedPoints:amounts.earned,totalPoints:amounts.total};}
   return {
     done: assigned.filter((subtask) => subtask.status === 'done').length,
     total: assigned.length,
@@ -176,7 +177,7 @@ function progressLabel(progress) {
 }
 
 function taskProgress(task) {
-  const progress = completionCounts(task);
+  const progress = completionCounts(task,state.currentUserId);
   return progress.total ? progress.done / progress.total : 0;
 }
 
@@ -612,7 +613,7 @@ function canToggleCardSubtask(task, subtask) {
 function renderActivitySubtasks(task, expanded) {
   const subtasks = actionableSubtasks(task);
   if (!subtasks.length) return '';
-  const { done, total, optionalTotal, optionalDone } = completionCounts(task);
+  const { done, total, optionalTotal, optionalDone } = completionCounts(task,state.currentUserId);
   const rows = subtasks.map((subtask) => {
     const assignees = subtaskParticipants(subtask);
     const points = taskCompletionPoints(subtask);
@@ -627,7 +628,7 @@ function renderActivitySubtasks(task, expanded) {
       <button type="button" class="subtask-item__title" data-action="open-task" data-id="${subtask.id}" aria-label="${esc(label)}" title="${esc(label)}">${esc(label)}</button>
       <div class="subtask-item__metadata">
       ${canApproveDeviceTask(subtask) ? `<button type="button" class="btn btn--secondary btn--icon subtask-item__approval" data-action="approve-device-task" data-id="${subtask.id}" aria-label="${esc(t('tasks.supervisorApprovalFor', { title: subtask.title }))}" title="${esc(t('tasks.supervisorApproval'))}"><i data-lucide="shield" class="icon-md" aria-hidden="true"></i></button>` : ''}
-      <span class="subtask-item__points" role="img" aria-label="${esc(t('tasks.pointsSummary', { count: points }))}" title="${esc(t('tasks.pointsSummary', { count: points }))}">${points}</span>
+      ${points===null?'':`<span class="subtask-item__points" role="img" aria-label="${esc(taskScoringLabel(subtask,state.currentUserId))}" title="${esc(taskScoringLabel(subtask,state.currentUserId))}">${points}</span>`}
       ${assignees.length ? `<span class="subtask-item__assignees">${assignees.slice(0, 2).map((participant) => renderProfileAvatarButton(participant, 26)).join('')}
         ${assignees.length > 2 ? `<span class="avatar-stack__item avatar-stack__overflow" title="${assignees.length - 2} ${esc(t('userMultiSelect.moreUsers'))}">+${assignees.length - 2}</span>` : ''}</span>` : ''}
       </div>
@@ -671,9 +672,9 @@ function renderTaskCard(task, opts = {}) {
   const points = taskCompletionPoints(task);
   const statusLabel = ({ open: 'Not Started', in_progress: 'In Progress', done: 'Completed', expired: 'Expired', skipped:'Skipped' })[task.status] || task.status;
 
-  return `<article class="task-card activity-card${hasDetails ? ' activity-card--has-details' : ''}${showCheckbox ? ' activity-card--selecting' : ''}${String(points).length > 3 ? ' activity-card--large-points' : ''}${board ? ' kanban-card' : ''}${isDone ? ' task-card--done kanban-card--done' : ''}${archived ? ' task-card--archived' : ''}"
+  return `<article class="task-card activity-card${hasDetails ? ' activity-card--has-details' : ''}${showCheckbox ? ' activity-card--selecting' : ''}${points !== null && String(points).length > 3 ? ' activity-card--large-points' : ''}${board ? ' kanban-card' : ''}${isDone ? ' task-card--done kanban-card--done' : ''}${archived ? ' task-card--archived' : ''}"
       data-task-id="${task.id}">
-    <span class="activity-card__points" role="img" aria-label="${esc(t('tasks.pointsSummary', { count: points }))}" title="${esc(t('tasks.pointsSummary', { count: points }))}">${points}</span>
+    ${points===null?'':`<span class="activity-card__points" role="img" aria-label="${esc(taskScoringLabel(task,state.currentUserId))}" title="${esc(taskScoringLabel(task,state.currentUserId))}">${points}</span>`}
     <div class="activity-card__surface">
     <div class="activity-card__summary">
       <span class="activity-card__leading">
@@ -1006,6 +1007,21 @@ function wireTagBadgeFilter(container) {
   });
 }
 
+function renderTaskScoringControls(task, isEdit) {
+  const owner = isTaskScoringOwner(isEdit ? task : null);
+  const mode = task.scoring?.mode || task.scoring_mode || (isEdit ? 'unknown' : 'whole_task');
+  const unavailable = task.scoring === null;
+  const recurring = isEdit && owner && task.recurrence_series_id != null && !isDevicePrincipal() && canTask(task, 'change_points') && canTask(task, 'edit_series');
+  return `<div class="task-scoring" id="task-scoring">
+    ${recurring ? `<button type="button" class="btn btn--secondary" id="task-scoring-edit">${t('tasks.scoringEdit')}</button><label class="label" for="task-scoring-scope">${t('tasks.scoringScope')}</label><select class="input" id="task-scoring-scope"><option value="future_only">${t('tasks.scoringFuture')}</option><option value="occurrence" selected>${t('tasks.scoringOccurrence')}</option><option value="future">${t('tasks.scoringThisFuture')}</option></select>` : ''}
+    <fieldset id="task-scoring-mode" class="task-scoring__modes"><legend class="label">${t('tasks.scoringModesLabel')}</legend>
+      ${['whole_task','subtasks'].map(value => `<label><input type="radio" name="scoring_mode" value="${value}" ${!unavailable && mode === value ? 'checked' : ''} ${!owner || unavailable ? 'disabled' : ''}><span>${t(value === 'whole_task' ? 'tasks.scoringWhole' : 'tasks.scoringEach')}</span></label>`).join('')}
+    </fieldset>
+    <p class="task-field-hint" id="task-scoring-message" role="status">${unavailable ? t('tasks.scoringUnavailable') : !owner ? t('tasks.scoringOwnerHint') : mode === 'unknown' ? t('tasks.scoringOlder') : mode === 'legacy' ? t('tasks.scoringReview') : t('tasks.scoringHint')}</p>
+    ${!owner && task.scoring?.root_task_id ? `<a href="/tasks?open=${Number(task.scoring.root_task_id)}">${t('tasks.scoringOwner')}</a>` : ''}
+  </div>`;
+}
+
 function renderModalContent({ task = null, users = [], reminder = null, presetActivityTemplate = null, presetDates = null, occurrenceStartDate = null } = {}) {
   const isEdit = !!task;
   const existingTask = task;
@@ -1052,7 +1068,7 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
 
   // Punkte neuer Aufgaben mit dem Haushalt-Standard vorbelegen (#578).
   const prefillPoints = !isEdit && state.defaultPoints > 0 ? state.defaultPoints : 0;
-  const pointsValue = Number(task.points) || '';
+  const pointsValue = task.points ?? 0;
 
   const taskFieldsHtml = `
       <div class="task-editor__basics">
@@ -1069,12 +1085,13 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
           </select>
         </div>
 
-        <div class="form-group">
+        ${renderTaskScoringControls(task, isEdit)}
+        <div class="form-group" id="task-points-field">
           <label class="label" for="task-points">${t('tasks.pointsLabel')}</label>
           <input class="input" type="number" id="task-points" name="points" inputmode="numeric"
-                 min="0" step="1" value="${pointsValue}"
+                 min="0" max="10000" step="1" value="${esc(pointsValue)}"
                  placeholder="0">
-          <p class="task-field-hint">${prefillPoints
+          <p class="task-field-hint">${task.scoring?.settled_task_ids?.includes(Number(task.id)) ? t('tasks.scoringConfigured') : prefillPoints
             ? t('tasks.pointsDefaultHint', { count: prefillPoints })
             : t('tasks.pointsHint')}</p>
         </div>
@@ -1267,7 +1284,7 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
       <p class="task-field-hint">${activityTemplateId && task.recurrence_series_id == null ? 'Required skills and assignment rules come from this Activity Template.' : 'Required skills apply to assignment and claiming. Each subtask has its own requirements.'}</p>
       ${isEdit && task.task_responsibilities?.length ? `<p class="task-field-hint">Participants: ${task.task_responsibilities.map((person) => esc(memberLabel(person))).join(', ')}</p>` : ''}
       </section>
-      ${!task.parent_task_id && !task.is_supervision_projection ? `<section class="task-editor__section" aria-labelledby="task-subtasks-heading"><h3 id="task-subtasks-heading">Subtasks</h3>${renderSubtaskEditor({ subtasks: structuralSubtasks(task), skills: state.skills, users:state.users, canCreateSkill: canCapability('skills.manage') })}</section>` : ''}
+      ${isTaskScoringOwner(isEdit ? task : null) && !task.is_supervision_projection ? `<section class="task-editor__section" aria-labelledby="task-subtasks-heading"><h3 id="task-subtasks-heading">Subtasks</h3>${renderSubtaskEditor({ subtasks: structuralSubtasks(task), skills: state.skills, users:state.users, canCreateSkill: canCapability('skills.manage') })}</section>` : ''}
       ${!task.parent_task_id && !task.is_supervision_projection && (canCapability('rotations.configure') || task.rotation_bindings?.length) ? `<section id="task-rotations">${renderRotationBindings(task.rotation_bindings || task.rotation_bindings_json, {skills:state.skills,places:state.places})}</section>` : ''}
       <section class="task-editor__section" aria-labelledby="task-where-heading">
       <h3 id="task-where-heading">Where</h3>
@@ -1276,6 +1293,7 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
       </section>
 
 
+      ${isEdit ? renderTaskScoringHistory(task,state.users) : ''}
       ${renderDocumentAttachField({
         attachments: (task?.documents ?? []).map((doc) => ({ document_id: doc.id, name: doc.name, mime_type: doc.mime_type })),
         label: t('tasks.documentsLabel'),
@@ -1494,10 +1512,10 @@ function taskSnapshot(id) {
   return state.tasks.flatMap(task => [task, ...(task.subtasks || [])]).find(task => Number(task.id) === Number(id));
 }
 
-function patchTaskPointsBadge(badge, points) {
+function patchTaskPointsBadge(badge, points, label = t('tasks.pointsSummary',{count:points})) {
   if (!badge) return;
-  const label = t('tasks.pointsSummary', { count: points });
-  badge.textContent = String(points);
+  badge.hidden=points===null;
+  badge.textContent = points===null?'':String(points);
   badge.setAttribute('aria-label', label);
   badge.title = label;
 }
@@ -1506,7 +1524,7 @@ function patchTaskPointsBadge(badge, points) {
 // scrollports, expansion controls and metadata in place while siblings queue.
 function patchCardSubtaskFeedback(list, task, pending, queue, recheck = () => {}) {
   const projected = taskCardPendingProjection(task, pending, actionableSubtasks);
-  const progress = completionCounts(projected);
+  const progress = completionCounts(projected,state.currentUserId);
   for (const card of list.querySelectorAll(`article[data-task-id="${task.id}"]`)) {
     for (const child of actionableSubtasks(task)) {
       const row = card.querySelector(`[data-subtask-id="${child.id}"]`);
@@ -1534,7 +1552,7 @@ function patchCardSubtaskFeedback(list, task, pending, queue, recheck = () => {}
         saving.appendChild(check); row.appendChild(saving);
       } else if (!intent?.uncertain) saving?.remove();
       const points = row.querySelector('.subtask-item__points');
-      patchTaskPointsBadge(points, taskCompletionPoints(child));
+      patchTaskPointsBadge(points, taskCompletionPoints(child),taskScoringLabel(child,state.currentUserId));
     }
     const counter = card.querySelector('.activity-card__subtasks-progress');
     if (counter) {
@@ -1569,8 +1587,8 @@ function patchCardSubtaskFeedback(list, task, pending, queue, recheck = () => {}
     }
     const points = card.querySelector('.activity-card__points');
     const count = taskCompletionPoints(task);
-    patchTaskPointsBadge(points, count);
-    card.classList.toggle('activity-card--large-points', String(count).length > 3);
+    patchTaskPointsBadge(points, count,taskScoringLabel(task,state.currentUserId));
+    card.classList.toggle('activity-card--large-points', count!==null && String(count).length > 3);
   }
   if (!queue.busy) {
     const saved = taskCardPendingFocus.get(list)?.get(Number(task.id));
@@ -2305,6 +2323,7 @@ function wireTaskForm(panel, {
   panel.querySelector('[data-save-as-template]')?.addEventListener('click', () => saveTaskAsTemplate(form));
 
   applyTaskFormPermissions(panel, task, { skills, subtasks });
+  bindTaskScoringForm(form, taskFormControls.get(form));
   if (task) {
     const controls = taskFormControls.get(form);
     controls.editBaseline = readTaskEditState(form, controls);
@@ -2319,13 +2338,172 @@ function wireTaskForm(panel, {
     }));
 }
 
+function bindTaskScoringForm(form, controls) {
+  const task = controls.originalTask;
+  controls.scoringVersion = 0;
+  controls.modeTouched = false;
+  controls.scoringScope = 'occurrence';
+  controls.rootIntent = new Set();
+  controls.scopeEpoch = 0;
+  controls.scopeSnapshots = new Map();
+  controls.scoringEditing = !form.querySelector('#task-scoring-scope');
+  const update = () => {
+    const owner = isTaskScoringOwner(task);
+    const future = controls.scoringScope === 'future_only';
+    const mode = form.querySelector('[name="scoring_mode"]:checked')?.value || (future ? controls.futureDefinition?.fields.scoring_mode : task?.scoring?.mode) || 'legacy';
+    const allowed = controls.scoringEditing && (future ? controls.futureDefinition?.permissions.change_points === true : task ? canTask(task, 'change_points') : canCapability('tasks.change_points'));
+    const locked = !future && !!task?.scoring?.mode_locked;
+    form.querySelector('#task-scoring-mode').disabled = controls.scoringLoading || !owner || !allowed || locked || task?.scoring === null;
+    const root = form.querySelector('#task-points');
+    form.querySelector('#task-points-field').hidden = owner && mode === 'subtasks';
+    root.disabled = controls.scoringLoading || !allowed || task?.scoring === null || owner && mode === 'subtasks' || !owner && mode === 'whole_task' || !future && !!task?.scoring?.settled_task_ids?.includes(Number(task.id));
+    controls.subtasks?.setPointsMode(mode, { settledTaskIds: future ? [] : task?.scoring?.settled_task_ids || [], allowed });
+    controls.subtasks?.setAssignmentsEnabled(future || controls.rotations.getValue().length > 0, {allowed:future ? controls.futureDefinition?.permissions.change_assignment === true : task ? canTask(task,'change_assignment') : canCapability('tasks.change_assignment')});
+    if (locked) form.querySelector('#task-scoring-message').textContent = t('tasks.scoringLocked');
+  };
+  const intent = event => {
+    if (controls.scoringLoading || controls.rebasing || event.target.id === 'task-scoring-scope') return;
+    const id = event.target.id;
+    const key = scoringFormFields[id];
+    if (key) controls.rootIntent.add(key);
+    if (event.target.name === 'scoring_mode') controls.rootIntent.add('scoring_mode');
+    if (event.target.matches('[data-ms-input="task_assigned"]')) controls.rootIntent.add('assigned_to');
+    if (event.target.closest('#task-root-skills')) controls.rootIntent.add('skill_ids');
+    if (event.target.closest('#task-tags-editor')) controls.rootIntent.add('tags');
+    if (event.target.closest('#task-rotations')) controls.rootIntent.add('rotation_bindings');
+    if (event.target.closest('#task-rotation-order')) controls.rootIntent.add('rotation_user_ids');
+    if (event.target.closest('#task-rrule-fields')) for (const key of ['is_recurring','recurrence_rule','recurrence_from_completion']) controls.rootIntent.add(key);
+  };
+  form.addEventListener('change', event => {
+    intent(event);
+    if (!controls.rebasing && event.target.matches('[name="scoring_mode"]')) { controls.modeTouched = true; update(); }
+    controls.scoringVersion++;
+  });
+  form.addEventListener('input', event => { intent(event); controls.scoringVersion++; });
+  controls.updateScoring = update;
+  update();
+  const scope = form.querySelector('#task-scoring-scope');
+  if (scope) {
+    controls.scopeSnapshots.set('occurrence', snapshotTaskScoringForm(form, controls));
+    scope.addEventListener('change', () => { controls.scoringEditing=true;void changeTaskScoringScope(form, controls, scope.value); });
+    form.querySelector('#task-scoring-edit').addEventListener('click',()=>{controls.scoringEditing=true;scope.value='future_only';void changeTaskScoringScope(form,controls,'future_only');});
+  }
+}
+
+const scoringFormFields = {'task-title':'title','task-description':'description','task-priority':'priority','task-category':'category','task-points':'points','task-start-date':'start_date','task-start-time':'start_time','task-due-date':'due_date','task-due-time':'due_time','task-expiration-policy':'expiration_policy','task-assignment-mode':'assignment_mode','task-rotation-group':'rotation_group','task-rotation-position':'rotation_slot','task-visibility':'visibility','task-countdown':'countdown','task-locked':'locked'};
+const taskScoringSubmitButton = form => form.closest('.modal-panel')?.querySelector('#task-submit-btn') || form.querySelector('#task-submit-btn');
+
+function snapshotTaskScoringForm(form, controls) {
+  return { fields: Object.fromEntries(Object.keys(scoringFormFields).map(id=>{const node=form.querySelector(`#${id}`);return [id,node?.type==='checkbox'?node.checked:node?.value];})),
+    mode:form.querySelector('[name="scoring_mode"]:checked')?.value, assigned:getSelectedUserIds(form,'task_assigned'), skills:controls.skills.getValue(),
+    subtasks:controls.subtasks?.getValue({withKeys:true}) || [], rotationIds:getRotationUserIds(form), bindings:controls.rotations.getValue(), tags:[...modalTags], recurrence:getRRuleValues(form,'task'), intent:[...controls.rootIntent], modeTouched:controls.modeTouched };
+}
+
+function applyScoringFormSnapshot(form, controls, snapshot) {
+  controls.rebasing=true;
+  for (const [id,value] of Object.entries(snapshot.fields)) {const node=form.querySelector(`#${id}`);if(!node)continue;if(node.type==='checkbox')node.checked=!!value;else node.value=value??'';}
+  for(const node of form.querySelectorAll('[name="scoring_mode"]'))node.checked=node.value===snapshot.mode;
+  for(const node of form.querySelectorAll('[data-ms-input="task_assigned"]'))node.checked=snapshot.assigned.includes(Number(node.value));
+  const none=form.querySelector('.user-ms__none');if(none)none.checked=!snapshot.assigned.length;
+  form.querySelector('[data-ms-input="task_assigned"]')?.dispatchEvent(new Event('change',{bubbles:true}));
+  controls.skills.setValue(snapshot.skills);controls.subtasks?.setValue(snapshot.subtasks);
+  modalTags=[...snapshot.tags];renderTagChips(form);
+  const rules=form.querySelector('#task-rrule-fields');if(rules){rules.outerHTML=renderRRuleFields('task',snapshot.recurrence.recurrence_rule,{allowFromCompletion:true,fromCompletion:!!snapshot.recurrence.recurrence_from_completion});bindRRuleEvents(form,'task');}
+  for(const row of form.querySelectorAll('[data-rotation-user]')){const input=row.querySelector('[data-rotation-position]'),index=(snapshot.rotationIds || []).indexOf(Number(row.dataset.rotationUser));input.value=index<0?'':index+1;}
+  const rotations=form.querySelector('#task-rotations');if(rotations){rotations.innerHTML=renderRotationBindings(snapshot.bindings || [],{skills:state.skills,places:state.places});controls.rotations=bindRotationBindings(form,{skills:state.skills,places:state.places,readOnly:!canCapability('rotations.configure')});}
+  controls.refreshAssignment?.();
+  controls.rootIntent=new Set(snapshot.intent);controls.modeTouched=snapshot.modeTouched;
+  controls.rebasing=false;
+}
+
+async function changeTaskScoringScope(form, controls, scope) {
+  const epoch=++controls.scopeEpoch;
+  if(!controls.scoringLoading)controls.scopeSnapshots.set(controls.scoringScope==='future_only'?'future_only':'occurrence',snapshotTaskScoringForm(form,controls));
+  controls.scoringScope=scope;controls.scoringVersion++;
+  if(scope==='future_only') {
+    controls.scoringLoading=true;
+    for(const node of form.querySelectorAll('input,select,textarea,button,yuvomi-datepicker,fieldset'))if(node.id!=='task-scoring-scope')node.disabled=true;
+    form.querySelector('#task-scoring-message').textContent=t('tasks.scoringLoading');
+    taskScoringSubmitButton(form).disabled=true;
+    try {
+      const task=controls.originalTask;
+      const response=await api.post(`/tasks/${task.id}/scoring-preview`,{edit_scope:'future_only',...taskRevision(task),expected_series_revision:task.recurrence_series_revision,future_patch:{},include_edit_definition:true});
+      if(!form.isConnected || epoch!==controls.scopeEpoch)return;
+      const definition=response.data?.edit_definition;
+      if(!definition)throw new Error(t('tasks.scoringFutureLoading'));
+      controls.futureDefinition=definition;
+      const fields=definition.fields;
+      const future=controls.scopeSnapshots.get('future_only') || { fields:Object.fromEntries(Object.entries(scoringFormFields).map(([id,key])=>[id,key==='rotation_slot'?Number(fields[key]||0)+1:fields[key]])),
+        mode:fields.scoring_mode,assigned:fields.assigned_to||[],skills:fields.skill_ids||[],subtasks:definition.actions.map(action=>({...action.fields,action_key:action.action_key,permissions:action.permissions})),
+        rotationIds:fields.rotation_user_ids||[],bindings:fields.rotation_bindings||[],tags:fields.tags||[],recurrence:fields,intent:[],modeTouched:false };
+      applyScoringFormSnapshot(form,controls,future);
+      const permissions=definition.permissions;
+      const futureTask={...task,status:'open',archived_at:null,permissions};
+      // Re-apply effective future capabilities, independently from current locks.
+      for(const node of form.querySelectorAll('input,select,textarea,button,yuvomi-datepicker,fieldset')){node.disabled=false;node.removeAttribute('aria-disabled');}
+      applyTaskFormPermissions(form,futureTask,controls);
+      controls.skills.setReadOnly(permissions.change_required_skills!==true);
+      const bindings=form.querySelector('[data-rotation-bindings]');if(bindings)bindings.disabled=!canCapability('rotations.configure')||permissions.edit!==true;
+      controls.subtasks?.setReadOnly(permissions.edit!==true);
+      for(const node of form.querySelectorAll('#task-status,#task-activity-template,#task-sync-target,#task-location-fieldset input,#task-location-fieldset select,#task-location-fieldset textarea,.reminder-section input,.reminder-section select,.reminder-section button,[data-doc-attach] input,[data-doc-attach] button'))node.disabled=true;
+      if(!permissions.edit)for(const node of form.querySelectorAll('#task-title,#task-description'))node.disabled=true;
+      form.querySelector('#task-scoring-message').textContent=definition.review_required?t('tasks.scoringReview'):t('tasks.scoringPreserved');
+    } catch(error) {
+      if(form.isConnected && epoch===controls.scopeEpoch){controls.futureDefinition=null;showTaskFormErrors(form,[{field:'task-scoring-scope',message:taskScoringErrorMessage(error)}],{title:t('tasks.scoringPreview')});}
+    } finally {
+      if(form.isConnected && epoch===controls.scopeEpoch){controls.scoringLoading=false;controls.updateScoring();taskScoringSubmitButton(form).disabled=!controls.futureDefinition;}
+    }
+  } else {
+    controls.scoringLoading=false;
+    const snapshot=controls.scopeSnapshots.get('occurrence');if(snapshot)applyScoringFormSnapshot(form,controls,snapshot);
+    for(const node of form.querySelectorAll('input,select,textarea,button,yuvomi-datepicker,fieldset')){node.disabled=false;node.removeAttribute('aria-disabled');}
+    applyTaskFormPermissions(form,controls.originalTask,controls);controls.updateScoring();taskScoringSubmitButton(form).disabled=false;
+    form.querySelector('#task-scoring-message').textContent=controls.originalTask.scoring?.mode_locked?t('tasks.scoringLocked'):t('tasks.scoringHint');
+  }
+}
+
+async function confirmTaskScoringPreview(form, controls, body) {
+  const version=controls.scoringVersion,scope=controls.scoringScope;
+  const response=await api.post(`/tasks/${controls.originalTask.id}/scoring-preview`,body);
+  if(!form.isConnected || version!==controls.scoringVersion || scope!==controls.scoringScope)throw new Error(t('tasks.scoringChanged'));
+  const data=response.data;
+  if(!data || scope==='future_only'&&!data.forecast_context)throw new Error(t('tasks.scoringForecastUnavailable'));
+  let confirmed=false;
+  const child=openChildModal({title:t('tasks.scoringPreview'),size:'lg',content:`<form id="task-scoring-preview-form">${renderTaskScoringPreview(data,state.users)}<div class="modal-panel__footer"><button type="button" class="btn btn--secondary" data-scoring-cancel>${t('common.cancel')}</button><button type="submit" class="btn btn--primary" id="task-scoring-confirm" ${!data.valid?'disabled':''}>${t('common.save')}</button></div></form>`,onSave(panel){
+    panel.querySelector('[data-scoring-cancel]').addEventListener('click',()=>child.close({force:true}));
+    panel.querySelector('#task-scoring-preview-form').addEventListener('submit',async event=>{event.preventDefault();if(!data.valid||version!==controls.scoringVersion||scope!==controls.scoringScope)return;confirmed=true;await child.close({force:true});});
+  }});
+  const invalidate=()=>{if(version!==controls.scoringVersion || scope!==controls.scoringScope){child.panel?.querySelector('#task-scoring-confirm')?.setAttribute('disabled','');}};
+  form.addEventListener('input',invalidate);form.addEventListener('change',invalidate);
+  await child.closed;form.removeEventListener('input',invalidate);form.removeEventListener('change',invalidate);
+  return confirmed && form.isConnected && version===controls.scoringVersion && scope===controls.scoringScope;
+}
+
+async function submitFutureScoring(form, controls, onChanged) {
+  if(controls.scoringLoading || !controls.futureDefinition)return;
+  const errors=taskFormErrors(form);if(errors.length){showTaskFormErrors(form,errors);return;}
+  const button=taskScoringSubmitButton(form);if(button.disabled)return;
+  const state=readTaskEditState(form,controls),draft={...state.definition,...state.occurrence,points:form.querySelector('#task-points').value,
+    scoring_mode:form.querySelector('[name="scoring_mode"]:checked')?.value,subtasks:controls.subtasks?.getValue({withKeys:true})||[]};
+  const body={edit_scope:'future_only',...controls.futureDefinition.revisions,future_patch:taskFuturePatch(controls.futureDefinition,draft,controls.rootIntent)};
+  button.disabled=true;button.textContent=t('common.saving');
+  try {
+    if(!await confirmTaskScoringPreview(form,controls,body))return;
+    await saveTaskRecord(form,body);
+    controls.createdActionKeys=new Map((controls.lastSaveResponse?.series_edit?.created_actions || []).map(row=>[row.client_key,row.action_key]));
+    window.yuvomi?.showToast(taskEditResultMessage(controls.lastSaveResponse,t('tasks.savedToast')),'success');
+    await closeModal({force:true});await onChanged();
+  }catch(error){showTaskFormErrors(form,[{field:'task-scoring-mode',message:taskScoringErrorMessage(error)}],{title:t('tasks.scoringPreview')});}
+  finally{if(form.isConnected){button.disabled=false;button.textContent=t('common.save');controls.subtasks?.setReadOnly(false);controls.updateScoring();button.focus({preventScroll:true});}}
+}
+
 function applyTaskFormPermissions(panel, task, controls) {
   const allowed = action => task ? canTask(task, action) : canCapability(`tasks.${action}`);
   const gates = {
     change_priority: '#task-priority', change_points: '#task-points',
     change_category_tags: '#task-category, #task-tag-input, #task-tags',
     change_dates: '[name="start_date"], [name="start_time"], [name="due_date"], [name="due_time"], #task-expiration-policy, #task-rrule-fields input, #task-rrule-fields select, #task-rrule-fields button, #task-rrule-fields yuvomi-datepicker, #task-countdown',
-    change_assignment: '#task-assignment-mode, #task-activity-subject-user, [data-ms-input="task_assigned"], #task-rotation-user-order input, #task-rotation-group, #task-rotation-position, #task-activity-template, [data-activity-reassign], [data-activity-reassign-submit]',
+    change_assignment: '#task-assignment-mode, #task-activity-subject-user, [data-ms-input="task_assigned"], #task-rotation-order input, #task-rotation-group, #task-rotation-position, #task-activity-template, [data-activity-reassign], [data-activity-reassign-submit]',
     complete: '#task-status',
   };
   for (const [action, selectors] of Object.entries(gates)) {
@@ -2368,13 +2546,18 @@ function applyTaskFormPermissions(panel, task, controls) {
 }
 
 function permittedTaskBody(body, task) {
+  if (!['whole_task','subtasks'].includes(body.scoring_mode) || task && !isTaskScoringOwner(task)) delete body.scoring_mode;
+  if (!validTaskPoints(body.points) || task?.scoring === null || task?.scoring?.settled_task_ids?.includes(Number(task.id))) delete body.points;
+  for (const child of body.subtasks || []) {
+    if (!validTaskPoints(child.points) || task?.scoring?.settled_task_ids?.includes(Number(child.id))) delete child.points;
+  }
   if (isDevicePrincipal()) {
     const supported = new Set(['title','description','assigned_to','start_date','start_time','due_date','due_time','points','is_recurring','recurrence_rule','recurrence_from_completion','expiration_policy','expected_revision','expected_parent_revision']);
     body = Object.fromEntries(Object.entries(body).filter(([key]) => supported.has(key)));
   }
   if (!task) return body;
   const gates = {
-    change_priority: ['priority'], change_points: ['points'], change_category_tags: ['category', 'tags'],
+    change_priority: ['priority'], change_points: ['points','scoring_mode'], change_category_tags: ['category', 'tags'],
     change_dates: ['start_date', 'start_time', 'due_date', 'due_time', 'expiration_policy', 'is_recurring', 'recurrence_rule', 'recurrence_from_completion', 'countdown'],
     change_assignment: ['assigned_to', 'assignment_mode', 'rotation_user_ids', 'rotation_group', 'rotation_slot', 'activity_template_id', 'activity_subject_user_id', 'activity_inputs'],
     change_required_skills: ['skill_ids'], complete: ['status'],
@@ -2540,7 +2723,8 @@ function readTaskEditState(form, controls) {
   const dates = { start_date: parseDateInput(value('task-start-date')) || null, due_date: parseDateInput(value('task-due-date')) || null };
   const definition = taskEditDefinition({
     title: value('task-title'), description: value('task-description'), category: value('task-category'), priority: value('task-priority'),
-    points: value('task-points'), tags: normalizeTagList([...modalTags, ...value('task-tag-input').split(',')]),
+    points: value('task-points'), scoring_mode: form.querySelector('[name="scoring_mode"]:checked')?.value || controls.originalTask?.scoring?.mode,
+    tags: normalizeTagList([...modalTags, ...value('task-tag-input').split(',')]),
     subtasks: controls.subtasks?.getValue() || [], skill_ids: controls.skills.getValue(),
     assigned_to: getSelectedUserIds(form, 'task_assigned'), assignment_mode: value('task-assignment-mode'),
     rotation_user_ids: getRotationUserIds(form), rotation_group: value('task-rotation-group'), rotation_slot: Number(value('task-rotation-position') || 1) - 1,
@@ -2637,6 +2821,8 @@ async function saveTaskRecord(form, body) {
 async function handleFormSubmit(e, { container = null, onChanged = () => loadTasks(container) } = {}) {
   e.preventDefault();
   const form      = e.target;
+  const scoringControls=taskFormControls.get(form);
+  if(scoringControls?.scoringScope==='future_only'){await submitFutureScoring(form,scoringControls,onChanged);return;}
   const errorEl   = document.getElementById('task-form-error');
   const submitBtn = document.getElementById('task-submit-btn');
   const taskId    = document.getElementById('task-id').value;
@@ -2711,11 +2897,13 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
     recurrence_from_completion: rrule.recurrence_from_completion ? 1 : 0,
     countdown:       form.querySelector('#task-countdown')?.checked ? 1 : 0,
     locked:          form.querySelector('#task-locked')?.checked ? 1 : 0,
-    points:          Math.max(0, Math.trunc(Number(form.points?.value)) || 0),
+    points:          validTaskPoints(form.points?.value) ? Number(form.points.value) : undefined,
     expiration_policy: form.querySelector('#task-expiration-policy')?.value || 'keep_overdue',
     location:        readTaskLocation(form),
   };
   const controls = taskFormControls.get(form);
+  const selectedScoringMode = form.querySelector('[name="scoring_mode"]:checked')?.value;
+  if (selectedScoringMode && (!taskId || controls?.modeTouched)) body.scoring_mode = selectedScoringMode;
   if ((!managedActivity || controls?.originalTask?.recurrence_series_id != null) && controls) body.skill_ids = controls.skills.getValue();
   if (form.querySelector('[data-rotation-bindings]')) body.rotation_bindings = controls.rotations.getValue();
   // The editor contains source actions only. Archived actions and generated
@@ -2747,6 +2935,7 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
   if (startTime && !body.start_date) { resetSubmit('Choose a start date for this start time.'); return; }
   if (body.expiration_policy === 'expire_incomplete' && !body.due_date) { resetSubmit('Choose a due date for automatic expiration.'); return; }
   if (form.status && !isClosedOccurrence(controls?.originalTask)) body.status = form.status.value;
+  if(taskId && controls?.editBaseline && body.status && body.status!==controls.originalTask.status && hasTaskScoringChanges(controls.editBaseline.definition,readTaskEditState(form,controls).definition)){resetSubmit(t('tasks.scoringSeparate'));return;}
   if (taskId && controls?.originalTask) {
     Object.assign(body, taskRevision(controls.originalTask));
     if (body.status && body.status !== controls.originalTask.status) {
@@ -2806,7 +2995,10 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
       await closeModal({ force: true });
       return;
     }
-    if (!isDevicePrincipal() && controls.originalTask?.recurrence_series_id != null
+    if (form.querySelector('#task-scoring-scope') && controls.scoringEditing) {
+      body.edit_scope=controls.scoringScope;
+      if(body.edit_scope==='future')body.expected_series_revision=controls.originalTask.recurrence_series_revision;
+    } else if (!isDevicePrincipal() && controls.originalTask?.recurrence_series_id != null
         && JSON.stringify(edited.definition) !== JSON.stringify(controls.editBaseline.definition)) {
       // Validation precedes this choice; uploads and all mutations follow it.
       submitBtn.disabled = false; submitBtn.textContent = originalLabel;
@@ -2816,6 +3008,13 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
       body.edit_scope = scope;
       if (scope === 'future') body.expected_series_revision = controls.originalTask.recurrence_series_revision;
     }
+  }
+
+  const permittedBody=permittedTaskBody(body,controls?.originalTask);
+  if(taskId && controls?.editBaseline && hasTaskScoringChanges(controls.editBaseline.definition,readTaskEditState(form,controls).definition)) {
+    if(body.status && body.status!==controls.originalTask.status){resetSubmit(t('tasks.scoringSeparate'));return;}
+    try { if(!await confirmTaskScoringPreview(form,controls,permittedBody)){submitBtn.disabled=false;submitBtn.textContent=originalLabel;return;} }
+    catch(error){resetSubmit(taskScoringErrorMessage(error));return;}
   }
 
   // Wartende Uploads VOR dem Speichern der Aufgabe (#733): scheitert der
@@ -2836,7 +3035,7 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
   }
 
   try {
-    const savedTaskId = await saveTaskRecord(form, permittedTaskBody(body, controls?.originalTask));
+    const savedTaskId = await saveTaskRecord(form, permittedBody);
     window.yuvomi.showToast(taskEditResultMessage(controls?.lastSaveResponse, t(taskId ? 'tasks.savedToast' : 'tasks.createdToast')), 'success');
     if(controls?.lastSaveResponse?.rotation_warning)window.yuvomi.showToast(controls.lastSaveResponse.rotation_warning,'info');
 

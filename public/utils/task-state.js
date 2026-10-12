@@ -1,5 +1,6 @@
 import { api } from '/api.js';
 import { confirmOverModal } from '/components/modal.js';
+import { t } from '/i18n.js';
 
 import { actionableSubtasks, structuralSubtasks } from '/utils/task-progress.js';
 export { actionableSubtasks } from '/utils/task-progress.js';
@@ -69,7 +70,7 @@ export async function reopenExpiredTask(task, { confirm: requestConfirmation = c
   }
   const body = { expiration_policy: 'keep_overdue', ...taskRevision(task) };
   const confirmed = await requestConfirmation('Reopen this expired Task?', {
-    detail: `Saved subtask progress is retained and its ${Number(task.points || 0)} completion points become available again. This occurrence switches to Keep overdue. Already-created future occurrences stay unchanged. For Repeat from completion, future occurrences will also keep overdue. You can set a new deadline and expiration policy in Edit.`,
+    detail: `${t('tasks.scoringReopen')} This occurrence switches to Keep overdue. Already-created future occurrences stay unchanged. For Repeat from completion, future occurrences will also keep overdue. You can set a new deadline and expiration policy in Edit.`,
     confirmLabel: 'Reopen Task', closeOnConfirm: false,
   });
   if (!confirmed) return null;

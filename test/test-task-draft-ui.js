@@ -39,6 +39,8 @@ app.use(express.json());
 app.use('/api/v1', (req, res) => {
   const userId = Number(req.headers.cookie?.match(/(?:^|;\s*)draft-user=(\d+)/)?.[1] || 1);
   requests.push({ method: req.method, path: req.path, userId, body: req.body });
+  if(req.path==='/auth/me')return res.json({user:users.find(user=>user.id===userId),permissions:{admin:!req.headers.cookie?.includes('draft-role=member'),capabilities:Object.fromEntries(['tasks.create','tasks.change_priority','tasks.change_points','tasks.change_category_tags','tasks.change_dates','tasks.change_assignment','tasks.change_required_skills','activities.view','workflows.view','workflows.run'].map(key=>[key,'allow']))}});
+  if(req.path==='/tasks/70/scoring-preview')return res.json({data:{mode:'whole_task',mode_locked:false,review_required:false,valid:true,scope:req.body.edit_scope||'occurrence',earned:[],before:[],after:[],settlements:[],before_units:[],after_units:[]}});
   if (req.path === '/reminders' && req.method === 'GET') return res.json({ data: null });
   if (req.path === '/tasks/70' && editFixture) {
     if (req.method === 'PUT') {
@@ -112,7 +114,7 @@ async function mounted({ userId = 1, width = 1366, newTask = true, role = 'admin
   page.on('pageerror', (error) => { page.fixtureErrors ||= []; page.fixtureErrors.push(error.message); });
   await page.goto(`${base}/draft-test`);
   await page.evaluate(async ({ userId, role }) => {
-    document.cookie = `draft-user=${userId};path=/`;
+    document.cookie = `draft-user=${userId};path=/`;document.cookie=`draft-role=${role};path=/`;
     localStorage.setItem('yuvomi-lang', 'en');
     window.toasts = [];
     window.yuvomi = { showToast: (message) => window.toasts.push(message), user: { id: userId, role } };
@@ -131,7 +133,7 @@ async function mounted({ userId = 1, width = 1366, newTask = true, role = 'admin
     await page.evaluate(async () => { const { openTaskById } = await import('/pages/tasks.js'); await openTaskById(70, { user: { id: 1, role: 'admin' } }); });
     await page.click('#detail-view-edit'); await page.waitForSelector('#task-form');
   } else if (newTask) { await page.click(width < 1024 ? '#fab-new-task' : '#btn-new-task'); await page.waitForSelector('#task-form'); }
-  page.dispose = () => context.close();
+  page.dispose = async () => {await context.close();assert.deepEqual(page.fixtureErrors||[],[],'no unhandled fixture pageerrors');};
   return page;
 }
 async function value(page, selector) { return page.$eval(selector, (el) => el.value); }
@@ -258,7 +260,7 @@ for (const width of [1366, 768, 390]) {
 test('workflow creator Cancel and runtime browser Back return to the retained launcher', async () => {
   const page = await mounted({ newTask: false });
   try {
-    await page.click('#btn-quick-add');
+    await page.$eval('#btn-quick-add',el=>el.click());
     await page.waitForSelector('[data-workflow-launcher]');
     await page.evaluate(() => { window.launcher = document.querySelector('[data-workflow-launcher]'); });
     assert.equal(await page.$('[data-quick-activity]'), null);
@@ -738,11 +740,11 @@ for (const width of [1366, 390]) {
   });
 }
 
-test('recurring Apply defaults to occurrence and future carries the series revision with preserved feedback', async () => {
+test('ordinary recurring Apply defaults to occurrence and future carries the series revision with preserved feedback', async () => {
   for (const scope of ['occurrence', 'future']) {
     const page = await mounted({ editTask: seriesEditFixture() }); requests.length = 0;
     try {
-      await set(page, '#task-points', '6'); await saveEdit(page); await page.waitForSelector('#task-edit-scope-form');
+      await set(page, '#task-title', 'Updated recurring title'); await saveEdit(page); await page.waitForSelector('#task-edit-scope-form');
       if (scope === 'future') await page.click('[name="edit_scope"][value="future"]');
       await page.focus('#task-scope-apply'); await page.keyboard.press('Enter');
       await page.waitForFunction(() => !document.querySelector('#task-form'));
@@ -780,6 +782,7 @@ for(const width of [1366,390])test(`one shared Rotation purpose enables particip
     assert.equal(mutations().length,0);
     await saveEdit(page);await page.waitForSelector('#task-edit-scope-form');
     await page.click('[name="edit_scope"][value="future"]');await page.click('#task-scope-apply');
+    await page.waitForSelector('#task-scoring-confirm');await page.focus('#task-scoring-confirm');await page.keyboard.press('Enter');
     await page.waitForFunction(()=>!document.querySelector('#task-form'));
     const write=requests.find(request=>request.method==='PUT'&&request.path==='/tasks/70');
     assert.equal(write.body.rotation_bindings[0].purpose_key,key);assert.equal(write.body.rotation_bindings[0].group_id,31);
@@ -841,6 +844,7 @@ test('an existing series uses its frozen fixed-assignee override policy after th
     await page.click('[data-ms-input="task_assigned"][value="1"]');
     await saveEdit(page); await page.waitForSelector('#task-edit-scope-form');
     await page.click('[name="edit_scope"][value="future"]'); await page.click('#task-scope-apply');
+    await page.waitForSelector('#task-scoring-confirm');await page.focus('#task-scoring-confirm');await page.keyboard.press('Enter');
     await page.waitForFunction(() => !document.querySelector('#task-form'));
     const body = requests.find(request => request.path === '/tasks/70' && request.method === 'PUT').body;
     assert.deepEqual(body.assigned_to, [1]); assert.equal(body.activity_subject_user_id, null);
@@ -857,6 +861,7 @@ test('series template skills remain editable by an authorized user and archived 
     await page.click('#task-root-skills summary');
     await page.click(skill); await saveEdit(page); await page.waitForSelector('#task-edit-scope-form');
     await page.click('#task-scope-apply');
+    await page.waitForSelector('#task-scoring-confirm');await page.focus('#task-scoring-confirm');await page.keyboard.press('Enter');
     await page.waitForFunction(() => !document.querySelector('#task-form'));
     const body = requests.find(request => request.path === '/tasks/70' && request.method === 'PUT').body;
     assert.deepEqual(body.skill_ids, [3]); assert.equal(body.subtasks.some(step => step.id === 73), false);

@@ -112,7 +112,7 @@ export function bindSkillPicker(root, { onChange = null, onCreateSkill = null } 
 }
 
 function subtaskRow(subtask, skills, template, index, canCreateSkill = false, users = []) {
-  return `<div class="task-subtask-editor__row" data-task-subtask-row data-subtask-value="${esc(JSON.stringify(subtask))}"${subtask.id ? ` data-subtask-id="${Number(subtask.id)}"` : ''}>
+  return `<div class="task-subtask-editor__row" data-task-subtask-row data-action-key="${esc(subtask.action_key || '')}" data-subtask-value="${esc(JSON.stringify(subtask))}"${subtask.id ? ` data-subtask-id="${Number(subtask.id)}"` : ''}>
     <div class="task-subtask-editor__main">
       <span class="task-subtask-editor__handle" data-task-subtask-handle role="img" aria-label="Drag to reorder subtask" title="Drag to reorder; use Subtask actions for keyboard controls"><svg width="16" height="20" viewBox="0 0 16 20" fill="currentColor" aria-hidden="true"><circle cx="5" cy="4" r="1.5"/><circle cx="11" cy="4" r="1.5"/><circle cx="5" cy="10" r="1.5"/><circle cx="11" cy="10" r="1.5"/><circle cx="5" cy="16" r="1.5"/><circle cx="11" cy="16" r="1.5"/></svg></span>
       <input class="input" data-task-subtask-title ${template ? 'data-variable-mentions="activity-title"' : ''}
@@ -151,8 +151,15 @@ export function bindSubtaskEditor(root, { skills = [], template = false, onChang
   const pickers = new Map();
   const originals = new WeakMap();
   let readOnly = false;
-  const getValue = () => [...rows.children].map((row) => {
+  let pointsMode = null, settledIds = new Set();
+  const getValue = ({ withKeys = false } = {}) => [...rows.children].map((row) => {
     const {assigned_user_ids: oldIds,...original}=originals.get(row)||{};
+    if (withKeys && !template && !original.id && !original.action_key) {
+      row.dataset.clientKey ||= original.client_key || globalThis.crypto.randomUUID();
+      original.client_key = row.dataset.clientKey;
+    }
+    const rawPoints = row.querySelector('[data-task-subtask-points]')?.value;
+    const pointsValue = rawPoints !== undefined && rawPoints.trim() !== '' && Number.isInteger(Number(rawPoints)) && Number(rawPoints) >= 0 && Number(rawPoints) <= 10000 ? Number(rawPoints) : rawPoints;
     const previous=oldIds||original.assigned_users?.map(user=>user.id)||(original.assigned_to?[original.assigned_to]:[]);
     const selected=Number(row.querySelector('[data-task-subtask-assignee]')?.value)||null;
     return ({
@@ -160,7 +167,7 @@ export function bindSubtaskEditor(root, { skills = [], template = false, onChang
     ...(row.dataset.subtaskId ? { id: Number(row.dataset.subtaskId) } : {}),
     title: row.querySelector('[data-task-subtask-title]').value,
     ...(template ? { title_template: row.querySelector('[data-task-subtask-title]').value } : {}),
-    ...(!template ? { points: Number(row.querySelector('[data-task-subtask-points]').value) } : {}),
+    ...(!template ? { points: pointsValue } : {}),
     skill_ids: pickers.get(row).getValue(),
     is_optional: row.querySelector('[data-task-subtask-optional]').checked ? 1 : 0,
     ...(assignmentsEnabled && row.querySelector('[data-task-subtask-assignee]') ? {assigned_user_ids: selected===Number(original.assigned_to||previous[0]||0) ? previous : selected?[selected]:[]} : {}),
@@ -168,13 +175,19 @@ export function bindSubtaskEditor(root, { skills = [], template = false, onChang
   const changed = () => onChange?.(getValue());
   const refresh = () => {
     [...rows.children].forEach((row, index) => {
+      const permissions=originals.get(row)?.permissions;
+      const rowReadOnly=readOnly || permissions?.edit === false;
       row.querySelector('[data-task-subtask-title]').setAttribute('aria-label', `Subtask ${index + 1}`);
-      row.querySelector('[data-task-subtask-title]').disabled = readOnly;
-      row.querySelector('[data-task-subtask-optional]').disabled = readOnly;
+      row.querySelector('[data-task-subtask-title]').disabled = rowReadOnly;
+      row.querySelector('[data-task-subtask-optional]').disabled = rowReadOnly;
       const points = row.querySelector('[data-task-subtask-points]');
-      if (points) { points.disabled = readOnly || !canChangePoints; points.setAttribute('aria-label', `Subtask ${index + 1} points`); }
+      if (points) {
+        points.closest('label').hidden = pointsMode === 'whole_task';
+        points.disabled = readOnly || !canChangePoints || pointsMode === 'whole_task' || settledIds.has(Number(row.dataset.subtaskId)) || originals.get(row)?.permissions?.change_points === false;
+        points.setAttribute('aria-label', `Subtask ${index + 1} points`);
+      }
       const assignee=row.querySelector('[data-task-subtask-assignee]');
-      if(assignee){assignee.closest('[data-task-subtask-assignment]').hidden=!assignmentsEnabled;assignee.disabled=readOnly||!canAssign;}
+      if(assignee){assignee.closest('[data-task-subtask-assignment]').hidden=!assignmentsEnabled;assignee.disabled=rowReadOnly||!canAssign||permissions?.change_assignment===false;}
       const menu = row.querySelector('.task-subtask-editor__actions');
       menu.querySelector('summary').setAttribute('aria-label', `Subtask ${index + 1} actions`);
       menu.querySelector('summary').setAttribute('aria-disabled', String(readOnly));
@@ -183,8 +196,8 @@ export function bindSubtaskEditor(root, { skills = [], template = false, onChang
       row.querySelector('[data-task-subtask-handle]').setAttribute('aria-disabled', String(readOnly));
       row.querySelector('[data-task-subtask-action="up"]').disabled = readOnly || index === 0;
       row.querySelector('[data-task-subtask-action="down"]').disabled = readOnly || index === rows.children.length - 1;
-      row.querySelector('[data-task-subtask-action="remove"]').disabled = readOnly;
-      pickers.get(row).setReadOnly(readOnly);
+      row.querySelector('[data-task-subtask-action="remove"]').disabled = rowReadOnly;
+      pickers.get(row).setReadOnly(rowReadOnly || permissions?.change_required_skills===false);
     });
     editor.querySelector('[data-task-subtask-add]').disabled = readOnly;
     reorder.refresh();
@@ -264,7 +277,8 @@ export function bindSubtaskEditor(root, { skills = [], template = false, onChang
       refresh();
     },
     setReadOnly(value) { readOnly = Boolean(value); refresh(); },
-    setAssignmentsEnabled(value) { assignmentsEnabled=Boolean(value);refresh(); },
+    setAssignmentsEnabled(value, {allowed=canAssign}={}) { assignmentsEnabled=Boolean(value);canAssign=allowed;refresh(); },
+    setPointsMode(value, { settledTaskIds = [], allowed = canChangePoints } = {}) { pointsMode = value; settledIds = new Set(settledTaskIds.map(Number)); canChangePoints = allowed; refresh(); },
     dispose() {
       editor.removeEventListener('click', click);
       editor.removeEventListener('input', input);

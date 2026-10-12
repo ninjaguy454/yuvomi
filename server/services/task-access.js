@@ -32,7 +32,7 @@ export function withTaskReadSnapshot(d, actor, read) {
 
 export function withTaskReadProjection(d, actor, read) {
   const previous = readProjections.get(d), me = actorId(actor);
-  const scope = previous?.actorId === me ? previous : {actorId:me, capabilities:new Map(), tables:new Map(), statements:new Map(),
+  const scope = previous?.actorId === me ? previous : {actorId:me, capabilities:new Map(), tables:new Map(), statements:new Map(), facts:new Map(), factCount:0,
     changesStatement:d.prepare('SELECT total_changes() AS count')};
   if (scope.changes === undefined) scope.changes = scope.changesStatement.get().count;
   readProjections.set(d, scope);
@@ -58,7 +58,7 @@ function currentReadProjection(d) {
   // owned snapshot; a savepoint rollback must not revive temporary decisions.
   if (snapshot && changes !== snapshot.changes) { snapshot.invalid=true; return null; }
   if (changes !== scope.changes) {
-    scope.capabilities.clear(); scope.tables.clear(); scope.statements.clear(); scope.permissions = null; scope.changes = changes;
+    scope.capabilities.clear(); scope.tables.clear(); scope.statements.clear(); scope.facts.clear(); scope.factCount=0; scope.permissions = null; scope.changes = changes;
   }
   return scope;
 }
@@ -83,6 +83,21 @@ export function taskReadStatement(d, sql) {
   const statement = d.prepare(sql);
   if (scope && statement.readonly && scope.statements.size < 64) scope.statements.set(sql, statement);
   return statement;
+}
+
+/** Internal immutable facts only, never a personalized response or lifecycle
+ * decision. The namespace belongs to the reader. Entries share the statement
+ * guard and are bounded/disposed with the synchronous projection.
+ */
+export function taskReadFacts(d, namespace, key, read) {
+  const scope=currentReadProjection(d), entries=scope?.facts.get(namespace);
+  if(entries?.has(key))return entries.get(key);
+  const changes=scope?.changes, value=read();
+  if(value&&typeof value.then==='function')throw new TypeError('Task read facts must be synchronous.');
+  if(scope&&currentReadProjection(d)===scope&&scope.changes===changes&&scope.factCount<256){
+    const target=entries||new Map();target.set(key,value);scope.facts.set(namespace,target);scope.factCount++;
+  }
+  return value;
 }
 
 const ids = value => [...new Set((Array.isArray(value) ? value : value == null || value === '' ? [] : [value]).map(Number))].sort((a, b) => a - b);

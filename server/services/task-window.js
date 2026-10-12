@@ -1,5 +1,6 @@
 import { householdTimeZone, shiftDateKey } from '../utils/timezone.js';
 import { availabilityInstantMs } from './presence.js';
+import { taskReadStatement, taskReadTableExists } from './task-access.js';
 
 export const EXPIRATION_POLICIES = ['keep_overdue', 'expire_incomplete'];
 
@@ -20,14 +21,14 @@ export function taskExpirationDue(d, task, now = new Date()) {
 }
 /** Include structural ancestors and authoritative sources of helper projections. */
 export function taskWindowAncestors(d, taskId) {
-  return d.prepare(`${ancestrySql(d,'?')}
+  return taskReadStatement(d,`${ancestrySql(d,'?')}
     SELECT t.* FROM tasks t JOIN ancestry a ON a.id=t.id`).all(taskId);
 }
 
 // Follow source edges at every level, including children of a retained helper.
 // UNION deduplicates cycles. Small legacy reader fixtures may lack helper tables.
 function ancestrySql(d, seed) {
-  const exists=name=>!!d.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name);
+  const exists=name=>taskReadTableExists(d,name);
   return `WITH RECURSIVE ancestry(id) AS (SELECT ${seed}
     UNION SELECT t.parent_task_id FROM tasks t JOIN ancestry a ON t.id=a.id WHERE t.parent_task_id IS NOT NULL
     ${exists('task_activity_support_tasks')?'UNION SELECT s.source_task_id FROM task_activity_support_tasks s JOIN ancestry a ON s.task_id=a.id':''}

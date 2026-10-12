@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {scoringFixture} from './helpers/task-scoring-route-fixture.js';
-import {taskScoringSummary} from '../server/services/task-scoring.js';
-import {withTaskReadSnapshot,withTaskReadProjection,taskReadStatement} from '../server/services/task-access.js';
+import {taskScoringSummary,taskScoringIdentity} from '../server/services/task-scoring.js';
+import {withTaskReadSnapshot,withTaskReadProjection,taskReadStatement,taskReadFacts} from '../server/services/task-access.js';
+import {taskWindowAncestors} from '../server/services/task-window.js';
 
 // Removing request-local scoring preparation reuse must fail this real-route
 // bound. It counts compilations, not wall time, so slower hosts are deterministic.
@@ -61,4 +62,48 @@ test('compiled read handles are bounded to a scope and write statements are neve
  assert.notEqual(taskReadStatement(f.d,sql),handle);
  withTaskReadSnapshot(f.d,1,()=>assert.notEqual(taskReadStatement(f.d,sql),handle));
  f.d.transaction(()=>withTaskReadProjection(f.d,1,()=>assert.notEqual(taskReadStatement(f.d,sql),taskReadStatement(f.d,sql),'caller-owned transactions never retain handles')))();
+});
+
+test('sibling scoring summaries scan one scope while preserving each authorized projection',async t=>{
+ const f=await scoringFixture(t),created=await f.create({scoring_mode:'subtasks',assigned_to:[2],subtasks:[{title:'Synthetic A',points:3},{title:'Synthetic B',points:5}]}),root=created.data.id,[a,b]=created.data.subtasks.map(row=>row.id);
+ const prepare=f.d.prepare.bind(f.d);let scans=0;
+ f.d.prepare=sql=>{const statement=prepare(sql);if(sql.includes('WITH RECURSIVE scope(id)')){const all=statement.all.bind(statement);statement.all=(...args)=>{scans++;return all(...args);};}return statement;};
+ try{withTaskReadSnapshot(f.d,2,()=>{
+  const read=id=>taskScoringSummary(f.d,id,{viewerId:2,authorizedTaskIds:[id]});
+  assert.deepEqual(taskScoringSummary(f.d,root,{viewerId:2,authorizedTaskIds:[root,a,b]}).potential,[{user_id:2,points:8}]);
+  assert.deepEqual(read(a).potential,[{user_id:2,points:3}]);assert.deepEqual(read(b).potential,[{user_id:2,points:5}]);
+ });}finally{f.d.prepare=prepare;}
+ assert.equal(scans,1,'root and siblings must share internal scope facts, never personalized summaries');
+});
+
+test('ancestry and scoring identity reuse compilation while binding each Task freshly',async t=>{
+ const f=await scoringFixture(t),created=await f.create({scoring_mode:'subtasks',assigned_to:[2],subtasks:[{title:'Synthetic step',points:3}]}),root=created.data.id,child=created.data.subtasks[0].id;
+ const prepare=f.d.prepare.bind(f.d);let compilations=0;f.d.prepare=sql=>{compilations++;return prepare(sql);};
+ try{withTaskReadSnapshot(f.d,2,()=>{for(let n=0;n<10;n++)for(const id of [root,child]){
+  assert.deepEqual(taskWindowAncestors(f.d,id).map(row=>row.id).sort((a,b)=>a-b),id===root?[root]:[root,child]);
+  assert.equal(taskScoringIdentity(f.d,id),JSON.stringify(['task',id]));
+ }});}finally{f.d.prepare=prepare;}
+ assert.ok(compilations<20,`20 identities/ancestries compiled ${compilations} statements`);
+});
+
+test('internal read facts are bounded, actor scoped, and invalid after rolled-back owned writes',async t=>{
+ const f=await scoringFixture(t),namespace=Symbol('synthetic'),read=()=>f.d.prepare('SELECT display_name FROM users WHERE id=2').get().display_name;
+ withTaskReadSnapshot(f.d,2,()=>{
+  assert.equal(taskReadFacts(f.d,namespace,0,read),'Synthetic 2');
+  withTaskReadProjection(f.d,3,()=>assert.equal(taskReadFacts(f.d,namespace,0,()=> 'other actor'),'other actor'));
+  assert.equal(taskReadFacts(f.d,namespace,0,read),'Synthetic 2');
+  f.d.exec('SAVEPOINT synthetic');f.d.prepare("UPDATE users SET display_name='Temporary' WHERE id=2").run();
+  assert.equal(taskReadFacts(f.d,namespace,0,read),'Temporary');f.d.exec('ROLLBACK TO synthetic; RELEASE synthetic');
+  assert.equal(taskReadFacts(f.d,namespace,0,read),'Synthetic 2');
+ });
+ withTaskReadSnapshot(f.d,2,()=>{
+  for(let n=0;n<256;n++)taskReadFacts(f.d,namespace,n,()=>n);
+  assert.equal(taskReadFacts(f.d,namespace,256,()=> 'first'),'first');
+  assert.equal(taskReadFacts(f.d,namespace,256,()=> 'second'),'second','excess entries are never retained');
+ });
+ f.d.transaction(()=>withTaskReadProjection(f.d,2,()=>{
+  assert.equal(taskReadFacts(f.d,namespace,0,()=> 'first'),'first');
+  assert.equal(taskReadFacts(f.d,namespace,0,()=> 'second'),'second','caller transaction cannot retain facts');
+ }))();
+ assert.equal(taskReadFacts(f.d,namespace,0,()=> 'new request'),'new request');
 });

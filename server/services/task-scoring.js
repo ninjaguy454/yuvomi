@@ -1,7 +1,7 @@
 import {taskWindowAncestors} from './task-window.js';
 import {peekRewardOccurrenceProvenance} from './task-recurrence-frontier.js';
 import {visibilityWhere} from './visibility.js';
-import {taskReadStatement,taskReadTableExists} from './task-access.js';
+import {taskReadStatement,taskReadTableExists,taskReadFacts} from './task-access.js';
 
 export class TaskScoringError extends Error {
   constructor(message,status=400,reason=null){super(message);this.status=status;this.reason=reason;}
@@ -58,7 +58,7 @@ export function taskScoringRows(d,root){
     SELECT t.* FROM tasks t JOIN scope s ON s.id=t.id ORDER BY t.id`).all(root.id);
   return rows.filter(row=>!taskScoringProjection(d,row.id)&&taskScoringRoot(d,row.id)?.id===root.id);
 }
-export function taskScoringIdentity(d,id){return peekRewardOccurrenceProvenance(d,id).logicalKey;}
+export function taskScoringIdentity(d,id){return peekRewardOccurrenceProvenance(d,id,{prepare:sql=>taskReadStatement(d,sql)}).logicalKey;}
 function scopeSettlements(d,root){
   if(!table(d,'task_scoring_settlements'))return [];
   return taskReadStatement(d,`SELECT s.*,EXISTS(SELECT 1 FROM task_scoring_settlement_releases r WHERE r.settlement_id=s.id) AS released
@@ -112,11 +112,17 @@ function visible(d,task,viewerId){
   if(task.id<0)return viewerId==null||task.visibility==='all'||task.created_by===viewerId||task.visibility==='assignees'&&(task._assigned||[]).includes(viewerId);
   return viewerId==null||!!taskReadStatement(d,`SELECT 1 FROM tasks t WHERE t.id=@id AND ${visibilityWhere('t','task_assignments','task_id','@viewer')}`).get({id:task.id,viewer:viewerId});
 }
+const scoringScopeFacts=Symbol('scoringScopeFacts');
 function context(d,taskId,viewerId=null){
   const root=taskScoringRoot(d,taskId),task=readTask(d,taskId);
   if(!root||!task||!visible(d,task,viewerId)||!visible(d,root,viewerId))throw new TaskScoringError('Task not found.',404);
-  const rows=taskScoringRows(d,root),settlements=scopeSettlements(d,root);
-  return {root,rows,settlements,mode_locked:everEarned(settlements),review_required:!!root.scoring_review_required};
+  // Sibling summaries share scope membership/history, while every call still
+  // checks its Task/root visibility and filters its own authorized projection.
+  const facts=taskReadFacts(d,scoringScopeFacts,root.id,()=>{
+    const rows=taskScoringRows(d,root),settlements=scopeSettlements(d,root);
+    return {rows,settlements,mode_locked:everEarned(settlements)};
+  });
+  return {root,...facts,review_required:!!root.scoring_review_required};
 }
 function potential(d,ctx,{fresh=false,viewerId=null,authorizedTaskIds=null}={}){
   if(workflowContainer(d,ctx.root.id)||!fresh&&blockedWindow(d,ctx.root.id))return [];

@@ -164,7 +164,7 @@ test('concurrent shared same-operation Skip writers make one receipt, audit and 
 });
 
 test('concurrent shared completion and Skip serialize into one result and one valid successor',async()=>{
- const task=await fixture(),sibling=await fixture({assigned_to:[3]}),state=groupState(),siblingBefore=taskTree(sibling.id);const outcomes=await race(task,['skip','complete'],'2026-10-10T23:00:00Z');const status=read(task.id).status;assert.ok(['done','skipped'].includes(status),JSON.stringify(outcomes));assert.equal(outcomes.filter(row=>row.ok).length,1);assert.equal(next(task.id).due_date,'2026-10-11');assert.equal(rows("SELECT * FROM reward_ledger WHERE task_id=? AND type='earn'",task.id).length,status==='done'?1:0);assert.deepEqual(groupState(),state);assert.deepEqual(taskTree(sibling.id),siblingBefore);
+ const task=await fixture({scoring_mode:'whole_task'}),sibling=await fixture({assigned_to:[3]}),state=groupState(),siblingBefore=taskTree(sibling.id);const outcomes=await race(task,['skip','complete'],'2026-10-10T23:00:00Z');const status=read(task.id).status;assert.ok(['done','skipped'].includes(status),JSON.stringify(outcomes));assert.equal(outcomes.filter(row=>row.ok).length,1);assert.equal(next(task.id).due_date,'2026-10-11');assert.equal(rows("SELECT * FROM reward_ledger WHERE task_id=? AND type='earn'",task.id).length,status==='done'?1:0);assert.deepEqual(groupState(),state);assert.deepEqual(taskTree(sibling.id),siblingBefore);
 });
 
 test('concurrent shared scheduler and Skip leave scheduler sole owner of finalization and advance exactly once',async()=>{

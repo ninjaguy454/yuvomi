@@ -10,7 +10,8 @@ let d;
 test.beforeEach(()=>{d=new Database(':memory:');d.pragma('foreign_keys=ON');for(const m of ALL_MIGRATIONS.filter(m=>m.version<=10054)){if(m.foreignKeysOff)d.pragma('foreign_keys=OFF');d.transaction(()=>{typeof m.up==='function'?m.up(d):d.exec(m.up);m.afterUp?.(d);})();if(m.foreignKeysOff)d.pragma('foreign_keys=ON');}d.exec("INSERT INTO users(id,username,display_name,password_hash) VALUES(1,'Synthetic','Synthetic','x');INSERT INTO reward_participants(user_id,enabled) VALUES(1,1)");});
 test.afterEach(()=>d.close());
 function task(points=0,parent=null,status='open'){return Number(d.prepare("INSERT INTO tasks(title,created_by,points,parent_task_id,status,assigned_to) VALUES('Synthetic',1,?,?,?,1)").run(points,parent,status).lastInsertRowid);}
-function upgrade(){const migrations=ALL_MIGRATIONS.filter(m=>m.version>10054);assert.equal(migrations.length,1,'one appended scoring migration exists');assert.equal(migrations[0].version,10055);d.transaction(()=>{const m=migrations[0];typeof m.up==='function'?m.up(d):d.exec(m.up);m.afterUp?.(d);})();return migrations[0];}
+// Isolated historical10054 -> scoring10055 proof; merged late55 is separate.
+function upgrade(){const migrations=ALL_MIGRATIONS.filter(m=>m.version===10055);assert.equal(migrations.length,1,'one isolated scoring10055 migration exists');assert.equal(migrations[0].version,10055);d.transaction(()=>{const m=migrations[0];typeof m.up==='function'?m.up(d):d.exec(m.up);m.afterUp?.(d);})();return migrations[0];}
 const row=id=>d.prepare('SELECT * FROM tasks WHERE id=?').get(id);
 test('10054 upgrade infers only flat unambiguous configured sources and leaves equality ambiguous',()=>{
  const whole=task(7);task(0,whole);const each=task(0);task(4,each);const zero=task(0);task(0,zero);const both=task(7);task(3,both);task(4,both);const nested=task(0);const middle=task(0,nested);task(4,middle);

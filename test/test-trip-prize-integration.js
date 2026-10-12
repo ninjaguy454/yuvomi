@@ -30,9 +30,11 @@ const people=()=>{
 const task=id=>d.prepare('SELECT * FROM tasks WHERE id=?').get(id);
 const complete=(id,actorId)=>changeTaskStatus(d,id,'done',{actorId,requireRevision:false});
 
-test('independent Trip and prize declare10056 then10057 and leave scoring10055 reserved',()=>{
- assert.deepEqual(ALL_MIGRATIONS.filter(m=>m.version>10054).map(m=>m.version),[10056,10057]);
- for(const m of ALL_MIGRATIONS)apply(m);
+test('independent Trip and prize metadata10056/10057 preserve a pre-scoring schema',()=>{
+ const metadata=ALL_MIGRATIONS.filter(m=>[10056,10057].includes(m.version));
+ assert.deepEqual(metadata.map(m=>m.version),[10056,10057]);
+ for(const m of ALL_MIGRATIONS.filter(m=>m.version<=10054))apply(m);
+ for(const m of metadata)apply(m);
  assert.equal(d.prepare("SELECT 1 FROM sqlite_master WHERE name='task_scoring_settlements'").get(),undefined);
  assert.ok(!d.pragma('table_info(tasks)').some(c=>c.name==='scoring_mode'));
 });
@@ -42,7 +44,7 @@ test('ordinary reminders without Trip metadata do not require Trip-specific Task
  assert.equal(tripReminderActive(d,1),true);
 });
 
-test('both metadata migrations preserve a legacy Trip, historical redemption and earned rows without backfill',()=>{
+test('metadata10056/10057 alone preserve full legacy Trip, redemption and earned rows without backfill',()=>{
  for(const m of ALL_MIGRATIONS.filter(m=>m.version<=10054))apply(m);
  people();
  d.prepare("INSERT INTO tasks(id,title,created_by,assigned_to,status,points) VALUES(1,'Legacy packing',1,3,'done',5)").run();
@@ -52,7 +54,7 @@ test('both metadata migrations preserve a legacy Trip, historical redemption and
  createRedemption(d,{actorId:3,userId:3,catalogId:1,requestKey:'historical-prize-request'});
  const names=['tasks','trip_plans','trip_tasks','reward_redemptions','reward_redemption_requests','reward_ledger'];
  const before=Object.fromEntries(names.map(name=>[name,d.prepare('SELECT * FROM '+name).all()]));
- for(const m of ALL_MIGRATIONS.filter(m=>m.version>10054))apply(m);
+ for(const m of ALL_MIGRATIONS.filter(m=>[10056,10057].includes(m.version)))apply(m);
  for(const name of names)assert.deepEqual(d.prepare('SELECT * FROM '+name).all(),before[name],name);
  for(const name of ['trip_task_groups','trip_task_steps','reward_fulfillment_task_links','reward_redemption_undos'])
   assert.equal(d.prepare('SELECT COUNT(*) n FROM '+name).get().n,0,name+' must not backfill');

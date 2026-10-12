@@ -8,7 +8,7 @@ import {randomBytes} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
 process.env.DB_PATH=':memory:';process.env.LOG_LEVEL='error';
 const {ALL_MIGRATIONS}=await import('../server/db.js');
-test('encrypted 10053 upgrade preserves Task rows, references, triggers, indexes, sequence and second startup',()=>{
+test('encrypted 10053 merged upgrade preserves exact old Task data with scoring metadata, references, triggers, indexes and second startup',()=>{
   const directory=mkdtempSync(join(tmpdir(),'vidamia-skip-migration-')),databasePath=join(directory,'synthetic.db'),key=randomBytes(32).toString('hex');
   const open=()=>{const d=new Database(databasePath);d.pragma("cipher='sqlcipher'");d.pragma(`key="x'${Buffer.from(key).toString('hex')}'"`);d.pragma('foreign_keys=ON');return d;};
   let d;
@@ -36,9 +36,17 @@ test('encrypted 10053 upgrade preserves Task rows, references, triggers, indexes
     // Every appended migration runs once; preserve Skip as the first upgrade.
     const expectedUpgrade=ALL_MIGRATIONS.filter(m=>m.version>10053).map(m=>m.version);
     assert.equal(expectedUpgrade[0],10054,'Skip remains the first upgrade from 10053');
-    assert.deepEqual([...boot().matchAll(/Migration (\d+) applied:/g)].map(m=>Number(m[1])),expectedUpgrade);
+    const bootStart=Date.now(),firstBoot=boot(),bootEnd=Date.now();
+    assert.deepEqual([...firstBoot.matchAll(/Migration (\d+) applied:/g)].map(m=>Number(m[1])),expectedUpgrade);
     d=open();
-    for(const table of tables){const cols=Object.keys(snapshots[table][0]||{});assert.deepEqual(d.prepare(`SELECT ${cols.length?cols.join(','):'*'} FROM ${table}`).all(),snapshots[table],table);}
+    const roots=new Set(snapshots.tasks.filter(row=>row.parent_task_id===null).map(row=>row.id)),scoringUpgrade=expectedUpgrade.includes(10055);
+    // Actual10055 metadata updates trigger exactly one revision/clock bump per root.
+    for(const table of tables){const cols=Object.keys(snapshots[table][0]||{}),actual=d.prepare(`SELECT ${cols.length?cols.join(','):'*'} FROM ${table}`).all();
+      if(table==='tasks')assert.deepEqual(actual.map(row=>row.id).sort((a,b)=>a-b),snapshots.tasks.map(row=>row.id).sort((a,b)=>a-b),'exact old Task IDs/count');
+      if(scoringUpgrade&&table==='tasks')for(const prior of snapshots.tasks){const row=actual.find(row=>row.id===prior.id),root=roots.has(prior.id);assert.ok(row);for(const [field,value] of Object.entries(prior)){if(root&&field==='revision')assert.equal(row[field],value+1,`${prior.id}.revision`);else if(root&&field==='updated_at'){assert.match(row[field],/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);const time=Date.parse(row[field]);assert.ok(time>=Math.floor(bootStart/1000)*1000&&time<=Math.floor(bootEnd/1000)*1000,`${prior.id}.updated_at ${row[field]}`);}else assert.deepEqual(row[field],value,`${prior.id}.${field}`);}assert.deepEqual(d.prepare('SELECT scoring_mode,scoring_review_required FROM tasks WHERE id=?').get(prior.id),{scoring_mode:root?'whole_task':'legacy',scoring_review_required:0});}
+      else if(scoringUpgrade&&table==='task_change_clock')assert.deepEqual(actual,snapshots[table].map(row=>({...row,version:row.version+roots.size})),table);
+      else assert.deepEqual(actual,snapshots[table],table);
+    }
     for(const before of schema)assert.deepEqual(d.prepare('SELECT type,name,sql FROM sqlite_master WHERE name=?').get(before.name),before,before.name);
     assert.deepEqual(d.pragma('foreign_key_check'),[]);assert.equal(d.pragma('integrity_check',{simple:true}),'ok');
     assert.equal(Number(d.prepare("INSERT INTO tasks(title,created_by) VALUES('New synthetic row',1)").run().lastInsertRowid),10001);

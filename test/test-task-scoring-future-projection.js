@@ -4,11 +4,16 @@ import {scoringFixture} from './helpers/task-scoring-route-fixture.js';
 const {taskSeriesState,seriesDefinitionForGeneration}=await import('../server/services/task-series.js');
 const {default:taskRouter}=await import('../server/routes/tasks.js');
 const previewRequests=[];
+const definitionRequests=[];
 const originalRouterHandle=taskRouter.handle;
 taskRouter.handle=function(req,res,next){
   if(req.method==='POST'&&/\/scoring-preview\/?$/.test(req.url)){
     const input=structuredClone(req.body);
     res.once('finish',()=>previewRequests.push({input,after:structuredClone(req.body)}));
+  }
+  if(req.method==='PUT'&&/^\/\d+\/?$/.test(req.url)){
+    const input=structuredClone(req.body);
+    res.once('finish',()=>definitionRequests.push({input,after:structuredClone(req.body)}));
   }
   return originalRouterHandle.call(this,req,res,next);
 };
@@ -397,4 +402,93 @@ test('round3 real creator points edit reconciles ordinary target without blanket
   const saved=await f.edit(root,body);assert.equal(saved.status,200);assert.ok(saved.series_edit.updated.includes(target.id));
   assert.deepEqual((await f.call('GET','/tasks/'+target.id)).data.scoring.potential,p.data.after);assert.deepEqual(f.d.prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(target.id),[{user_id:2}]);
   assert.deepEqual(f.row(root),source);assert.deepEqual(rotationState(f),cursors);assert.deepEqual(f.d.prepare('SELECT * FROM reward_ledger ORDER BY id').all(),ledger);assert.deepEqual(f.d.prepare('SELECT * FROM task_scoring_settlements ORDER BY id').all(),settlements);
+});
+
+const assignmentPatch=(assigned_to,fields={})=>({edit_scope:'future_only',future_patch:{fields:{assigned_to,...fields}}});
+async function checkedDefinitionSave(f,id,body,actor=1){
+  const count=definitionRequests.length,input=structuredClone(body),saved=await f.edit(id,body,actor);
+  assert.deepEqual(body,input);assert.equal(definitionRequests.length,count+1);
+  const request=definitionRequests.at(-1);assert.deepEqual(request.after,request.input,'actual definition request stays unchanged');return saved;
+}
+async function rejectsIndependentIntent(f,root,body,status=400){
+  const state=f.snapshot(),changes=f.changes(),p=await purePreview(f,root,body),saved=await checkedDefinitionSave(f,root,body);
+  if(saved.status===200){
+    const ids=pending(f,root).assigned_user_ids,completed=await f.finish(root),next=successor(f,root);
+    console.log(JSON.stringify({probe:'round4 accepted intent RED',intent:body.future_patch.fields.assigned_to,previewStatus:p.status,saveStatus:saved.status,canonical:ids,
+      completionStatus:completed.status,actualPrimary:next?.assigned_to,actualPotential:next?(await f.call('GET','/tasks/'+next.id)).data.scoring.potential:null}));
+  }
+  assert.equal(p.status,status,JSON.stringify(p));assert.equal(saved.status,status,JSON.stringify(saved));
+  assert.equal(f.snapshot(),state);assert.equal(f.changes(),changes);return p;
+}
+for(const ids of [[3],[2,3]])test('round4 changed excluded independent future root intent rejects atomically '+JSON.stringify(ids),async t=>{
+  const f=await scoringFixture(t),{root,add}=await participantTarget(f);assert.equal((await f.edit(root,add)).status,200);
+  const state=f.snapshot(),changes=f.changes(),ordinary=await checkedDefinitionSave(f,root,{assigned_to:ids,due_date:'2026-11-02'});
+  assert.equal(ordinary.status,400);assert.match(ordinary.error,/permitted to perform/);assert.equal(f.snapshot(),state);assert.equal(f.changes(),changes);
+  const p=await rejectsIndependentIntent(f,root,assignmentPatch(ids));assert.equal(p.error,ordinary.error);assert.ok(!JSON.stringify(p).includes('SECRET'));
+});
+for(const ids of [[3],[2,3]])test('round4 qualified explicit independent root selection matches actual successor '+JSON.stringify(ids),async t=>{
+  const f=await scoringFixture(t),{root,add}=await participantTarget(f);assert.equal((await f.edit(root,add)).status,200);
+  f.d.prepare("UPDATE user_skill_proficiency SET proficiency='normal' WHERE user_id=3 AND skill_id=?").run(pending(f,root).skill_ids[0]);
+  const body=assignmentPatch(ids),p=await purePreview(f,root,body),source=f.row(root),cursors=rotationState(f);
+  assert.equal(p.status,200,JSON.stringify(p));assert.equal((await checkedDefinitionSave(f,root,body)).status,200);
+  assert.deepEqual(f.row(root),source);assert.deepEqual(rotationState(f),cursors);assert.equal((await f.finish(root)).status,200);
+  const next=successor(f,root);assert.equal(next.assigned_to,ids[0]);assert.deepEqual((await f.call('GET','/tasks/'+next.id)).data.scoring.potential,p.data.after);assert.deepEqual(unitTotals(p.data.after_units),p.data.after);
+});
+test('round4 changed canonical order cannot promote an excluded secondary to independent primary',async t=>{
+  const f=await scoringFixture(t),{root,add}=await participantTarget(f);assert.equal((await f.edit(root,add)).status,200);const skill=pending(f,root).skill_ids[0];
+  f.d.prepare("UPDATE user_skill_proficiency SET proficiency='normal' WHERE user_id=3 AND skill_id=?").run(skill);
+  assert.equal((await checkedDefinitionSave(f,root,assignmentPatch([2,3]))).status,200);
+  f.d.prepare("UPDATE user_skill_proficiency SET proficiency='excluded' WHERE user_id=3 AND skill_id=?").run(skill);
+  await rejectsIndependentIntent(f,root,assignmentPatch([3,2]));
+});
+for(const points of [0,7])test('round4 zero amounts and disabled enrollment do not exempt changed independent intent '+points,async t=>{
+  const f=await scoringFixture(t),{root,add}=await participantTarget(f);assert.equal((await f.edit(root,add)).status,200);
+  if(points===0)assert.equal((await f.edit(root,{edit_scope:'future_only',future_patch:{fields:{points}}})).status,200);
+  f.d.prepare('UPDATE reward_participants SET enabled=0 WHERE user_id=3').run();await rejectsIndependentIntent(f,root,assignmentPatch([2,3]));
+});
+for(const birthday of ['2008-11-02','2008-11-03'])test('round4 explicit intent uses genuine next Due skill date '+birthday,async t=>{
+  const f=await scoringFixture(t),{root,add}=await participantTarget(f);assert.equal((await f.edit(root,add)).status,200);const skill=pending(f,root).skill_ids[0];
+  f.d.prepare('UPDATE skills SET minimum_age=18 WHERE id=?').run(skill);
+  f.d.prepare('DELETE FROM user_skill_proficiency WHERE user_id=3 AND skill_id=?').run(skill);
+  f.d.prepare('INSERT INTO birthdays(name,birth_date,family_user_id,created_by) VALUES(?,?,3,1)').run('Synthetic future birthday',birthday);
+  const state=f.snapshot(),changes=f.changes(),ordinary=await checkedDefinitionSave(f,root,{assigned_to:[3]});
+  assert.equal(ordinary.status,400);assert.equal(f.snapshot(),state);assert.equal(f.changes(),changes);
+  if(birthday.endsWith('03')){await rejectsIndependentIntent(f,root,assignmentPatch([3]));return;}
+  const body=assignmentPatch([3]),p=await purePreview(f,root,body);assert.equal(p.status,200,JSON.stringify(p));assert.equal(p.data.forecast_context.after.due_date,'2026-11-02');
+  assert.deepEqual(p.data.after,[{user_id:3,points:7}]);assert.equal((await checkedDefinitionSave(f,root,body)).status,200);assert.equal((await f.finish(root)).status,200);
+  const next=successor(f,root);assert.equal(next.due_date,'2026-11-02');assert.equal(next.assigned_to,3);assert.deepEqual((await f.call('GET','/tasks/'+next.id)).data.scoring.potential,p.data.after);
+});
+test('round4 equal canonical intent remains no-op while actual target participants stay operational only',async t=>{
+  const f=await scoringFixture(t),{root,add}=await participantTarget(f);assert.equal((await f.edit(root,add)).status,200);assert.equal((await f.finish(root)).status,200);
+  const body=assignmentPatch([2],{points:7,skill_ids:pending(f,root).skill_ids}),p=await purePreview(f,root,{...body,include_edit_definition:true},2);
+  assert.equal(p.status,200);assert.deepEqual(p.data.after,[{user_id:2,points:7},{user_id:3,points:7}]);assert.ok(!JSON.stringify(p).includes('SECRET'));assert.equal(p.data.after_units.length,1);
+  const state=f.snapshot(),changes=f.changes(),saved=await checkedDefinitionSave(f,root,body,2);assert.equal(saved.unchanged,true);assert.equal(f.snapshot(),state);assert.equal(f.changes(),changes);
+  await rejectsIndependentIntent(f,root,assignmentPatch([3]));
+});
+test('round4 configured future date validates qualified intent without rewriting a preserved actual target',async t=>{
+  const f=await scoringFixture(t),{root,add}=await participantTarget(f);assert.equal((await f.edit(root,add)).status,200);assert.equal((await f.finish(root)).status,200);const next=successor(f,root);
+  assert.equal((await checkedDefinitionSave(f,next.id,{title:'Preserved target exception'})).status,200);
+  const target=f.row(next.id),joins=f.d.prepare('SELECT * FROM task_assignments WHERE task_id=? ORDER BY user_id').all(next.id),cursors=rotationState(f);
+  f.d.prepare("UPDATE user_skill_proficiency SET proficiency='normal' WHERE user_id=3 AND skill_id=?").run(pending(f,root).skill_ids[0]);
+  const body=assignmentPatch([3]),p=await purePreview(f,root,body);assert.equal(p.status,409);assert.deepEqual(p.conditions,['target_preserved']);
+  const saved=await checkedDefinitionSave(f,root,body);assert.equal(saved.status,200,JSON.stringify(saved));assert.deepEqual(pending(f,root).assigned_user_ids,[3]);assert.ok(saved.series_edit.preserved.some(row=>row.task_id===next.id));
+  assert.deepEqual(f.row(next.id),target);assert.deepEqual(f.d.prepare('SELECT * FROM task_assignments WHERE task_id=? ORDER BY user_id').all(next.id),joins);assert.deepEqual(rotationState(f),cursors);
+});
+test('round4 new required independent intent with no proved future date fails narrowly',async t=>{
+  const f=await scoringFixture(t),{root,add}=await participantTarget(f);assert.equal((await f.edit(root,add)).status,200);
+  f.d.prepare("UPDATE user_skill_proficiency SET proficiency='normal' WHERE user_id=3 AND skill_id=?").run(pending(f,root).skill_ids[0]);
+  const p=await rejectsIndependentIntent(f,root,assignmentPatch([3],{is_recurring:false}),409);assert.equal(p.reason,'scoring_projection_unavailable');assert.deepEqual(p.conditions,['recurrence_ended']);
+});
+for(const choice of ['no_skills','empty_assignment'])test('round4 central no-qualification rule permits ended policy change '+choice,async t=>{
+  const f=await scoringFixture(t),root=await groupRoot(f,{points:7,...(choice==='empty_assignment'?{skill_ids:[qualification(f)]}:{})});
+  const body=assignmentPatch(choice==='empty_assignment'?[]:[3],{is_recurring:false}),p=await purePreview(f,root,body);
+  assert.equal(p.status,409);assert.deepEqual(p.conditions,['recurrence_ended']);assert.equal((await checkedDefinitionSave(f,root,body)).status,200);assert.equal(pending(f,root).task.is_recurring,0);
+});
+test('round4 no date proof is requested for unchanged/default intent or unrelated ended policy edits',async t=>{
+  const f=await scoringFixture(t),{root}=await participantTarget(f);assert.equal((await checkedDefinitionSave(f,root,{edit_scope:'future_only',future_patch:{fields:{is_recurring:false}}})).status,200);
+  for(const body of [future,assignmentPatch([2])]){
+    const state=f.snapshot(),changes=f.changes(),p=await purePreview(f,root,body);assert.equal(p.status,409);assert.deepEqual(p.conditions,['recurrence_ended']);
+    const saved=await checkedDefinitionSave(f,root,body);assert.equal(saved.status,200);assert.equal(saved.unchanged,true);assert.equal(f.snapshot(),state);assert.equal(f.changes(),changes);
+  }
+  assert.equal((await checkedDefinitionSave(f,root,{edit_scope:'future_only',future_patch:{fields:{points:8}}})).status,200);assert.equal(pending(f,root).task.points,8);
 });

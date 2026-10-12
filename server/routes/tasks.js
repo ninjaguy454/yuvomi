@@ -279,7 +279,33 @@ function futureEditContext(req,task) {
   assertSeriesDefinitionMutation(db.get(),req,task,before,definition,{futureOnly:true});
   validateFutureDefinitionWindows(req,task,definition);
   validateFutureDefinitionConfiguration(task,before,definition);
+  assertFutureIndependentAssignmentIntent(req,task,state,stored,before,definition);
   return {state,stored,before,definition};
+}
+
+/** Explicit independent selections must qualify before generation filters them.
+ * Default/canonical no-ops and derived child participation keep their policy. */
+function assertFutureIndependentAssignmentIntent(req,task,state,stored,before,definition) {
+  if(!Object.hasOwn(req.body.future_patch?.fields??{},'assigned_to')||definition.binding
+    ||(definition.task.assignment_mode??'fixed')!=='fixed'
+    ||sameIdOrder(before.assigned_user_ids,definition.assigned_user_ids))return;
+  const d=db.get(),skills=definition.skill_ids,assigned=definition.assigned_user_ids;
+  // The central empty-list/no-requirement rule needs no future date proof.
+  if(!skills.length||!assigned.length)return assertTaskSkillAssignments(d,skills,assigned);
+  const asOfDate=todayInHouseholdZone(),canonicalUnchanged=!!stored&&definitionEqual(stored.data,definition);
+  const record=canonicalUnchanged?{...stored,data:definition}:{...stored,id:null,data:definition};
+  let window;
+  try {
+    const occurrence=d.prepare("SELECT * FROM task_recurrence_occurrences WHERE series_id=? AND generation=? AND state='materialized'")
+      .get(state.series_id,state.occurrence.generation+1);
+    const actual=occurrence&&d.prepare('SELECT * FROM tasks WHERE id=?').get(occurrence.task_id);
+    // A preserved target is not rewritten; validate only the configured next
+    // nominal window. The forecast retains its existing preservation guard.
+    const target=actual&&!seriesOccurrencePreservationReason(d,occurrence,actual)?{occurrence,task:actual}:null;
+    window=prospectiveRootWindow(task,state,record,definition,asOfDate,target,{preserveActual:canonicalUnchanged});
+  }catch(error){throw prospectiveUnavailable('projection_evidence_unavailable');}
+  if(!window)throw prospectiveUnavailable(definition.task.is_recurring?'next_occurrence_unavailable':'recurrence_ended');
+  assertTaskSkillAssignments(d,skills,assigned,window.due_date||window.start_date||asOfDate,{allowDelegation:false});
 }
 function futureScoringWires(req,task,before,after) {
   const visible=definition=>definition.subtasks.filter(action=>futureActionCapabilities(db.get(),req,task,action).view);
@@ -471,6 +497,16 @@ function executionTask(fields) {
   const {id,parent_task_id,...task}=fields;
   return {...task,status:'open',archived_at:null};
 }
+/** Pure root-window branches shared by forecasts and explicit intent checks. */
+function prospectiveRootWindow(task,state,record,definition,asOfDate,target,{preserveActual=false}={}) {
+  if(target){
+    if(preserveActual)return {start_date:target.task.start_date,due_date:target.task.due_date};
+    if(definition.task.recurrence_from_completion)
+      return {start_date:target.occurrence.planned_start_date,due_date:target.occurrence.planned_due_date};
+    return planSeriesOccurrence(db.get(),record,state.occurrence);
+  }
+  return planSeriesOccurrence(db.get(),record,state.occurrence,{completedOn:asOfDate,skipped:task.status==='skipped',withoutCompletion:['expired','skipped'].includes(task.status)});
+}
 function phaseExecutionInput(task,state,record,definition,ids,asOfDate,target,{beforePhase=false,canonicalUnchanged=false}={}) {
   const d=db.get(),context={kind:'next_occurrence',generation:state.occurrence.generation+1,as_of_date:asOfDate,
     assumed_completion_date:null,preparation:target?'existing_untouched':'fresh',conditions:[]};
@@ -478,11 +514,7 @@ function phaseExecutionInput(task,state,record,definition,ids,asOfDate,target,{b
   if(target) {
     const targetTask=target.task,baseline=captureSeriesDefinition(d,targetTask.id,{registerActions:false});
     const preserveActual=beforePhase||canonicalUnchanged;
-    const window=preserveActual
-      ?{start_date:targetTask.start_date,due_date:targetTask.due_date}
-      :definition.task.recurrence_from_completion
-        ?{start_date:target.occurrence.planned_start_date,due_date:target.occurrence.planned_due_date}
-        :planSeriesOccurrence(d,record,state.occurrence);
+    const window=prospectiveRootWindow(task,state,record,definition,asOfDate,target,{preserveActual});
     if(!window)throw prospectiveUnavailable('recurrence_ended');
     const actual=new Map(d.prepare(`SELECT t.*,a.action_key FROM tasks t JOIN task_recurrence_actions a ON a.task_id=t.id
       WHERE a.occurrence_task_id=?`).all(targetTask.id).map(row=>[row.action_key,row]));
@@ -533,7 +565,7 @@ function phaseExecutionInput(task,state,record,definition,ids,asOfDate,target,{b
     const completionRelative=!!definition.task.recurrence_from_completion&&!['expired','skipped'].includes(task.status);
     context.assumed_completion_date=completionRelative?asOfDate:null;
     if(completionRelative)context.conditions.push('completion_date_assumed');
-    const window=planSeriesOccurrence(d,record,state.occurrence,{completedOn:asOfDate,skipped:task.status==='skipped',withoutCompletion:['expired','skipped'].includes(task.status)});
+    const window=prospectiveRootWindow(task,state,record,definition,asOfDate,target);
     if(!window)throw prospectiveUnavailable(definition.task.is_recurring?'next_occurrence_unavailable':'recurrence_ended');
     prepared=prepareSeriesOccurrenceWork(task,definition,window,{qualify:qualifySeriesAssignments,asOfDate});
     if(definition.binding) {

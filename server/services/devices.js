@@ -83,6 +83,7 @@ export function normalizeDevicePreferences(d,input,{read=false}={}) {
     return {id,visible:validated?.visible??false,size:validated?.size||'medium',order:Number.isSafeInteger(source?.order)?source.order:DEVICE_WIDGETS.indexOf(id)};
   }).sort((a,b)=>a.order-b.order).map((row,order)=>({...row,order}));
   return {...normalized,widgets,allow_theme_changes:!Object.hasOwn(seed,'allow_theme_changes')||seed.allow_theme_changes===true,
+    theme_revision:Number.isSafeInteger(seed.theme_revision)&&seed.theme_revision>=0?seed.theme_revision:0,
     default_view:['wall','list','kanban'].includes(seed.default_view)?seed.default_view:'wall'};
 }
 export function publicDevice(row) {

@@ -29,6 +29,26 @@ test('default-enabled shared Theme entry edits only device appearance and tempor
     await page.setViewport({width:390,height:1000});await page.click('#more-btn');await page.waitForSelector('.more-sheet [data-device-theme]');assert.equal(await page.$eval('.more-sheet [data-device-theme]',n=>n.disabled),true);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));assert.deepEqual(errors,[]);
   }finally{await context.close();}
 });
+test('an open picker follows a second tab and recovers from a stale save without replaying it',async()=>{
+  const display=await pageFor(first),peer=await pageFor(first);let held,hold=true;
+  try{
+    await display.page.waitForSelector('[data-device-theme]');await peer.page.waitForSelector('[data-device-theme]');
+    await display.page.click('.nav-sidebar [data-device-theme]');await display.page.waitForSelector('[data-shared-device-theme] [data-named-field=theme]');
+    let current=(await call(peer.page,'get','/device/appearance')).data;
+    await call(peer.page,'patch','/device/appearance',{revision:current.revision,theme_revision:current.theme_revision,named_appearance:{...defaultNamedAppearance(),theme:'fern'}});
+    await display.page.waitForFunction(()=>document.documentElement.dataset.namedTheme==='fern');
+    assert.equal(await display.page.$eval('[data-shared-device-theme] [data-named-field=theme]',n=>n.value),'fern','idle picker reconciles the current device choice');
+    await display.page.setRequestInterception(true);
+    const captured=new Promise(resolve=>display.page.on('request',request=>{if(request.isInterceptResolutionHandled())return;if(hold&&request.method()==='PATCH'&&request.url().endsWith('/device/appearance')){held=request;resolve();}else void request.continue();}));
+    await display.page.select('[data-shared-device-theme] [data-named-field=theme]','coffee');await captured;
+    current=(await call(peer.page,'get','/device/appearance')).data;
+    await call(peer.page,'patch','/device/appearance',{revision:current.revision,theme_revision:current.theme_revision,named_appearance:{...defaultNamedAppearance(),theme:'christmas'}});
+    hold=false;await held.continue();
+    await display.page.waitForFunction(()=>document.querySelector('[data-shared-device-theme] [data-named-field=theme]')?.value==='christmas'&&!document.querySelector('[data-shared-device-theme] .named-appearance-picker').hasAttribute('aria-busy'));
+    assert.equal(stored(first.device.id).appearance.named_appearance.theme,'christmas','failed Coffee choice is never replayed');
+    await display.page.select('[data-shared-device-theme] [data-named-field=theme]','hanukkah');await display.page.waitForFunction(()=>document.documentElement.dataset.namedTheme==='hanukkah');assert.equal(stored(first.device.id).appearance.named_appearance.theme,'hanukkah');
+  }finally{hold=false;if(held&&!held.isInterceptResolutionHandled())await held.continue();await display.context.close();await peer.context.close();}
+});
 test('administrator toggle defaults checked, preserves unrelated grants and locks stale device UI',async()=>{
   const admin=await pageFor(),display=await pageFor(first);try{
     await login(admin.page);await admin.page.goto(origin+'/settings/admin/devices');await admin.page.waitForSelector(`[data-device-edit="${first.device.id}"]`);await admin.page.click(`[data-device-edit="${first.device.id}"]`);await admin.page.waitForSelector('[name=allow_theme_changes]');assert.equal(await admin.page.$eval('[name=allow_theme_changes]',n=>n.checked),true);

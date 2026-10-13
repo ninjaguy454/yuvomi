@@ -120,7 +120,8 @@ deviceRouter.get('/changes',(req,res)=>{
     if(!deviceRequestStillValid(db.get(),req)){res.write('event: context\ndata: {}\n\n');res.end();clearInterval(timer);return;}
     const d=db.get();
     const versions=['task_change_clock','rotation_change_clock','reward_change_clock'].map(table=>d.prepare(`SELECT version FROM ${table} WHERE id=1`).get()?.version||0);
-    versions.push(d.prepare('SELECT revision FROM household_devices WHERE id=?').get(req.devicePrincipal.id)?.revision||0);
+    const display=d.prepare('SELECT revision,preferences_json FROM household_devices WHERE id=?').get(req.devicePrincipal.id);
+    versions.push(display?.revision||0,display?JSON.parse(display.preferences_json).theme_revision||0:0);
     const value=JSON.stringify(versions);if(value!==last){last=value;res.write(`event: change\ndata: ${JSON.stringify({version:value})}\n\n`);}else res.write(': keepalive\n\n');
   };
   const timer=setInterval(tick,1000);timer.unref?.();req.on('close',()=>clearInterval(timer));tick();

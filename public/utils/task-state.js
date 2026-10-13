@@ -1,6 +1,7 @@
 import { api } from '/api.js';
 import { confirmOverModal } from '/components/modal.js';
 import { t } from '/i18n.js';
+import {captureCompletionSound,confirmCompletionSound} from '/utils/ui-sounds.js';
 
 import { actionableSubtasks, structuralSubtasks } from '/utils/task-progress.js';
 export { actionableSubtasks } from '/utils/task-progress.js';
@@ -46,7 +47,8 @@ export function taskStatusConfirmation(task, status) {
   return null;
 }
 
-export async function changeTaskStatus(task, status, { confirm: requestConfirmation = confirmOverModal, beforeRequest = () => {} } = {}) {
+export async function changeTaskStatus(task, status, { confirm: requestConfirmation = confirmOverModal, beforeRequest = () => {},gesture=null,soundTicket=null } = {}) {
+  const cue=status==='done'?(soundTicket||captureCompletionSound(gesture)):null;
   if (task.status === 'skipped') throw new Error('This occurrence was skipped and cannot be reopened or completed.');
   if (status === 'skipped') throw new Error('Use Skip this occurrence from Task details.');
   if (task.status === 'expired') throw new Error('Reopen this expired Task before changing its status.');
@@ -60,7 +62,9 @@ export async function changeTaskStatus(task, status, { confirm: requestConfirmat
   // A pending projection starts only after confirmation, with the original
   // revision still attached to the write. Cancel never paints unsaved progress.
   beforeRequest();
-  return api.patch(`/tasks/${task.id}/status`, body);
+  const result=await api.patch(`/tasks/${task.id}/status`, body);
+  confirmCompletionSound(cue,result?.data?.status==='done');
+  return result;
 }
 
 /** Reopening is an explicit lifecycle action, separate from marking work done. */

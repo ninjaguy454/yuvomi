@@ -1,0 +1,9 @@
+import assert from 'node:assert/strict';import test from 'node:test';
+import {defaultNamedAppearance} from '../public/utils/named-appearance.js';
+process.env.DB_PATH=':memory:';process.env.SESSION_SECRET||='named-device-synthetic-secret';
+const {normalizeWallConfig,WALL_DEFAULTS}=await import('../server/services/wall.js');
+const named={...defaultNamedAppearance(),theme:'ocean-glass'},sounds={version:1,mode:'pack',pack:'glass',volume:15};
+test('legacy Wall normalization preserves its exact existing appearance shape',()=>{assert.deepEqual(normalizeWallConfig(WALL_DEFAULTS).appearance,WALL_DEFAULTS.appearance);});
+test('Wall and paired appearance retain their own explicitly chosen theme and sound configuration',()=>{const r=normalizeWallConfig({...WALL_DEFAULTS,appearance:{...WALL_DEFAULTS.appearance,named_appearance:named,ui_sounds:sounds}});assert.deepEqual(r.appearance.named_appearance,named);assert.deepEqual(r.appearance.ui_sounds,sounds);});
+test('invalid named device appearance and audio fail before any configuration write',()=>{assert.throws(()=>normalizeWallConfig({...WALL_DEFAULTS,appearance:{...WALL_DEFAULTS.appearance,named_appearance:{...named,outside:'holidays'}}}));assert.throws(()=>normalizeWallConfig({...WALL_DEFAULTS,appearance:{...WALL_DEFAULTS.appearance,ui_sounds:{...sounds,mode:'parent'}}}));});
+test('reading future appearance versions preserves legacy display layout without rewriting',()=>{const input={...WALL_DEFAULTS,widgets:WALL_DEFAULTS.widgets.map(w=>({...w,visible:w.id==='notes'})),appearance:{...WALL_DEFAULTS.appearance,palette:'cool',named_appearance:{version:9},ui_sounds:{version:9}}};const saved=JSON.stringify(input);const r=normalizeWallConfig(input,{read:true});assert.equal(r.appearance.palette,'cool');assert.equal(r.widgets.find(w=>w.id==='notes').visible,true);assert.equal(r.appearance.named_appearance,null);assert.equal(r.appearance.ui_sounds.mode,'off');assert.equal(JSON.stringify(input),saved);});

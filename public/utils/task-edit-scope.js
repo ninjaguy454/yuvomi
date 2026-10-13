@@ -13,6 +13,7 @@ export function taskEditDefinition(value) {
   return {
     title: text(value.title), description: text(value.description),
     category: value.category || 'misc', priority: value.priority || 'none',
+    ...(value.card_color_choice?{card_color_choice:value.card_color_choice}:{}),
     ...(value.scoring_mode ? { scoring_mode: value.scoring_mode } : {}),
     points: point(value.points), tags: [...new Set((value.tags || []).map(text).filter(Boolean))].sort(),
     subtasks: (value.subtasks || []).filter(step => text(step.title)).map(step => ({
@@ -62,7 +63,7 @@ export function taskEditResultMessage(result, fallback) {
     pending?`${pending} future ${pending===1?'occurrence is':'occurrences are'} waiting for rotation resolution.`:''].filter(Boolean).join(' ');
 }
 
-const futureFields = ['title','description','category','priority','start_date','start_time','due_date','due_time','due_date_offset_days','is_recurring','recurrence_rule','recurrence_from_completion','assignment_mode','rotation_group','rotation_slot','points','visibility','countdown','locked','expiration_policy','scoring_mode','assigned_to','rotation_user_ids','skill_ids','tags','rotation_bindings'];
+const futureFields = ['card_color_choice','title','description','category','priority','start_date','start_time','due_date','due_time','due_date_offset_days','is_recurring','recurrence_rule','recurrence_from_completion','assignment_mode','rotation_group','rotation_slot','points','visibility','countdown','locked','expiration_policy','scoring_mode','assigned_to','rotation_user_ids','skill_ids','tags','rotation_bindings'];
 const actionFields = ['title','description','category','priority','start_date','start_time','due_date','due_time','points','visibility','locked','expiration_policy','is_optional','assigned_user_ids','skill_ids','tags'];
 const comparable = (key, value) => ['is_optional','is_recurring','countdown','locked','recurrence_from_completion'].includes(key) ? !!value
   : key === 'points' ? point(value) : value;

@@ -1,3 +1,4 @@
+import {cardColorAttribute} from '/utils/card-colors.js';
 import { memberLabel, firstDisplayName } from '/utils/member-label.js';
 import { householdGreeting } from '/utils/household-greeting.js';
 /**
@@ -917,7 +918,7 @@ function renderUrgentTasks(tasks) {
     const due = formatDueDate(t.due_date, t.due_time);
     const countdown = renderTaskCountdown(t);
     return `
-      <div class="task-item" data-task-id="${t.id}" data-task-title="${esc(t.title)}" role="button" tabindex="0">
+      <div class="task-item" data-task-id="${t.id}"${cardColorAttribute(t.card_color)} data-task-title="${esc(t.title)}" role="button" tabindex="0">
         ${t.priority !== 'none' ? `<div class="task-item__priority task-item__priority--${t.priority}" title="${esc(PRIORITY_LABELS()[t.priority] ?? t.priority)}" aria-hidden="true"></div>` : ''}
         <span class="sr-only">${PRIORITY_LABELS()[t.priority] ?? t.priority}</span>
         <div class="task-item__content">
@@ -1212,7 +1213,7 @@ function renderPinnedNotes(allNotes, size) {
   // Deklaration greift der Fallback im Stylesheet (der Notizen-Ton).
   const items = notes.map((n) => `
     <div class="note-item" data-route="/notes" role="button" tabindex="0"
-         ${n.color ? `style="--note-color:${esc(n.color)};"` : ''}>
+         ${n.color ? `style="--note-color:${esc(n.color)};"` : ''}${cardColorAttribute(n.card_color_slot)}>
       ${n.title ? `<div class="note-item__title">${esc(n.title)}</div>` : ''}
       <div class="note-item__content">${renderMarkdownLight(excerpt(n.content))}</div>
     </div>

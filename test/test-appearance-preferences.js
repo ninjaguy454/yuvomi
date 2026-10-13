@@ -234,6 +234,7 @@ function preferenceSyncHarness(response) {
   const noop = () => {};
   const context = vm.createContext({
     _preferencesLoaded: false, currentUser: { id: 1 },
+    pairedDeviceHint: () => false,
     api: { get: (path) => path === '/preferences' ? response : Promise.resolve({}) },
     localStorage: env.localStorage, applyAppearancePreferences, appearanceRevision,
     setDisplayTimeZone: noop, numberLocaleFor: noop, setAppName: noop, setAppVersion: noop,

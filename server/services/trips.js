@@ -1,3 +1,4 @@
+import {assignNewTaskCardColor} from './task-card-colors.js';
 import { expandRecurringEvents, loadEventExceptions } from './calendar-events.js';
 import {createTripTaskGroup,reconcileTripTasks,tripTaskGroup,replayTripRequest,rememberTripRequest,retireDeletedTrip} from './trip-tasks.js';
 import { saveCalendarTravelProjection } from './calendar-travel.js';
@@ -182,6 +183,7 @@ function createTasks(database, tripId, input, actorId) {
     // output that is deliberately shared and open/claimable.
     const assigned = Number(task.assigned_to) || input.participantIds[0] || null;
     const taskId = Number(insertTask.run(title, text(task.description, 'Task description'), task.priority || 'none', phaseDate(input, task.phase), assigned, actorId).lastInsertRowid);
+    assignNewTaskCardColor(database,taskId);
     if (assigned) assign.run(taskId, assigned);
     const placeId = ['during_trip', 'before_return'].includes(task.phase)
       ? (input.lodgingPlaceId || input.destinationPlaceId)

@@ -53,6 +53,7 @@ import { actionableSubtasks, changeTaskStatus, reopenExpiredTask, skipTaskOccurr
 import { helperWaitingLabel } from '/utils/task-progress.js';
 import { watchTaskChanges, latestTaskLoader } from '/utils/task-live.js';
 import { createSubtaskQueue } from '/utils/task-subtask-queue.js';
+import {captureCompletionSound} from '/utils/ui-sounds.js';
 import { zonedDateKey } from '/utils/timezone.js';
 import { historyDayLabel } from '/utils/day-label.js';
 import {
@@ -631,15 +632,15 @@ function subtaskRowNode(task, subtask, ctx) {
       saving.textContent = pending.uncertain ? 'Checking status…' : 'Saving…';
       row.appendChild(saving);
     }
-    toggle.addEventListener('click', async () => {
+    toggle.addEventListener('click', async event => {
       const current = actionableSubtasks(task).find(child => Number(child.id) === Number(subtask.id));
       if (!current || !subtaskPermitted(task, current, ctx)) return;
       const status = current.status === 'done' ? 'in_progress' : 'done';
       if (ctx.queue) {
         if (document.activeElement === toggle) ctx.pendingFocusKey = toggle.dataset.focusKey;
-        ctx.queue.enqueue(current.id, status);
+        ctx.queue.enqueue(current.id, status,{soundTicket:status==='done'?captureCompletionSound(event):null});
       }
-      else await ctx.runMutation(toggle, beforeRequest => changeTaskStatus(current, status, { beforeRequest }), { subtask: current, status });
+      else await ctx.runMutation(toggle, beforeRequest => changeTaskStatus(current, status, { beforeRequest,gesture:event }), { subtask: current, status });
     });
     return row;
 }
@@ -1241,10 +1242,10 @@ function statusSummaryNode(task, ctx) {
   select.value = pendingParentStatus(task, ctx);
   select.setAttribute('aria-busy', String(!!ctx.pendingSubtasks?.size));
   select.disabled = !!ctx.busy || !!ctx.queue?.busy || !!ctx.refreshRequired || isArchived(task) || isClosedOccurrence(task) || !canTask(task, 'complete') || task.supervision_action?.can_complete === false;
-  select.addEventListener('change', async () => {
+  select.addEventListener('change', async event => {
     const requested = select.value;
     select.value = task.status;
-    await ctx.runMutation(select, () => changeTaskStatus(task, requested));
+    await ctx.runMutation(select, () => changeTaskStatus(task, requested,{gesture:event}));
     if (select.isConnected) select.value = task.status;
   });
   control.append(label, select);
@@ -2014,10 +2015,10 @@ export function openTaskDetail({
     getTask: () => task,
     getChild: id => actionableSubtasks(task).find(child => Number(child.id) === Number(id)),
     canDispatch: child => subtaskPermitted(task, child, ctx) || 'This step is no longer available. Review the current Task before trying again.',
-    send: async (child, status) => {
+    send: async (child, status,context) => {
       ctx.sentLiveEpoch = ctx.liveSnapshotEpoch || 0;
       ctx.loader?.invalidate();
-      const result = await changeTaskStatus(child, status);
+      const result = await changeTaskStatus(child, status,context||{});
       if (!result) throw Object.assign(new Error('This step was not changed.'), { outcome: 'rejected' });
       ctx.savedChildChange = true;
       ctx.loader?.invalidate();

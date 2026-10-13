@@ -9,6 +9,7 @@ import { taskUnskippedWhere } from './task-window.js';
 import { todayKey, householdTimeZone } from '../utils/timezone.js';
 import { evaluateAvailability, isPlaceWithin } from './presence.js';
 import { listNotificationInbox } from './notification-inbox.js';
+import { validateNamedAppearance, validateUiSounds,normalizeNamedAppearance,normalizeUiSounds } from '../../public/utils/named-appearance.js';
 
 const KEY = 'wall_dashboard_v1';
 export const WALL_WIDGETS = ['calendar','tasks','meals','shopping','presence','points','rewards','notes','weather'];
@@ -22,9 +23,14 @@ export const WALL_DEFAULTS = Object.freeze({
 export function wallError(message,status=400,reason=null) {return Object.assign(new Error(message),{status,reason});}
 const choice=(value,valid,fallback) => value===undefined?fallback:valid.includes(value)?value:(()=>{throw wallError('Choose a supported Wall setting.');})();
 const bool=(value,fallback) => value===undefined?fallback:typeof value==='boolean'?value:(()=>{throw wallError('Wall visibility settings must be true or false.');})();
-export function normalizeWallConfig(input={}) {
+export function normalizeWallConfig(input={}, {read=false}={}) {
   if(!input || typeof input!=='object' || Array.isArray(input))throw wallError('Invalid Wall configuration.');
   const a=input.appearance||{},i=input.interaction||{},p=input.privacy||{};
+  let named={};
+  try {
+    if(a.named_appearance!==undefined)named.named_appearance=(read?normalizeNamedAppearance:validateNamedAppearance)(a.named_appearance);
+    if(a.ui_sounds!==undefined)named.ui_sounds=(read?normalizeUiSounds:validateUiSounds)(a.ui_sounds);
+  } catch(error) {throw wallError(error.message);}
   const supplied=input.widgets??WALL_DEFAULTS.widgets;
   if(!Array.isArray(supplied)||supplied.length>WALL_WIDGETS.length)throw wallError('Invalid Wall widgets.');
   const seen=new Set();
@@ -38,12 +44,12 @@ export function normalizeWallConfig(input={}) {
   const actions=i.actions??[];
   if(!Array.isArray(actions)||actions.some(action=>!WALL_ACTIONS.includes(action)))throw wallError('Unsupported Wall action.');
   return {widgets,
-    appearance:{theme:choice(a.theme,['light','dark','system'],'system'),palette:choice(a.palette,['warm','neutral','cool'],'warm'),font:choice(a.font,['default','serif'],'default'),density:choice(a.density,['comfortable','compact'],'comfortable'),clock:bool(a.clock,true)},
+    appearance:{theme:choice(a.theme,['light','dark','system'],'system'),palette:choice(a.palette,['warm','neutral','cool'],'warm'),font:choice(a.font,['default','serif'],'default'),density:choice(a.density,['comfortable','compact'],'comfortable'),clock:bool(a.clock,true),...named},
     interaction:{mode:choice(i.mode,['read_only','interactive'],'read_only'),actions:[...new Set(actions)]},
     privacy:{notifications:choice(p.notifications,['hidden','generic','count'],'hidden'),showPoints:bool(p.showPoints,false),showPresence:bool(p.showPresence,false)}};
 }
 export function wallConfig(d) {
-  try {const row=d.prepare('SELECT value FROM sync_config WHERE key=?').get(KEY);return normalizeWallConfig(row?JSON.parse(row.value):WALL_DEFAULTS);}
+  try {const row=d.prepare('SELECT value FROM sync_config WHERE key=?').get(KEY);return normalizeWallConfig(row?JSON.parse(row.value):WALL_DEFAULTS,{read:true});}
   catch {return structuredClone(WALL_DEFAULTS);}
 }
 export function saveWallConfig(d,input) {
@@ -81,7 +87,7 @@ export function wallTaskVisible(d,id,hostId,actorId=null) {
   return row&&(!actorId||taskCapabilities(d,actorId,row).view)?row:null;
 }
 export const publicMember = row => ({id:row.id,display_name:row.display_name,avatar_color:row.avatar_color});
-const taskKeys=['id','title','description','status','priority','points','due_date','due_time','start_date','start_time','countdown','revision','parent_revision','parent_task_id','assigned_to','assigned_name','subtask_total','subtask_done','waiting_on_helper','is_delegated_action','is_supervision_projection'];
+const taskKeys=['card_color','card_color_choice','id','title','description','status','priority','points','due_date','due_time','start_date','start_time','countdown','revision','parent_revision','parent_task_id','assigned_to','assigned_name','subtask_total','subtask_done','waiting_on_helper','is_delegated_action','is_supervision_projection'];
 const pick=(row,keys)=>Object.fromEntries(keys.filter(k=>row[k]!==undefined).map(k=>[k,row[k]]));
 /** Hydrate through the Tasks reader, then expose only shared operational fields. */
 export function publicTaskProjection(d,task,hostId,actorId=null) {
@@ -151,7 +157,7 @@ export function wallDashboard(d,hostId,hydrateTask) {
   if(allows('shopping'))result.shoppingLists=d.prepare('SELECT id FROM shopping_lists ORDER BY updated_at DESC LIMIT 8').all().map(row=>{const value=wallShopping(d,row.id);return {...value,open_count:value.items.filter(i=>!i.is_checked).length,items:value.items.filter(i=>!i.is_checked).slice(0,12)};});
   // The Wall is a shared projection, even when its host owns a restricted note.
   // Selecting a member for a Wall action never changes the Notes audience.
-  if(allows('notes'))result.pinnedNotes=d.prepare("SELECT id,title,content FROM notes WHERE pinned=1 AND visibility='all' ORDER BY updated_at DESC LIMIT 8").all();
+  if(allows('notes'))result.pinnedNotes=d.prepare("SELECT id,title,content,color,card_color_slot FROM notes WHERE pinned=1 AND visibility='all' ORDER BY updated_at DESC LIMIT 8").all();
   if(allows('rewards'))result.rewardCatalog=d.prepare('SELECT id,name,cost,icon,description FROM reward_catalog WHERE is_active=1 ORDER BY sort_order,cost,name').all();
   if(allows('points','rewards')&&config.privacy.showPoints)result.points=d.prepare(`SELECT u.id AS user_id,u.display_name,COALESCE(SUM(l.delta),0) AS balance FROM users u
     JOIN reward_participants p ON p.user_id=u.id AND p.enabled=1 LEFT JOIN reward_ledger l ON l.user_id=u.id

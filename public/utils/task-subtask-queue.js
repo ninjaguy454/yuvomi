@@ -45,7 +45,7 @@ export function createSubtaskQueue({ getTask, getChild, canDispatch = () => true
       // Re-read canonical metadata, retaining the original action revision and
       // intent. Only an accepted own acknowledgement may update parentRevision.
       const child = { ...getChild(item.id), revision: item.childRevision, parent_revision: item.parentRevision };
-      const snapshot = await send(child, item.status);
+      const snapshot = await send(child, item.status,item.context);
       if (disposed) return;
       if (!snapshot || Number(snapshot.id) !== item.taskId || !Number.isSafeInteger(snapshot.revision)
         || snapshot.revision < item.parentRevision)
@@ -84,13 +84,13 @@ export function createSubtaskQueue({ getTask, getChild, canDispatch = () => true
     }
   }
   return {
-    enqueue(childId, status) {
+    enqueue(childId, status,context=null) {
       const id = Number(childId);
       if (disposed || blocked || active?.id === id || entries.has(id) || !['done', 'in_progress', 'open'].includes(status)) return false;
       const task = getTask(), child = getChild(id);
       if (!task || !child || !Number.isSafeInteger(task.revision) || !Number.isSafeInteger(child.revision) || child.status === status) return false;
       const item = { id, status, taskId: Number(task.id), childRevision: child.revision, originalStatus: child.status,
-        parentRevision: task.revision, token: ++token };
+        parentRevision: task.revision, token: ++token,context };
       const invalid = gate(item);
       if (invalid) { report(invalid, item); return false; }
       entries.set(id, item); drainNeeded = true; publish(); void pump(); return true;

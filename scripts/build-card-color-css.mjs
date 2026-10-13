@@ -1,0 +1,7 @@
+import {readFileSync,writeFileSync} from 'node:fs';import {NAMED_THEMES,CARD_SLOTS,cardColor} from '../public/utils/named-appearance.js';
+const url=new URL('../public/styles/named-appearance.css',import.meta.url),marker='/* Generated indexed fallback tokens */';let css=readFileSync(url,'utf8').split(marker)[0];
+const roles=['fill','text','edge','muted','danger','success','warning','info','focus'];
+const tokens=id=>CARD_SLOTS.map(slot=>Object.entries(slot==='neutral-v1'?{...cardColor(id,slot),fill:'var(--color-surface)',text:'var(--color-text-primary)',edge:'var(--color-border-control)',muted:'var(--color-text-secondary)'}:cardColor(id,slot)).filter(([key])=>roles.includes(key)).map(([key,value])=>`--card-${slot}-${key}:${value}`).join(';')).join(';');
+css+=marker+`\n:root{${tokens('neutral')}}\nhtml[data-theme=dark]{${tokens('graphite')}}\n@media(prefers-color-scheme:dark){html:not([data-theme]){${tokens('graphite')}}}\n`;
+for(const slot of CARD_SLOTS)css+=`[data-card-color="${slot}"]{--card-fill:var(--card-${slot}-fill);--card-text:var(--card-${slot}-text);--card-edge:var(--card-${slot}-edge);--color-text-secondary:var(--card-${slot}-muted);--color-text-tertiary:var(--card-${slot}-muted);--color-border-control:var(--card-${slot}-edge);--focus-ring-color:var(--card-${slot}-focus);${['danger','success','warning','info'].map(role=>`--color-${role}:var(--card-${slot}-${role});--color-${role}-ink:var(--card-${slot}-${role})`).join(';')};--note-color:var(--card-${slot}-fill)!important}\n`;
+writeFileSync(url,css);

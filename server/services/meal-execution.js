@@ -1,3 +1,4 @@
+import {assignNewTaskCardColor} from './task-card-colors.js';
 import {assertCycleMealWrite,cycleForMeal} from './meal-cycle-guards.js';
 import {mealDishPortionSummary,recipeIngredientsForPortions} from './meal-dishes.js';
 import {actorPermissions} from '../permissions.js';
@@ -580,6 +581,7 @@ function ensureMealExecution(database, mealId, actorId, settings = getSettings(d
           assignment?.user_id || null, actorId || meal.created_by,
         );
         const taskId = Number(taskInfo.lastInsertRowid);
+        assignNewTaskCardColor(database,taskId);
         setTaskAssignment(database, taskId, resolution, role);
         insertOutput.run(
           snapshot.id, meal.id, role, outputKey, taskId, assignment?.user_id || null,

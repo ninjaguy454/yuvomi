@@ -1,3 +1,4 @@
+import {assignNewTaskCardColor} from './task-card-colors.js';
 /**
  * Modul: CalDAV Reminders Sync (Apple Reminders / VTODO)
  * Zweck: Multi-Account-CalDAV-VTODO-Synchronisation in die Module Tasks & Shopping.
@@ -320,6 +321,7 @@ function upsertTaskLocked(todo, accountId, createdBy, objectUrl = null) {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'caldav', ?, ?)
     `).run(todo.summary, todo.description, priority, status, date, time, createdBy, todo.uid, accountId, objectUrl);
     taskId = row.lastInsertRowid;
+    assignNewTaskCardColor(db.get(),taskId);
   }
 
   // CATEGORIES → Tags (#586). Der Server führt sie, also gewinnt er auch: eine

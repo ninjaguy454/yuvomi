@@ -66,7 +66,7 @@ export const NAMED_THEMES=Object.freeze(THEME_CHROME.map(([name,group,kind,canva
   const id=name.toLowerCase().replace(/ & /g,'-').replaceAll(' ','-'),[description,motif,sound]=identity[id],rows=THEME_PALETTES[id][0].split(';').map(s=>s.split(','));
   if(id==='ocean-glass'){name='Liquid Glass';canvas='#bcdaea';surface='#eaf7fc';accent='#46677d';second='#7954c8';text='#173448';}
   const raised=mixColors(surface,kind==='light'?'#ffffff':'#000000',.08),t={id,name,group:group==='Seasons'?'Season palettes':group==='Celebrations'?'Holiday palettes':group,kind,canvas,surface,raised,accent,second,round,font:font==='serif'?'Georgia,serif':'system-ui,sans-serif',identity:description,motif,sound,aliases:id==='ocean-glass'?['Ocean Glass']:[],slots:rows.map(r=>'#'+r[0]),slotNames:rows.map(r=>r[1])};
-  t.text=readableColor(text,[canvas,surface,raised],7);t.muted=readableColor(mixColors(t.text,surface,.24),[surface,raised],4.5);t.line=readableColor(accent,[surface,raised],3);t.focus=readableColor(second,[canvas,surface,raised],4.5);t.pattern=themePattern(t);
+  t.text=readableColor(text,[canvas,surface,raised],7);t.muted=readableColor(mixColors(t.text,surface,.24),[canvas,surface,raised],4.5);t.line=readableColor(accent,[surface,raised],3);t.focus=readableColor(second,[canvas,surface,raised],4.5);t.pattern=themePattern(t);
   return Object.freeze(t);
 }));
 const byId=new Map(NAMED_THEMES.map(t=>[t.id,t]));
@@ -74,7 +74,17 @@ export function cardColor(theme,slot){
   const t=typeof theme==='string'?byId.get(theme)||byId.get('neutral'):theme;
   const index=CARD_SLOTS.indexOf(slot),neutral=index<0||slot==='neutral-v1',raw=neutral?t.accent:t.slots[index];
   const fill=neutral?t.surface:mixColors(t.kind==='dark'?'#0d1918':'#ffffff',raw,t.kind==='dark'?.36:.48);
-  return{fill,text:readableColor(t.text,[fill],4.5),edge:readableColor(raw,[fill,t.surface],3),raw,name:neutral?'Neutral':t.slotNames[index]};
+  const out={fill,text:readableColor(t.text,[fill],4.5),edge:readableColor(raw,[fill,t.surface],3),raw,name:neutral?'Neutral':t.slotNames[index]};
+  for(const [role,ink]of Object.entries({muted:t.muted,danger:'#bd4f59',success:'#3a865c',warning:'#aa711e',info:'#357ca0',focus:t.focus}))out[role]=readableColor(ink,[fill,t.surface],4.6);
+  return out;
+}
+export function namedThemeVariables(t){
+  const surfaces=[t.canvas,t.surface,t.raised],accent=readableColor(t.accent,surfaces,4.5),onAccent=contrastRatio(accent,'#fffaf0')>=contrastRatio(accent,'#111111')?'#fffaf0':'#111111';
+  const v={'--color-bg':t.canvas,'--color-surface':t.surface,'--color-surface-2':t.surface,'--color-surface-3':mixColors(t.surface,t.text,.035),'--color-surface-elevated':t.raised,'--color-surface-work':t.surface,'--color-surface-raised':t.raised,'--color-surface-hover':mixColors(t.surface,t.text,.055),'--color-surface-elevated-hover':mixColors(t.raised,t.text,.05),'--color-border':mixColors(t.surface,t.text,.25),'--color-border-subtle':mixColors(t.surface,t.text,.13),'--color-border-strong':t.line,'--color-border-control':t.line,'--color-text-primary':t.text,'--color-text-secondary':t.muted,'--color-text-tertiary':t.muted,'--color-text-placeholder':t.muted,'--color-accent':accent,'--color-accent-hover':mixColors(accent,t.text,.12),'--color-accent-secondary':t.focus,'--color-accent-light':mixColors(t.surface,accent,.15),'--color-accent-subtle':mixColors(t.surface,accent,.09),'--color-btn-primary':accent,'--color-btn-primary-hover':mixColors(accent,t.text,.12),'--color-text-on-accent':onAccent,'--font-heading':t.font,'--named-theme-radius':t.round+'px','--named-theme-pattern':t.pattern,'--named-theme-focus':t.focus};
+  v['--focus-ring-color']=t.focus;v['--sidebar-bg']=t.surface;
+  for(const [name,color]of Object.entries({success:'#3a865c',warning:'#aa711e',danger:'#bd4f59',info:'#357ca0'})){const ink=readableColor(color,surfaces,4.5);v[`--color-${name}`]=ink;v[`--color-${name}-ink`]=ink;v[`--color-${name}-light`]=mixColors(t.surface,ink,.12);v[`--color-${name}-hover`]=mixColors(ink,t.text,.12);}
+  for(const slot of CARD_SLOTS){const p=cardColor(t,slot);for(const key of['fill','text','edge','muted','danger','success','warning','info','focus'])v[`--card-${slot}-${key}`]=p[key];}
+  return v;
 }
 const seasons=Object.freeze({spring:'spring-bloom',summer:'summer-coast',autumn:'autumn-leaves',winter:'winter-frost'});
 export function defaultNamedAppearance(timeZone='UTC'){return{version:1,theme:'neutral',timeZone,hemisphere:'north',seasons:{...seasons},outside:'seasons',holidays:[]};}

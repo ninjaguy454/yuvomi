@@ -1,3 +1,4 @@
+import {assignNewTaskCardColor} from './task-card-colors.js';
 /** One transaction for a child purchase and the parents' ordinary delivery Task. */
 import {createRedemption,decideRedemption,applyRedemptionDecision,postLedger,validateRedemptionKey,RewardError} from './rewards.js';
 import {setTaskAssignments} from './task-assignments.js';
@@ -35,6 +36,7 @@ export function createPrizeDelivery(d,row,child) {
       is_recurring,expiration_policy${scoring}) VALUES(?,?,NULL,?,0,'assignees',0,'keep_overdue'${scoringValues})`)
       .run(`Give ${child.display_name} ${row.reward_name}`,
         `Prize redemption #${row.id}: ${row.cost} points. Complete this Task after delivering the prize.`,parents[0]).lastInsertRowid);
+    assignNewTaskCardColor(d,taskId);
     setTaskAssignments(d,taskId,parents);
     d.prepare('INSERT INTO reward_fulfillment_task_links(redemption_id,task_id) VALUES(?,?)').run(row.id,taskId);
     notifyTaskAssignments(d,taskId,[],{sourceKey:`task:${taskId}:assigned:reward-redemption:${row.id}`});

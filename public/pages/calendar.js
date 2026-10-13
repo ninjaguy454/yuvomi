@@ -1,3 +1,4 @@
+import {cardColorAttribute} from '/utils/card-colors.js';
 import { memberLabel } from '/utils/member-label.js';
 /**
  * Modul: Kalender (Calendar)
@@ -1143,7 +1144,7 @@ function renderTaskChip(task, { interactive = true, icon = true } = {}) {
     ? `<span class="priority-dot priority-dot--${priority}" aria-hidden="true"></span>`
     : '';
   return `<div class="cal-task-chip cal-task-chip--${priority}"
-               data-task-id="${task.id}"${button}
+               data-task-id="${task.id}"${cardColorAttribute(task.card_color)}${button}
                title="${label}${absoluteDue ? ` · ${esc(absoluteDue)}` : esc(timeStr)}">
     ${icon ? '<i data-lucide="check-square" class="icon-sm" aria-hidden="true"></i>' : ''}
     ${dot}

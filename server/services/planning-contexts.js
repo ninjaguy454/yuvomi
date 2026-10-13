@@ -1,3 +1,4 @@
+import {assignNewTaskCardColor} from './task-card-colors.js';
 import { reconcilePlanningContextMealOccurrences } from './meal-plans.js';
 import { notifyPlanningContext, notifyPlanningConflict, notifyTaskObligations } from './notification-events.js';
 import { availabilityInstantMs } from './presence.js';
@@ -736,6 +737,7 @@ export function ensureTravelMealPlanTask(database, contextId, actorId = null) {
         )
       `).run(`Plan meals for ${context.name}.`, generatedDueDate, creatorId);
       const taskId = Number(result.lastInsertRowid);
+      assignNewTaskCardColor(database,taskId);
       database.prepare(`
         INSERT INTO task_assignment_context (
           task_id, strategy, state, override_allowed, beneficiary_user_id, source, rotation_key

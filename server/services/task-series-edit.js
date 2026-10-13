@@ -1,5 +1,7 @@
 /** Transactional reconciliation of already materialized series occurrences.
  * The existing recurrence generator remains the only generator. */
+import {assignNewTaskCardColor} from './task-card-colors.js';
+import {validateCardColorChoice} from '../../public/utils/card-colors.js';
 import { planSeriesOccurrence, recordOccurrenceDefinition, registerSeriesAction, normalizeSeriesDefinition, seriesActionAuthorization, definitionEqual, seriesRotationAssignment } from './task-series.js';
 import { assertTaskScoringMutation, taskScoringIdentity } from './task-scoring.js';
 import { assertTaskMutation, taskCapabilities } from './task-access.js';
@@ -56,13 +58,14 @@ export function proposedFutureSeriesDefinition(d,actor,root,before,patch,{valida
   if(!object(patch)||Object.keys(patch).some(key=>!['fields','actions'].includes(key)))bad();
   const after=clone(before),fields=patch.fields??{},operations=patch.actions??{};
   if(!object(fields)||!object(operations)||Object.keys(operations).some(key=>!['update','add','remove','order'].includes(key)))bad();
-  const rootAllowed=ROOT_FIELDS.filter(key=>!['scoring_review_required','rotation_bindings_json'].includes(key)).concat(['assigned_to','rotation_user_ids','skill_ids','tags','location','rotation_bindings']);
+  const rootAllowed=ROOT_FIELDS.filter(key=>!['scoring_review_required','rotation_bindings_json'].includes(key)).concat(['assigned_to','rotation_user_ids','skill_ids','tags','location','rotation_bindings','card_color_choice']);
   const actionAllowed=ACTION_FIELDS.filter(key=>key!=='sort_order').concat(['assigned_user_ids','skill_ids','tags']);
   const apply=(target,input,allowed)=>{
     if(!object(input)||Object.keys(input).some(key=>!allowed.includes(key)))bad();input=validateFields(input)||input;
     for(const [key,value] of Object.entries(input)) {
       if(key==='assigned_to'||key==='assigned_user_ids'){target.assigned_user_ids=[...value];target.authorization={...target.authorization,assigned_user_ids:[...value]};}
       else if(['rotation_user_ids','skill_ids','tags','location'].includes(key))target[key]=clone(value);
+      else if(key==='card_color_choice')target.task.card_color_policy=validateCardColorChoice(value);
       else if(key==='rotation_bindings')target.task.rotation_bindings_json=JSON.stringify(value);
       else target.task[key]=key==='title'?value.trim():key==='points'?Number(value):value;
     }
@@ -193,6 +196,7 @@ export function assertSeriesDefinitionMutation(d,actor,task,before,after,{future
     change_dates:['calendar_lead_days','due_date_offset_days','start_time','due_time','expiration_policy','is_recurring','recurrence_rule','recurrence_from_completion'],
     change_assignment:['assignment_mode','rotation_group','rotation_slot']};
   const assertConfiguration=(old,newValue,capabilities)=>{
+    if(!same(old.task?.card_color_policy,newValue.task?.card_color_policy))requireCapability(capabilities,'edit');
     for(const [permission,names] of Object.entries(fields))if(names.some(name=>!same(old.task?.[name],newValue.task?.[name]))) {
       requireCapability(capabilities,permission);
       if(permission==='change_assignment')requireCapability(capabilities,'reassign');
@@ -329,8 +333,8 @@ function reconcileOccurrence(d,task,definition,window,actor) {
     const originalCreator=seriesActionAuthorization(d,action).created_by;
     const creator=originalCreator==null?null:d.prepare('SELECT id FROM users WHERE id=?').get(originalCreator)?.id??null;
     if(id)d.prepare(`UPDATE tasks SET ${ACTION_FIELDS.map(key=>`${key}=?`).join(',')} WHERE id=?`).run(...ACTION_FIELDS.map(key=>value[key]??null),id);
-    else id=Number(d.prepare(`INSERT INTO tasks(${ACTION_FIELDS.join(',')},status,parent_task_id,created_by)
-      VALUES(${ACTION_FIELDS.map(()=>'?').join(',')},'open',?,?)`).run(...ACTION_FIELDS.map(key=>value[key]??null),task.id,creator).lastInsertRowid);
+    else {id=Number(d.prepare(`INSERT INTO tasks(${ACTION_FIELDS.join(',')},status,parent_task_id,created_by)
+      VALUES(${ACTION_FIELDS.map(()=>'?').join(',')},'open',?,?)`).run(...ACTION_FIELDS.map(key=>value[key]??null),task.id,creator).lastInsertRowid);assignNewTaskCardColor(d,id,action.task.card_color_policy?{choice:action.task.card_color_policy}:{inheritFrom:task.id});}
     registerSeriesAction(d,id,task.id,action.action_key);
     assignments(d,id,action.assigned_user_ids);setTaskSkills(d,id,action.skill_ids);setTags(d,id,action.tags);
   }

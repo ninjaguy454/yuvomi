@@ -18,10 +18,10 @@ export function createTaskCardSubtasks({ children, canComplete, send, invalidate
       getTask: () => record.task,
       getChild: childId => children(record.task).find(child => Number(child.id) === childId),
       canDispatch: child => canComplete(record.task, child),
-      send: async (child, status) => {
+      send: async (child, status,context) => {
         record.sentEpoch = record.liveEpoch;
         invalidateReads();
-        const snapshot = await send(child, status, record.task);
+        const snapshot = await send(child, status, record.task,context);
         record.saved = true;
         invalidateReads();
         return snapshot;
@@ -60,8 +60,8 @@ export function createTaskCardSubtasks({ children, canComplete, send, invalidate
     return record;
   }
   return {
-    enqueue(task, childId, status) {
-      return !disposed && recordFor(task).queue.enqueue(childId, status);
+    enqueue(task, childId, status,context=null) {
+      return !disposed && recordFor(task).queue.enqueue(childId, status,context);
     },
     /** Called only for authoritative list reads, before rendering their markup. */
     reconcile(tasks) {

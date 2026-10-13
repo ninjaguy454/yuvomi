@@ -15,6 +15,8 @@ import {skipTaskOccurrence,taskSkipUnsupportedReason,taskSkipHasRotationScope} f
 import { createLogger } from '../logger.js';
 import { randomUUID } from 'node:crypto';
 import express from 'express';
+import {assignNewTaskCardColor,setTaskCardColor,freezeSeriesCardColorPolicy} from '../services/task-card-colors.js';
+import {validateCardColorChoice} from '../../public/utils/card-colors.js';
 import * as db from '../db.js';
 import { documentVisibleSql } from '../services/document-access.js';
 import { nextDueAfterCompletion, nextDueAfterExpiration } from '../services/recurrence.js';
@@ -375,6 +377,7 @@ function assertCompatibleFutureDefinition(req,task,series,definition) {
  * this intent rather than forecasting settled selected work. */
 function compatibleFutureDefinition(req,task,series,before,edited,{normalizeSchedule=true}={}) {
   const body=req.body,fields={...before.task};
+  if(body.card_color_choice!==undefined)fields.card_color_policy=validateCardColorChoice(body.card_color_choice);
   for(const key of ['title','description','category','priority','start_date','start_time','due_date','due_time','is_recurring','recurrence_rule',
     'recurrence_from_completion','points','scoring_mode','visibility','countdown','locked','expiration_policy','is_optional'])if(body[key]!==undefined)fields[key]=body[key];
   if(typeof fields.title!=='string'||!fields.title.trim())throw new TaskStateError('Give the Task a title.',{},400);
@@ -654,6 +657,7 @@ function decorateScoringUnits(preview,before,after,{futureIds=null,drafts=[]}={}
 }
 function futureEditProjection(req,task,definition,state) {
   const fields=Object.fromEntries(['title','description','points','scoring_mode','visibility','priority','category','start_date','start_time','due_date','due_time','due_date_offset_days','is_recurring','recurrence_rule','recurrence_from_completion','expiration_policy','locked','countdown','assignment_mode','rotation_group','rotation_slot'].map(key=>[key,definition.task[key]]));
+  fields.card_color_choice=definition.task.card_color_policy;
   fields.assigned_to=definition.assigned_user_ids;fields.skill_ids=definition.skill_ids;fields.tags=definition.tags;
   fields.rotation_user_ids=definition.rotation_user_ids;fields.rotation_bindings=parseRotationBindings(definition.task.rotation_bindings_json);
   return {task_id:task.id,effective_generation:state.occurrence.generation+1,review_required:!!definition.task.scoring_review_required,permissions:futureRootCapabilities(db.get(),req,task,definition),fields,
@@ -960,9 +964,9 @@ function applyEditedSubtasks(task, edited, actorId) {
       assertOptionalityEdit(db.get().prepare('SELECT * FROM tasks WHERE id=?').get(id),child.isOptional);
       db.get().prepare('UPDATE tasks SET title=?,sort_order=?,is_optional=?,points=? WHERE id=?').run(child.title,order,child.isOptional,child.points,id);
     }
-    else id=Number(db.get().prepare(`INSERT INTO tasks(title,category,status,start_date,due_date,due_time,
+    else {id=Number(db.get().prepare(`INSERT INTO tasks(title,category,status,start_date,due_date,due_time,
       parent_task_id,created_by,visibility,sort_order,start_time,is_optional,points) VALUES(?,?,'open',?,?,?,?,?,?,?,?,?,?)`)
-      .run(child.title,task.category,task.start_date,task.due_date,task.due_time,task.id,actorId,task.visibility,order,task.start_time,child.isOptional,child.points).lastInsertRowid);
+      .run(child.title,task.category,task.start_date,task.due_date,task.due_time,task.id,actorId,task.visibility,order,task.start_time,child.isOptional,child.points).lastInsertRowid);assignNewTaskCardColor(db.get(),id,{inheritFrom:task.id});}
     if(!sameIdOrder(loadTaskSkillIds(db.get(),id),child.skillIds))setTaskSkills(db.get(),id,child.skillIds);
     if(child.assignedUsers!==undefined) {
       assertTaskSkillAssignments(db.get(),child.skillIds,child.assignedUsers,task.due_date||todayInHouseholdZone(),{allowDelegation:true});
@@ -1464,6 +1468,7 @@ function validateTags(value) {
  * Feld an einer Regel, die niemand angefasst hat (#756, Kalender-Gegenstück).
  */
 function validateTaskInput(body, isCreate = true, currentRule = undefined) {
+  if(body.card_color_choice!==undefined){try{validateCardColorChoice(body.card_color_choice);}catch(error){return[error.message];}}
   const ruleUnchanged = !isCreate
     && body.recurrence_rule !== undefined
     && body.recurrence_rule === currentRule;
@@ -2273,6 +2278,7 @@ export function createTaskDefinition(req, res) {
         assignmentMode, rotationIndex, rotationGroup, rotationSlot || 0, rotationCycle,
         points, visibility, countdown ? 1 : 0, req.body.locked ? 1 : 0, start_time, expiration_policy, is_optional ? 1 : 0, due_date_offset_days
       );
+      assignNewTaskCardColor(db.get(),result.lastInsertRowid,req.body.card_color_choice?{choice:req.body.card_color_choice}:parent_task_id?{inheritFrom:parent_task_id}:{});
       setAssignments(db.get(), result.lastInsertRowid, userIds);
       authoredRotationFields.set(Number(result.lastInsertRowid),{title,description});
       db.get().prepare('UPDATE tasks SET rotation_bindings_json=? WHERE id=?').run(JSON.stringify(rotationBindings),result.lastInsertRowid);
@@ -2298,6 +2304,7 @@ export function createTaskDefinition(req, res) {
         for (const child of initialSubtasks) {
           const childId = Number(insertChild.run(child.title, category, req.authUserId || req.session.userId,
             result.lastInsertRowid, start_date, due_date, due_time, visibility, start_time, child.isOptional ?? 0, child.points ?? 0).lastInsertRowid);
+          assignNewTaskCardColor(db.get(),childId,{inheritFrom:result.lastInsertRowid});
           authoredRotationFields.set(childId,{title:child.title});
           setTaskSkills(db.get(), childId, child.skillIds);
           if(child.templateItemId)db.get().prepare('UPDATE tasks SET activity_template_checklist_item_id=? WHERE id=?').run(child.templateItemId,childId);
@@ -2721,7 +2728,7 @@ export function updateTaskDefinition(req, res) {
         ||child.points!==Number(currentChildren[index]?.points||0)
         ||child.assignedUsers!==undefined&&!sameIdOrder(child.assignedUsers,db.get().prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(child.id).map(row=>row.user_id))
         ||!sameIdOrder(child.skillIds,loadTaskSkillIds(db.get(),child.id))));
-    const definitionChanged=Object.entries(definitionFields).some(([key,value])=>!sameFieldValue(value,task[key]))
+    const definitionChanged=req.body.card_color_choice!==undefined||Object.entries(definitionFields).some(([key,value])=>!sameFieldValue(value,task[key]))
       ||childrenChanged||bindingChanged||!sameIdOrder(skillIds,skillsBefore)
       ||!sameIdOrder(userIds,assignedBefore)||!sameIdOrder(rotationUserIds,rotationBefore)
       ||req.body.tags!==undefined&&tagsKey(normalizeTags(req.body.tags))!==tagsKey(tagsBefore)
@@ -2750,6 +2757,7 @@ export function updateTaskDefinition(req, res) {
       assertTaskRevision(db.get(),current,req.body,{required:true,requireParent:true});
       assertTaskMutation(db.get(),req,current,req.body,{operation:'update'});
       req.validateDeviceDefinition?.({points,assigned_to:userIds,start_date,start_time,due_date,due_time,expiration_policy,is_recurring,recurrence_rule,recurrence_from_completion});
+      if(req.body.card_color_choice!==undefined)freezeSeriesCardColorPolicy(db.get(),current.id);
       const series=ensureSeriesDefinition(db.get(),current.id);
       if(editScope==='future')assertSeriesEdit(db.get(),req,current,series,req.body.expected_series_revision);
       const beforeDefinition=series?captureSeriesDefinition(db.get(),current.id):null;
@@ -2802,6 +2810,7 @@ export function updateTaskDefinition(req, res) {
              is_recurring ? 1 : 0, recurrence_rule, recurrence_from_completion ? 1 : 0,
              assignmentMode, rotationIndex, rotationGroup, rotationSlot || 0, rotationCycle,
              points, visibility, countdown ? 1 : 0, locked, start_time, expiration_policy, is_optional ? 1 : 0, dueDateOffset, req.params.id);
+      if(req.body.card_color_choice!==undefined)setTaskCardColor(db.get(),current.id,req.body.card_color_choice);
       if(req.body.scoring_mode!==undefined)db.get().prepare('UPDATE tasks SET scoring_mode=?,scoring_review_required=0 WHERE id=?').run(scoringMode,current.id);
       applyEditedSubtasks({...task,start_date,start_time,due_date,due_time},editedSubtasks,req.authUserId||req.session.userId);
       if(rotationsChanged)db.get().prepare('UPDATE tasks SET rotation_bindings_json=? WHERE id=?').run(rotationBindingsJson,task.id);
@@ -3211,6 +3220,7 @@ function spawnRecurrenceFollowupSingle(task, {expirationAnchor=false}={}) {
       task.countdown ? 1 : 0,
       task.id, task.start_time, task.expiration_policy || 'keep_overdue', task.due_date_offset_days ?? null,task.locked||0
     );
+    if(task.card_color_policy)assignNewTaskCardColor(db.get(),newTask.lastInsertRowid,{choice:task.card_color_policy});else assignNewTaskCardColor(db.get(),newTask.lastInsertRowid,{legacySlot:null});
     if(task.source_device_id||task.source_device_name) db.get().prepare('UPDATE tasks SET source_device_id=?,source_device_name=? WHERE id=?')
       .run(task.source_device_id??null,task.source_device_name??null,newTask.lastInsertRowid);
     db.get().prepare('UPDATE tasks SET scoring_mode=?,scoring_review_required=? WHERE id=?')
@@ -3247,6 +3257,7 @@ function spawnRecurrenceFollowupSingle(task, {expirationAnchor=false}={}) {
         sub.due_time, subAssignedTo, creator, newTask.lastInsertRowid,
         sub.points, sub.visibility, originId, checklistItemId, sub.start_time, sub.expiration_policy || 'keep_overdue', sub.is_optional || 0,sub.sort_order||0,sub.locked||0
       );
+      assignNewTaskCardColor(db.get(),newSub.lastInsertRowid,sub.card_color_policy?{choice:sub.card_color_policy}:{inheritFrom:newTask.lastInsertRowid});
       registerSeriesAction(db.get(),Number(newSub.lastInsertRowid),Number(newTask.lastInsertRowid),savedSub.action_key);
       setAssignments(db.get(), newSub.lastInsertRowid, subAssignments);
       setTags(db.get(), newSub.lastInsertRowid, subTags);

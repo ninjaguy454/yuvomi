@@ -1,3 +1,4 @@
+import {assignNewTaskCardColor} from './task-card-colors.js';
 /** Linked supervision uses the source action's Task status as its only completion authority. */
 import { effectiveSkillProficiency, householdMembers, sharedEligibleInterval } from './activity-eligibility.js';
 import { activityPresenceWindow, evaluateAvailability, availabilityInstantMs } from './presence.js';
@@ -536,6 +537,7 @@ function insertProjection(d, source, title, parentId, assignedTo) {
     assigned_to,created_by,parent_task_id,points,visibility) VALUES(?,NULL,?,'none','open',?,?,?,?,?,?,?,0,?)`)
     .run(title, source.category || 'misc', source.start_date, source.start_time ?? null, source.due_date, source.due_time,
       assignedTo || null, source.created_by, parentId, source.visibility || 'all').lastInsertRowid);
+  assignNewTaskCardColor(d,id,{inheritFrom:source.id});
   d.prepare(`INSERT INTO task_planning_context(task_id,place_id,presence_policy,presence_window,source)
     SELECT ?,place_id,presence_policy,presence_window,source FROM task_planning_context WHERE task_id = ?`).run(id, source.id);
   return id;

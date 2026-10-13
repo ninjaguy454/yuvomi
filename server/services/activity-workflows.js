@@ -1,3 +1,4 @@
+import {assignNewTaskCardColor} from './task-card-colors.js';
 import { reconcileTaskSupervision, assertTaskSupervisionAssignee } from './task-supervision.js';
 /**
  * Reusable activity/workflow engine.
@@ -557,6 +558,7 @@ function insertTask(d, {
     dueDateOffsetDays,
   );
   const taskId = Number(result.lastInsertRowid);
+  assignNewTaskCardColor(d,taskId,parentTaskId?{inheritFrom:parentTaskId}:{});
   setTags(d, taskId, tags);
   if (assignedTo) {
     d.prepare('INSERT OR IGNORE INTO task_assignments (task_id, user_id) VALUES (?, ?)')

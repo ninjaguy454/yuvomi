@@ -35,6 +35,18 @@ function seed({start='2026-10-26',due='2026-10-30',offset=4,rule='FREQ=WEEKLY;BY
 function finish(id,now='2026-10-30T11:30:00Z'){
   return changeTaskStatus(d,id,'done',{actorId:2,requireRevision:false,body:{complete_remaining:true},now:new Date(now)});
 }
+test('a one-off color override freezes legacy series NULL before source mutation',async()=>{
+  const {freezeSeriesCardColorPolicy,setTaskCardColor}=await import('../server/services/task-card-colors.js');const id=seed(),state=taskSeriesState(d,id),old=structuredClone(state.definition.data);
+  delete old.task.card_color_policy;for(const action of old.subtasks)delete action.task.card_color_policy;d.prepare('UPDATE task_recurrence_definitions SET definition_json=? WHERE id=?').run(JSON.stringify(old),state.definition.id);
+  d.transaction(()=>{freezeSeriesCardColorPolicy(d,id);setTaskCardColor(d,id,{version:1,mode:'fixed',slot:'slot-09-v1'});})();finish(id);
+  assert.equal(row(id).card_color,'slot-09-v1');assert.equal(next(id).card_color,null);assert.equal(seriesDefinitionForGeneration(d,state.series_id,1).data.task.card_color_policy,null);
+});
+test('future color policy preserves materialized cards and applies only to a newly generated identity',async()=>{
+  const {reconcileSeriesFuture}=await import('../server/services/task-series-edit.js');const id=seed();finish(id);const materialized=next(id),state=taskSeriesState(d,id),definition=structuredClone(state.definition.data);
+  definition.task.card_color_policy={version:1,mode:'fixed',slot:'slot-04-v1'};definition.task.title='Updated future title';const revised=appendSeriesDefinition(d,id,{expectedRevision:state.revision,actorId:1,definition,effectiveGeneration:1});
+  reconcileSeriesFuture(d,revised,{actor:1,scope:'future_only'});assert.equal(row(materialized.id).card_color,null);assert.equal(row(materialized.id).title,'Updated future title');assert.equal(row(id).card_color,null);
+  finish(materialized.id,'2026-11-06T11:30:00Z');assert.equal(next(materialized.id).card_color,'slot-04-v1');
+});
 
 test('occurrence-only title, points, timing, recurrence and checklist edits never seed future definitions',()=>{
   const id=seed(),state=taskSeriesState(d,id),originalKeys=state.definition.data.subtasks.map(child=>child.action_key);

@@ -1,3 +1,4 @@
+import {assignNewTaskCardColor} from './task-card-colors.js';
 import {createHash} from 'node:crypto';
 import {actorPermissions} from '../permissions.js';
 import {isHouseholdMember} from './member-email.js';
@@ -170,6 +171,7 @@ export function createCyclePlanningTask(d,c,purpose,beneficiaryId,obligations,{o
   const due=utcToWall(at,c.timezone),title={personal:'Choose your meals',correction:'Review changed meal choices',review:'Review household meals',shopping:'Shop for household meals',automatic_followup:'Resolve blocked Kitchen confirmation'}[purpose];
   const taskId=Number(d.prepare(`INSERT INTO tasks(title,description,category,status,due_date,due_time,assigned_to,created_by,is_recurring,assignment_mode,points,visibility,expiration_policy)
     VALUES(?,?,'household','open',?,?,?,?,0,'fixed',0,'all','keep_overdue')`).run(title,`Kitchen ${c.period_start} to ${c.period_end}`,due.date,due.time.slice(0,5),beneficiaryId,settings.coordinator_id).lastInsertRowid);
+  assignNewTaskCardColor(d,taskId);
   d.prepare('INSERT INTO task_assignments(task_id,user_id) VALUES(?,?)').run(taskId,beneficiaryId);
   d.prepare(`INSERT INTO task_assignment_context(task_id,strategy,state,override_allowed,beneficiary_user_id,source)
     VALUES(?,'fixed','assigned',0,?,'meal_cycle')`).run(taskId,beneficiaryId);

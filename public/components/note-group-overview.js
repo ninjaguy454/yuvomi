@@ -1,3 +1,4 @@
+import {normalizeCardColorSlot} from '/utils/card-colors.js';
 import { t } from '../i18n.js';
 import { createNoteGroupDraft, freezeNoteGroupCommand, orderedSelection, moveSelectionBefore, newNoteGroupOperationId } from '../utils/note-group-draft.js';
 import { createNoteGroupGesture } from '../utils/note-group-gesture.js';
@@ -171,6 +172,7 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
       const previous = cardNotes.get(card);
       card.hidden = false; card.inert = false;
       card.className = 'note-card note-group-overview__page'; card.dataset.groupPage = String(id); card.classList.toggle('is-selected', selected.has(id));
+      const slot=normalizeCardColorSlot(note.card_color_slot);if(slot)card.dataset.cardColor=slot;else card.removeAttribute('data-card-color');
       if (typeof note.color === 'string' && CSS.supports('color', note.color)) card.style.setProperty('--note-color', note.color);
       else card.style.removeProperty('--note-color');
       const surface = card.querySelector(':scope > div.note-card__surface') || document.createElement('div'); surface.className = 'note-card__surface';

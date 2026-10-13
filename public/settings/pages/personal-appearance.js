@@ -13,6 +13,10 @@ import { api } from '/api.js';
 import { clearApiCache } from '/sw-register.js';
 import { setDisplayTimeZone } from '/utils/timezone.js';
 import { applyAppearancePreferences, normalizeAppearancePreferences, appearanceRevision } from '/utils/appearance-preferences.js';
+import {mountNamedAppearancePicker} from '/components/named-appearance-picker.js';
+import {mountUiSoundSettings} from '/components/ui-sound-settings.js';
+import {currentNamedAppearance} from '/utils/named-appearance-runtime.js';
+import {currentUiSounds} from '/utils/ui-sounds.js';
 import {
   CUSTOM_REGION,
   REGION_CODES,
@@ -213,6 +217,8 @@ function renderPage(container, preferences, isAdmin) {
   container.insertAdjacentHTML('beforeend', `
     <section class="settings-section">
       <h2 class="settings-section__title">${t('appearanceOptions.theme')} &amp; ${t('appearanceOptions.typography')}</h2>
+      <div class="settings-card" data-personal-named-appearance></div>
+      <details data-legacy-appearance${appearance.named_appearance?' hidden':''}><summary>${t('namedAppearance.legacy')}</summary>
       <div class="settings-card">
         <p class="form-label" id="appearance-mode-label">${t('appearanceOptions.appearance')}</p>
         <div class="theme-toggle" id="theme-toggle" role="group" aria-labelledby="appearance-mode-label">
@@ -249,6 +255,8 @@ function renderPage(container, preferences, isAdmin) {
         </div>
         <p class="form-error" id="appearance-choice-error" role="alert" hidden></p>
       </div>
+      </details>
+      <div class="settings-card" data-personal-ui-sounds></div>
       <!-- DER WAND-MODUS WOHNT HIER UND NICHT IM ANPASSEN-PANEL.
            Er ist wie Theme und Sprache GERÄTELOKAL (localStorage) - das
            Anpassen-Panel schreibt dagegen die haushaltweite Widget-Konfiguration
@@ -721,6 +729,32 @@ export async function render(container, { user }) {
       appendCurrencyOptions(container.querySelector('#currency-select'), preferences.currency);
     }
     bindEvents(container, user);
+    let savedAppearance=normalizeAppearancePreferences(preferences);
+    mountNamedAppearancePicker(container.querySelector('[data-personal-named-appearance]'),{
+      value:savedAppearance.named_appearance,
+      timeZone:preferences.timezone_effective||preferences.timezone||Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC',
+      onChange:async named_appearance=>{
+        const requested={...savedAppearance,color_theme:document.documentElement.getAttribute('data-color-theme'),heading_font:document.documentElement.getAttribute('data-typography'),ui_sounds:currentUiSounds(),named_appearance};
+        applyAppearancePreferences(requested);
+        const revision=appearanceRevision();
+        try {
+          await savePreferences({named_appearance});
+          if(appearanceRevision()!==revision) return;
+          savedAppearance=requested;
+          if(container.isConnected) container.querySelector('[data-legacy-appearance]').hidden=!!named_appearance;
+        } catch(error) {
+          if(appearanceRevision()===revision) applyAppearancePreferences(savedAppearance);
+          throw error;
+        }
+      }
+    });
+    let savedSounds=currentUiSounds();
+    mountUiSoundSettings(container.querySelector('[data-personal-ui-sounds]'),{value:savedSounds,onChange:async ui_sounds=>{
+      const snapshot={color_theme:document.documentElement.getAttribute('data-color-theme'),heading_font:document.documentElement.getAttribute('data-typography'),named_appearance:currentNamedAppearance(),ui_sounds:savedSounds};
+      applyAppearancePreferences({...snapshot,ui_sounds});const revision=appearanceRevision();
+      try{await savePreferences({ui_sounds});if(appearanceRevision()===revision)savedSounds=ui_sounds;}
+      catch(error){if(appearanceRevision()===revision)applyAppearancePreferences(snapshot);throw error;}
+    }});
     window.lucide?.createIcons({ el: container });
   } catch {
     if (!container.isConnected || appearanceRevision() !== renderAppearanceRevision) return;

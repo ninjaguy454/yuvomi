@@ -63,7 +63,7 @@ test('configuration disclosure, cancel and save preserve independent permissions
   await page.click('[data-device-edit]'); await page.waitForSelector('[data-device-config]');
   for(const key of ['move','pin','group','ungroup'])assert.equal(await page.$eval(`[name="note:${key}"]`,input=>input.value),'legacy');
   await page.screenshot({ path: join(output, 'initial.png') });
-  assert.equal(await page.$$eval('[data-device-config] details', nodes => nodes.length), 3, 'advanced controls have three native disclosure sections');
+  assert.equal(await page.$$eval('[data-device-config] details.device-config__section', nodes => nodes.length), 3, 'advanced device controls have three native disclosure sections');
   const initial = await page.$eval('[data-device-config]', form => [...new FormData(form)]);
   for (const [name, width, height] of [['mobile', 390, 844], ['open-fold', 884, 1104], ['wall', 1920, 1080], ['desktop', 1440, 1050]]) {
     for (const theme of ['light', 'dark']) {
@@ -94,7 +94,7 @@ test('configuration disclosure, cancel and save preserve independent permissions
   }
   await page.setViewport({ width: 1440, height: 1050 });
   await page.evaluate(() => document.documentElement.style.fontSize = '100%');
-  const summaries = await page.$$('[data-device-config] summary');
+  const summaries = await page.$$('[data-device-config] details.device-config__section > summary');
   await page.$$eval('[data-device-config] details', nodes => nodes.forEach(node => node.open = false));
   for (const summary of summaries) { await summary.focus(); await page.keyboard.press('Enter'); }
   assert.deepEqual(await page.$eval('[data-device-config]', form => [...new FormData(form)]), initial, 'opening sections changes no values');

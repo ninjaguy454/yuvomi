@@ -1,0 +1,25 @@
+import assert from 'node:assert/strict';import test from 'node:test';import express from 'express';
+import {defaultNamedAppearance} from '../public/utils/named-appearance.js';
+process.env.DB_PATH=':memory:';process.env.SESSION_SECRET||='named-preferences-synthetic-secret';
+const {get}=await import('../server/db.js'),{default:router}=await import('../server/routes/preferences.js');
+let userId=1,role='member',server,base;
+test.before(async()=>{for(const id of[1,2])get().prepare("INSERT INTO users(id,username,display_name,password_hash,role)VALUES(?,?,?,'x','member')").run(id,`theme-person-${id}`,`Theme person ${id}`);const app=express();app.use(express.json());app.use((req,res,next)=>{req.authUserId=userId;req.authRole=role;next();});app.use(router);server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));base=`http://127.0.0.1:${server.address().port}`;});
+test.after(()=>new Promise(r=>server.close(r)));
+test.beforeEach(()=>{userId=1;role='member';get().prepare("DELETE FROM sync_config WHERE key LIKE 'named_appearance%' OR key LIKE 'ui_sounds%'").run();});
+const request=async patch=>{const r=await fetch(base,patch?{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(patch)}:{});return{status:r.status,body:await r.json()};};
+const visual={...defaultNamedAppearance('America/New_York'),theme:'holidays',holidays:[{enabled:true,theme:'christmas',start:'2026-12-20',end:'2026-12-29'}]},sounds={version:1,mode:'pack',pack:'wood',volume:15};
+test('legacy accounts remain unchanged and silent until explicit selection',async()=>{const {body}=await request();assert.equal(body.data.named_appearance,null);assert.deepEqual(body.data.ui_sounds,{version:1,mode:'off',pack:'soft',volume:15});});
+test('members persist complete Dynamic configuration and independent audio only for their own account',async()=>{const r=await request({named_appearance:visual,ui_sounds:sounds});assert.equal(r.status,200);assert.deepEqual(r.body.data.named_appearance,visual);assert.deepEqual(r.body.data.ui_sounds,sounds);userId=2;const other=await request();assert.equal(other.body.data.named_appearance,null);assert.equal(other.body.data.ui_sounds.mode,'off');userId=1;assert.deepEqual((await request()).body.data.named_appearance,visual);});
+test('invalid graph or sound writes reject atomically before personal or household mutations',async()=>{for(const patch of[{named_appearance:{...visual,outside:'holidays'}},{ui_sounds:{...sounds,volume:101}}]){const r=await request({...patch,color_theme:'warm'});assert.equal(r.status,400);assert.equal((await request()).body.data.color_theme,'neutral');assert.equal((await request()).body.data.named_appearance,null);}});
+test('partial edits preserve visual/audio and explicit reset leaves legacy preferences intact',async()=>{await request({named_appearance:visual,ui_sounds:sounds});await request({color_theme:'cool',heading_font:'serif'});assert.deepEqual((await request()).body.data.ui_sounds,sounds);const r=await request({named_appearance:null});assert.equal(r.body.data.named_appearance,null);assert.equal(r.body.data.color_theme,'cool');assert.equal(r.body.data.heading_font,'serif');assert.deepEqual(r.body.data.ui_sounds,sounds);});
+test('unknown stored future fields safely render legacy without rewriting data',async()=>{get().prepare("INSERT INTO sync_config(key,value)VALUES('named_appearance:user:1',?)").run('{"version":2,"theme":"future"}');assert.equal((await request()).body.data.named_appearance,null);assert.equal(get().prepare("SELECT value FROM sync_config WHERE key='named_appearance:user:1'").get().value,'{"version":2,"theme":"future"}');});
+test('personal named configuration never inherits a household fallback value',async()=>{get().prepare("INSERT INTO sync_config(key,value)VALUES('named_appearance',?)").run(JSON.stringify(visual));assert.equal((await request()).body.data.named_appearance,null);});
+test('household color defaults require administrator capability and invalid choices reject before other writes',async()=>{
+  const fixed={version:1,mode:'fixed',slot:'slot-08-v1'};
+  assert.equal((await request()).body.data.task_card_color_default.slot,'neutral-v1');
+  assert.equal((await request({task_card_color_default:fixed})).status,403);
+  get().prepare("UPDATE users SET role='admin' WHERE id=1").run();role='admin';
+  assert.equal((await request({task_card_color_default:fixed})).status,200);assert.deepEqual((await request()).body.data.task_card_color_default,fixed);
+  const previous=(await request()).body.data.color_theme;assert.equal((await request({task_card_color_default:{version:1,mode:'default'},color_theme:'warm'})).status,400);assert.equal((await request()).body.data.color_theme,previous);
+  get().prepare("UPDATE users SET role='member' WHERE id=1").run();
+});

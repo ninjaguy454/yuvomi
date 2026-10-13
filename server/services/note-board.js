@@ -1,11 +1,12 @@
 import {actorId} from '../permissions.js';
+import {normalizeCardColorSlot} from '../../public/utils/card-colors.js';
 import {str,color,collectErrors,MAX_TEXT,MAX_TITLE} from '../middleware/validate.js';
 import {toggleChecklistLine} from '../../public/utils/markdown-checklist.js';
 import {noteDevice,noteError,noteVisibleSql,noteCapabilities,assertNoteAction,noteMembers,normalizeNoteAudience} from './note-access.js';
 import {readNoteGroup,groupLayout,assertStandaloneLayoutWrite,groupsAffectedByNoteDeletion,cleanupGroupsAfterNoteDeletion} from './note-group-store.js';
 import {noteLayoutOwnerKey,ensureNoteLayoutOwner,readNoteOwnerLayout} from './note-layout-owner.js';
 
-const fields=['title','content','color','pinned','visibility','access_user_ids','expected_revision'];
+const fields=['title','content','color','card_color_slot','pinned','visibility','access_user_ids','expected_revision'];
 const idValue=id=>{if(!Number.isSafeInteger(Number(id))||Number(id)<1)throw noteError('Note not found.',404);return Number(id);};
 function requireNote(d,p,id,action){const note=d.prepare('SELECT * FROM notes WHERE id=?').get(idValue(id));if(!note)throw noteError('Note not found.',404);assertNoteAction(d,p,note,action);return note;}
 function revision(note,body,{required=false}={}){
@@ -63,7 +64,7 @@ function project(d,p,n,layouts){
   const creator=n.created_by?d.prepare('SELECT display_name,avatar_color,avatar_data FROM users WHERE id=?').get(n.created_by):null;
   const source=n.created_by_device?d.prepare('SELECT name FROM household_devices WHERE id=?').get(n.created_by_device):null;
   const scoped=!device||!device.scope?.member_ids?.length||device.scope.member_ids.includes(n.created_by);
-  const out={id:n.id,title:n.title,content:n.content,color:n.color,pinned:n.pinned,visibility:n.visibility,revision:n.revision,
+  const out={id:n.id,title:n.title,content:n.content,color:n.color,card_color_slot:normalizeCardColorSlot(n.card_color_slot),pinned:n.pinned,visibility:n.visibility,revision:n.revision,
     created_at:n.created_at,updated_at:n.updated_at,creator_name:source?.name||(scoped?creator?.display_name:null)||null,
     creator_color:scoped?creator?.avatar_color||null:null,permissions,layout:(layouts||projectedLayouts(d,p)).get(n.id)};
   if(!device){out.created_by=n.created_by;out.created_by_device=n.created_by_device;out.creator_avatar=creator?.avatar_data||null;}
@@ -91,6 +92,9 @@ export function saveNote(d,p,id,body={}){
     if(!body||typeof body!=='object'||Array.isArray(body)||Object.keys(body).some(key=>!fields.includes(key)))throw noteError('Invalid Notes fields.');
     const checks=[str(body.content??previous?.content,'Content',{max:MAX_TEXT,required:!previous}),str(body.title===undefined?previous?.title:body.title,'Title',{max:MAX_TITLE,required:false}),color(body.color??previous?.color??'#FFEB3B','Color')];
     const errors=collectErrors(checks);if(errors.length)throw noteError(errors.join(' '));
+    if(body.card_color_slot!==undefined&&body.card_color_slot!==null&&!normalizeCardColorSlot(body.card_color_slot))throw noteError('Choose a supported Note color.');
+    const slot=body.card_color_slot!==undefined?body.card_color_slot:
+      previous&&body.color!==undefined&&checks[2].value?.toLowerCase()!==previous.color?.toLowerCase()?null:previous?.card_color_slot??null;
     if(body.pinned!==undefined&&![true,false,0,1].includes(body.pinned))throw noteError('Invalid pinned value.');
     const audience=normalizeNoteAudience(d,p,body,previous);
     // Blind Edit-only devices retain Phase1's independent grant; readers must
@@ -103,6 +107,7 @@ export function saveNote(d,p,id,body={}){
       id=Number(d.prepare('INSERT INTO notes(content,title,color,pinned,visibility,created_by,created_by_device) VALUES(?,?,?,?,?,?,?)').run(checks[0].value,checks[1].value,checks[2].value,body.pinned?1:0,audience.visibility,device?null:actorId(p),device?.id??null).lastInsertRowid);
     }
     saveMembers(d,id,audience.members);
+    d.prepare('UPDATE notes SET card_color_slot=? WHERE id=?').run(slot,id);
     return {noteId:id,data:project(d,p,d.prepare('SELECT * FROM notes WHERE id=?').get(id))};
   }).immediate();
 }

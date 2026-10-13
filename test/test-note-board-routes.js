@@ -16,6 +16,14 @@ const base=`http://127.0.0.1:${server.address().port}`;
 const call=async(method,path,body)=>{const r=await fetch(base+path,{method,headers:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});return {status:r.status,body:r.status===204?null:await r.json()};};
 test.after(()=>server.close());
 let privateNote,selectedNote,sharedNote;
+test('indexed Note slots preserve legacy hex on unchanged old-client saves and switch deliberately on new hex',async()=>{
+  actor=1;let note=(await call('POST','/',{content:'Synthetic indexed',color:'#123456',card_color_slot:'slot-03-v1'})).body.data;
+  assert.equal(note.card_color_slot,'slot-03-v1');assert.equal(note.color,'#123456');
+  let r=await call('PUT',`/${note.id}`,{content:'Edited by older client',color:'#123456',expected_revision:note.revision});assert.equal(r.status,200);note=r.body.data;assert.equal(note.card_color_slot,'slot-03-v1');
+  r=await call('PUT',`/${note.id}`,{color:'#654321',expected_revision:note.revision});assert.equal(r.status,200);note=r.body.data;assert.equal(note.card_color_slot,null);assert.equal(note.color,'#654321');
+  r=await call('PUT',`/${note.id}`,{card_color_slot:'purple',expected_revision:note.revision});assert.equal(r.status,400);
+  await call('DELETE',`/${note.id}`);
+});
 test('Private and Selected audiences are persisted and filter members including unrelated admin',async()=>{
   actor=1;
   privateNote=(await call('POST','/',{content:'private secret',visibility:'private'})).body.data;

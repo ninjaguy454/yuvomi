@@ -46,6 +46,7 @@ import { mkdirSync, existsSync, renameSync, rmSync, copyFileSync, openSync, read
 import { createLogger } from './logger.js';
 import { addRewardFulfillmentSchema } from './services/reward-fulfillment-schema.js';
 import { addDevicePrizeSchema } from './services/device-prize-schema.js';
+import {addCardColorSchema} from './services/card-color-schema.js';
 import { decodeHtmlEntities } from './utils/html-entities.js';
 import { toE164, defaultCountryFromConfig } from './utils/phone.js';
 
@@ -9123,6 +9124,7 @@ FORK_MIGRATIONS.push({version:10055, description:'Tasks: exclusive scoring modes
 FORK_MIGRATIONS.push({version:10056, description:'Trips: ordinary parent Tasks and durable preparation steps', up:addTripTaskSchema});
 FORK_MIGRATIONS.push({version:10057, description:'Rewards: parent prize delivery Tasks and audited Undo', up:addRewardFulfillmentSchema});
 FORK_MIGRATIONS.push({version:10058, description:'Rewards: scoped device purchases and one-action member authentication', up:addDevicePrizeSchema});
+FORK_MIGRATIONS.push({version:10059,description:'Appearance: persisted indexed Task and Note colors',up:addCardColorSchema});
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];
 
 const FORK_MIGRATION_REMAPS = [

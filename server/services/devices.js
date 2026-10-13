@@ -66,7 +66,7 @@ export function normalizeDeviceScope(d,input={}) {
   if(groups!==null&&(!Array.isArray(groups)||groups.length>100||groups.some(id=>!Number.isSafeInteger(id)||!d.prepare('SELECT id FROM rotation_groups WHERE id=?').get(id))))throw deviceError('Choose valid Rotation Groups.');
   return {member_ids:[...new Set(ids)],rotation_group_ids:groups===null?null:[...new Set(groups)],show_points:input.show_points!==false};
 }
-export function normalizeDevicePreferences(d,input) {
+export function normalizeDevicePreferences(d,input,{read=false}={}) {
   const seed=input??wallConfig(d);
   if(!seed||typeof seed!=='object'||Array.isArray(seed))throw deviceError('Invalid display preferences.');
   const supplied=input?.widgets??DEVICE_WIDGETS.map((id,order)=>({id,visible:id!=='weather',size:id==='tasks'?'large':'medium',order}));
@@ -75,7 +75,7 @@ export function normalizeDevicePreferences(d,input) {
   // Reuse Wall appearance and widget validation; Rotation is the device's extra
   // explicitly shared resource. Neither layout nor visibility grants access.
   const rotation=supplied.find(row=>row.id==='rotations');
-  const normalized=normalizeWallConfig({...seed,widgets:supplied.filter(row=>row.id!=='rotations')});
+  const normalized=normalizeWallConfig({...seed,widgets:supplied.filter(row=>row.id!=='rotations')},{read});
   const rotationWidget=rotation?normalizeWallConfig({widgets:[{...rotation,id:'tasks'}]}).widgets.find(row=>row.id==='tasks'):null;
   const widgets=DEVICE_WIDGETS.map(id=>{
     const source=supplied.find(row=>row.id===id),validated=id==='rotations'?rotationWidget:normalized.widgets.find(row=>row.id===id);

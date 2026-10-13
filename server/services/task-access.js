@@ -336,7 +336,7 @@ function assertCurrentTaskMutation(d, actor, task, body, {operation}) {
   };
   if (body.status === 'archived') requireAction('delete_archive');
   else if (changed('status')) requireAction('complete');
-  const definitionFields = ['title', 'description', 'visibility', 'sync_target', 'locked', 'parent_task_id', 'location', 'countdown', 'subtasks', 'is_optional', 'activity_template_id', 'activity_subject_user_id', 'activity_inputs', 'activity_binding', 'expiration_policy', 'scoring_mode'];
+  const definitionFields = ['card_color_choice','title', 'description', 'visibility', 'sync_target', 'locked', 'parent_task_id', 'location', 'countdown', 'subtasks', 'is_optional', 'activity_template_id', 'activity_subject_user_id', 'activity_inputs', 'activity_binding', 'expiration_policy', 'scoring_mode'];
   if (definitionFields.some(changed)) requireAction('edit');
   const me = actorId(actor);
   // Joining/leaving only one's own assignment is the legacy claim interaction,

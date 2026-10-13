@@ -1,3 +1,5 @@
+import {cardColorAttribute} from '/utils/card-colors.js';
+import {mountCardColorPicker} from '/components/card-color-picker.js';
 import { memberLabel } from '/utils/member-label.js';
 /**
  * Modul: Pinnwand / Notizen (Notes)
@@ -707,7 +709,7 @@ function renderListCard(note, item) {
   const compact = state.listDensity === 'compact';
   const expanded = state.expandedNotes.has(note.id);
   const preview = compact ? null : listPreview(note, expanded);
-  return `<div class="note-card note-card--list ${note.pinned ? 'note-card--pinned' : ''}" data-id="${note.id}" style="--note-color:${esc(note.color)};">
+  return `<div class="note-card note-card--list ${note.pinned ? 'note-card--pinned' : ''}" data-id="${note.id}"${cardColorAttribute(note.card_color_slot)} style="--note-color:${esc(note.color)};">
     <div class="note-card__list-heading">
       ${renderPositionControls(note,item)}
       ${renderNoteTitle(note)}
@@ -735,7 +737,7 @@ function renderNoteCard(note, item) {
 
   return `
     <div class="note-card ${note.pinned ? 'note-card--pinned' : ''} ${!boardIsFiltered() && canArrangeItem(note,item,'move') ? 'note-card--editable' : ''}"
-         data-id="${note.id}"
+         data-id="${note.id}"${cardColorAttribute(note.card_color_slot)}
          style="--note-color:${esc(note.color)};">
       ${renderBoardMenu(note,item)}
       ${renderPositionControls(note,item)}
@@ -800,7 +802,7 @@ function openNoteModal({ mode, note = null }) {
   const initialView = isEdit ? 'read' : 'edit';
 
   const content = `
-    <div class="note-modal" data-view="${initialView}"${isEdit ? ` data-note-id="${note.id}"` : ''} style="--note-color:${esc(selColor)};">
+    <div class="note-modal" data-view="${initialView}"${isEdit ? ` data-note-id="${note.id}"` : ''}${cardColorAttribute(note?.card_color_slot)} style="--note-color:${esc(selColor)};">
       <div class="note-mode-switch" role="tablist" aria-label="${t('notes.modeSwitchLabel')}">
         <button type="button" id="note-tab-read" class="sub-tab${initialView === 'read' ? ' sub-tab--active' : ''}"
                 role="tab" aria-selected="${initialView === 'read' ? 'true' : 'false'}"
@@ -844,6 +846,7 @@ function openNoteModal({ mode, note = null }) {
     ${advancedSection(`
       <div class="form-group">
         <label class="form-label" id="note-color-label">${t('notes.colorLabel')}</label>
+        <div data-note-card-colors></div>
         <div class="note-color-picker" role="radiogroup" aria-labelledby="note-color-label">
           ${swatchColors.map((c) => `
             <div class="note-color-swatch ${c === selColor ? 'note-color-swatch--active' : ''}"
@@ -885,6 +888,7 @@ function openNoteModal({ mode, note = null }) {
     // die Leseansicht derselben Notiz haengt an derselben Breite.
     size: 'lg',
     onSave(panel) {
+      const indexedColors=mountCardColorPicker(panel.querySelector('[data-note-card-colors]'),{value:note?.card_color_slot,note:true,legacyColor:selColor,onChange:slot=>{const modal=panel.querySelector('.note-modal');if(slot)modal.setAttribute('data-card-color',slot);else modal.removeAttribute('data-card-color');}});
       const visibility = panel.querySelector('#note-visibility');
       visibility?.addEventListener('change', () => {
         panel.querySelector('#note-members').hidden = visibility.value !== 'selected';
@@ -943,6 +947,8 @@ function openNoteModal({ mode, note = null }) {
             panel.querySelector('#note-pinned').checked = !!fresh.pinned;
             const swatch = [...panel.querySelectorAll('.note-color-swatch')].find(el => el.dataset.color === fresh.color);
             if (swatch) selectSwatch(swatch);
+            indexedColors.setValue(fresh.card_color_slot);
+            if(fresh.card_color_slot)noteModal.setAttribute('data-card-color',fresh.card_color_slot);else noteModal.removeAttribute('data-card-color');
             if (visibility) {
               visibility.value = fresh.visibility || 'all';
               panel.querySelector('#note-members').hidden = visibility.value !== 'selected';
@@ -1044,6 +1050,7 @@ function openNoteModal({ mode, note = null }) {
           s.setAttribute('aria-checked', 'false');
           s.setAttribute('tabindex', '-1');
         });
+        indexedColors.setValue(null,{dirty:true});panel.querySelector('.note-modal')?.removeAttribute('data-card-color');
         target.classList.add('note-color-swatch--active');
         target.setAttribute('aria-checked', 'true');
         target.setAttribute('tabindex', '0');
@@ -1098,11 +1105,11 @@ function openNoteModal({ mode, note = null }) {
 
         try {
           if (mode === 'create') {
-            const res = await api.post('/notes', { title, content: cnt, color, pinned, ...audience });
+            const res = await api.post('/notes', { title, content: cnt, color, pinned, ...(indexedColors.isChanged()?{card_color_slot:indexedColors.getValue()}:{}), ...audience });
             if (!currentPage(page, auth) || !panel.isConnected) return;
             if (canNote('view') && res.data) state.notes.unshift(res.data);
           } else {
-            const res = await api.put(`/notes/${note.id}`, { title, content: cnt, color, pinned, expected_revision: originalRevision, ...audience });
+            const res = await api.put(`/notes/${note.id}`, { title, content: cnt, color, pinned, ...(indexedColors.isChanged()?{card_color_slot:indexedColors.getValue()}:{}), expected_revision: originalRevision, ...audience });
             if (!currentPage(page, auth) || !panel.isConnected) return;
             const idx = state.notes.findIndex((n) => n.id === note.id);
             if (idx !== -1) state.notes[idx] = res.data;

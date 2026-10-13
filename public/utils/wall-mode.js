@@ -95,6 +95,7 @@ export function isWallActive() {
  * wiederherstellen wollen.
  */
 function restoreUserTheme() {
+  if(document.documentElement.hasAttribute('data-named-theme'))return;
   const stored = safeGet(THEME_KEY);
   if (stored === 'dark' || stored === 'light') {
     document.documentElement.setAttribute('data-theme', stored);

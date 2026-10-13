@@ -4,6 +4,8 @@ import { esc } from '/utils/html.js';
 import { caldavTargetValue, SYNC_TARGET_LOCAL } from '/utils/sync-target.js';
 import { getPreferences, savePreferences } from '/settings/preferences-cache.js';
 import { toggleRowHtml } from '/settings/components.js';
+import {mountCardColorPicker} from '/components/card-color-picker.js';
+import {canCapability} from '/permissions.js';
 
 /**
  * Standardwerte, die nur für die eigenen neuen Aufgaben gelten (#695).
@@ -127,7 +129,6 @@ function bindEvents(container) {
 }
 
 export async function render(container, { user }) {
-  void user;
   const [preferences, lists] = await Promise.all([
     getPreferences(),
     api.get('/tasks/sync-targets')
@@ -136,4 +137,8 @@ export async function render(container, { user }) {
   ]);
   renderPage(container, preferences, lists);
   bindEvents(container);
+  if(user?.role==='admin'&&canCapability('admin.household_settings')){
+    const section=container.querySelector('.settings-section'),card=document.createElement('div');card.className='settings-card';card.insertAdjacentHTML('beforeend',`<h3>${esc(t('cardColors.householdDefault'))}</h3><div data-task-card-default></div>`);section.append(card);
+    mountCardColorPicker(card.querySelector('[data-task-card-default]'),{household:true,value:preferences.task_card_color_default,onChange:value=>savePreferences({task_card_color_default:value})});
+  }
 }

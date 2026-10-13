@@ -33,6 +33,9 @@ const SERVER_DIR = path.join(ROOT, 'server');
  * aus `public/` importieren darf. Reine Funktionen, front- und backend-identisch.
  */
 const SHARED_ISOMORPHIC = new Set([
+  // Pure approved registry/date/appearance validation shared by server/browser.
+  'public/utils/named-appearance.js',
+  'public/utils/card-colors.js',
   // Pure calendar-day offsets shared by Activity editors and Task generation.
   'public/utils/activity-schedule.js',
   'public/utils/variable-expressions.js', // Pure bounded parser/evaluator shared by preview and execution.

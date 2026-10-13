@@ -1,3 +1,4 @@
+import {assignNewTaskCardColor} from './task-card-colors.js';
 import {createHash} from 'node:crypto';
 import {setTaskAssignments} from './task-assignments.js';
 import {setTaskLocation} from './task-locations.js';
@@ -87,6 +88,7 @@ export function createTripTaskGroup(d,trip,actorId,coordinatorId){
  const uid=coordinatorId||actorId;
  if(!d.prepare('SELECT 1 FROM users WHERE id=?').get(uid))throw new TaskStateError('Choose a valid Trip coordinator.',{},400);
  const parent=Number(d.prepare("INSERT INTO tasks(title,description,category,priority,status,created_by,assigned_to,points,visibility,is_recurring,expiration_policy) VALUES(?,?,'misc','none','open',?,?,0,'all',0,'keep_overdue')").run(`Trip: ${trip.name}`,trip.notes||null,actorId,uid).lastInsertRowid);
+ assignNewTaskCardColor(d,parent);
  setTaskAssignments(d,parent,[uid]);
  d.prepare('INSERT INTO trip_task_groups(trip_id,parent_task_id,coordinator_id) VALUES(?,?,?)').run(trip.id,parent,uid);
  recordTaskActivity(d,parent,'created',actorId,{source:'trip',trip_id:trip.id});
@@ -138,6 +140,7 @@ export function reconcileTripTasks(d,trip,body,actorId){
   if(!s){
    if(parent.status==='done')throw new TaskStateError('Reopen the completed Trip checklist before adding steps.');
    const id=Number(d.prepare("INSERT INTO tasks(title,description,category,priority,status,created_by,parent_task_id,points,visibility,is_recurring,expiration_policy) VALUES(?,?,'misc',?,'open',?,?,0,'all',0,'keep_overdue')").run(recipe.title,recipe.description,recipe.priority,actorId,parent.id).lastInsertRowid);
+   assignNewTaskCardColor(d,id,{inheritFrom:parent.id});
    d.prepare('INSERT INTO trip_task_steps(trip_id,step_key,task_id,phase,recipe_json) VALUES(?,?,?,?,?)').run(trip.id,recipe.step_key,id,recipe.phase,json(recipe));
    d.prepare('INSERT INTO trip_tasks(trip_id,task_id,phase) VALUES(?,?,?)').run(trip.id,id,recipe.phase);
    s={trip_id:trip.id,step_key:recipe.step_key,task_id:id,generated_json:'{}',overrides_json:'[]'};t=d.prepare('SELECT * FROM tasks WHERE id=?').get(id);

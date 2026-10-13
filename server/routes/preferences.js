@@ -1,4 +1,6 @@
 import { requireCapability } from '../middleware/require-capability.js';
+import {householdCardColorDefault} from '../services/task-card-colors.js';
+import {validateHouseholdCardDefault} from '../../public/utils/card-colors.js';
 import { hasCapability } from '../permissions.js';
 /**
  * Modul: Haushalt-Einstellungen (Preferences)
@@ -20,6 +22,7 @@ import { parseSyncTargetValue } from '../../public/utils/sync-target.js';
 // Der Vorrat waehlbarer Waehrungen - eine Liste fuer Server und Browser
 // (#841, Allowlist in test/test-layer-boundary.js).
 import { CURRENCY_CODES } from '../../public/utils/currency-codes.js';
+import { normalizeNamedAppearance, validateNamedAppearance, normalizeUiSounds, validateUiSounds } from '../../public/utils/named-appearance.js';
 
 const log = createLogger('Preferences');
 
@@ -31,9 +34,17 @@ const HEADING_FONTS = ['default', 'serif'];
 function appearancePreferences(userId) {
   const color = cfgUserGet('color_theme', userId);
   const font = cfgUserGet('heading_font', userId);
+  // New personal values have no household fallback. Device preferences are
+  // projected at their separate device boundary, never through a pairing parent.
+  const personal = key => {
+    if (!Number.isSafeInteger(Number(userId)) || Number(userId) < 1) return null;
+    try { return JSON.parse(cfgGet(`${key}:user:${Number(userId)}`) || 'null'); } catch { return null; }
+  };
   return {
     color_theme: COLOR_THEMES.includes(color) ? color : 'neutral',
     heading_font: HEADING_FONTS.includes(font) ? font : 'default',
+    named_appearance: normalizeNamedAppearance(personal('named_appearance')),
+    ui_sounds: normalizeUiSounds(personal('ui_sounds')),
   };
 }
 
@@ -521,6 +532,7 @@ router.get('/', (req, res) => {
         ...healthCycleViews(req.authUserId),
         rewards_require_approval: cfgGet('rewards_require_approval') !== '0',
         tasks_subtasks_expanded: cfgGet('tasks_subtasks_expanded') === '1',
+        task_card_color_default: householdCardColorDefault(db.get()),
         tasks_default_points: parseTaskDefaultPoints(cfgGet('tasks_default_points')),
         // Standard-Erinnerungsliste fuer neue Aufgaben (per-user, #695) -
         // dieselbe Form wie calendar_default_target, damit beide Dialoge ihr
@@ -558,6 +570,11 @@ router.get('/', (req, res) => {
 // --------------------------------------------------------
 
 router.put('/', requireCapability('settings.personal'), (req, res, next) => {
+  if(req.body.task_card_color_default!==undefined&&(req.devicePrincipal||req.authRole!=='admin'||!hasCapability(db.get(),req,'admin.household_settings')))return res.status(403).json({error:'Household card defaults require an administrator.',code:403});
+  if (['named_appearance','ui_sounds'].some(key => req.body[key] !== undefined)
+    && (!Number.isSafeInteger(Number(req.authUserId)) || Number(req.authUserId) < 1 || req.devicePrincipal)) {
+    return res.status(403).json({error:'Personal appearance requires personal sign-in.',code:403});
+  }
   if (req.body.family_name !== undefined) {
     if (req.authRole !== 'admin' || !hasCapability(db.get(), req, 'admin.household_settings')) {
       return res.status(403).json({ error: 'Family Name requires a household administrator.', code: 403 });
@@ -576,6 +593,14 @@ router.put('/', requireCapability('settings.personal'), (req, res, next) => {
     // Validate both personal choices before writing either one. These do not
     // alter household appearance or require household administration rights.
     const { color_theme, heading_font, tasks_template_switch_warning } = req.body;
+    let namedAppearance, uiSounds,cardDefault;
+    try {
+      if (req.body.named_appearance !== undefined) namedAppearance = validateNamedAppearance(req.body.named_appearance);
+      if (req.body.ui_sounds !== undefined) uiSounds = validateUiSounds(req.body.ui_sounds);
+      if(req.body.task_card_color_default!==undefined)cardDefault=validateHouseholdCardDefault(req.body.task_card_color_default);
+    } catch (error) {
+      return res.status(400).json({error:error.message,code:400});
+    }
     if (color_theme !== undefined && !COLOR_THEMES.includes(color_theme)) {
       return res.status(400).json({ error: 'Theme must be neutral, warm, or cool.', code: 400 });
     }
@@ -1154,6 +1179,9 @@ router.put('/', requireCapability('settings.personal'), (req, res, next) => {
     const savedMobileNavOrder = parseMobileNavOrder(cfgUserGet('mobile_nav_order', req.authUserId));
     if (color_theme !== undefined) cfgUserSet('color_theme', req.authUserId, color_theme);
     if (heading_font !== undefined) cfgUserSet('heading_font', req.authUserId, heading_font);
+    if(cardDefault!==undefined)cfgSet('task_card_color_default',JSON.stringify(cardDefault));
+    if (namedAppearance !== undefined) cfgUserSet('named_appearance', req.authUserId, JSON.stringify(namedAppearance));
+    if (uiSounds !== undefined) cfgUserSet('ui_sounds', req.authUserId, JSON.stringify(uiSounds));
     const savedHousekeepingPaymentTasks = cfgGet('housekeeping_payment_tasks') === '1';
 
     res.json({
@@ -1186,6 +1214,7 @@ router.put('/', requireCapability('settings.personal'), (req, res, next) => {
         ...healthCycleViews(req.authUserId),
         rewards_require_approval: cfgGet('rewards_require_approval') !== '0',
         tasks_subtasks_expanded: cfgGet('tasks_subtasks_expanded') === '1',
+        task_card_color_default: householdCardColorDefault(db.get()),
         tasks_default_points: parseTaskDefaultPoints(cfgGet('tasks_default_points')),
         // Standard-Erinnerungsliste fuer neue Aufgaben (per-user, #695) -
         // dieselbe Form wie calendar_default_target, damit beide Dialoge ihr

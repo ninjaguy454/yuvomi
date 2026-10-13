@@ -1,3 +1,4 @@
+import {assignNewTaskCardColor} from '../services/task-card-colors.js';
 /**
  * Modul: MCP-Tools
  * Zweck: Tool-Set für den internen MCP-Endpoint in zwei bewusst getrennten Schichten:
@@ -123,6 +124,7 @@ function createTask(db, actorId, args) {
   const errors = v.collectErrors([title, description, priority, category, dueDate, dueTime]);
   if (errors.length) throw new ToolError(errors.join(' '));
 
+  const create=()=>{
   const result = db.prepare(`
     INSERT INTO tasks (title, description, category, priority, due_date, due_time, created_by, status)
     VALUES (?, ?, ?, ?, ?, ?, ?, 'open')
@@ -143,12 +145,19 @@ function createTask(db, actorId, args) {
 
   // Tags mitschreiben (#586). normalizeTags nimmt Array wie kommaseparierten
   // String - ein LLM-Client schickt mal das eine, mal das andere.
+  assignNewTaskCardColor(db,result.lastInsertRowid);
   const tags = setTags(db, result.lastInsertRowid, args.tags ?? []);
 
   const task = db.prepare(
     'SELECT id, title, status, priority, category, due_date, due_time FROM tasks WHERE id = ?'
   ).get(result.lastInsertRowid);
   return { ...task, tags };
+  };
+  if(typeof db.transaction==='function')return db.transaction(create)();
+  // The MCP tool adapter also supports Node's synchronous SQLite interface.
+  db.exec('SAVEPOINT mcp_task_create');
+  try{const result=create();db.exec('RELEASE mcp_task_create');return result;}
+  catch(error){db.exec('ROLLBACK TO mcp_task_create; RELEASE mcp_task_create');throw error;}
 }
 
 function listShoppingItems(db, args) {

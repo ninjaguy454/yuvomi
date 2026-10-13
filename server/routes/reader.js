@@ -1,3 +1,4 @@
+import {assignNewTaskCardColor} from '../services/task-card-colors.js';
 import { hasCapability } from '../permissions.js';
 import { taskUnskippedWhere } from '../services/task-window.js';
 import { assertTaskMutation, taskVisibilityWhere } from '../services/task-access.js';
@@ -299,6 +300,7 @@ router.post('/tasks', (req, res) => {
   catch (error) { return res.status(error.status || 500).type('text').send(error.status ? error.message : 'Could not check household permissions.'); }
   db.get().transaction(() => {
     const result = db.get().prepare(`INSERT INTO tasks (title, description, category, priority, due_date, due_time, assigned_to, created_by, visibility) VALUES (?, ?, 'misc', ?, ?, ?, ?, ?, 'all')`).run(title, description, priority, dueDate, dueTime, assignee, req.authUserId);
+    assignNewTaskCardColor(db.get(),result.lastInsertRowid);
     if (assignee) db.get().prepare('INSERT INTO task_assignments (task_id, user_id) VALUES (?, ?)').run(result.lastInsertRowid, assignee);
   })();
   return res.redirect(303, '/reader?view=add-task&created=1');

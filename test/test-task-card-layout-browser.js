@@ -14,6 +14,7 @@ const applicationStyles = [...readFileSync(path.join(publicDir, 'index.html'), '
 const output = process.env.CARD_QA_OUTPUT;
 if (output) mkdirSync(output, { recursive: true });
 const baseline = process.env.CARD_QA_BASELINE === '1';
+const namedGallery=process.env.NAMED_THEME_QA_OUTPUT;
 const app = express();
 let server, browser, base, tasks, writes;
 app.use(express.json());
@@ -528,4 +529,31 @@ for (const scenario of [
     await evidence(page, `after-stress-${scenario.mode}-${scenario.width}-${scenario.rootFont || 16}`, measure);
     assert.deepEqual(writes, [], JSON.stringify(await page.evaluate(() => window.stressEvents)));
   } finally { await page.close(); }
+});
+
+test('all44 named themes use their actual indexed fills with readable Task text and unchanged accessible actions',async()=>{
+  const {NAMED_THEMES,cardColor,contrastRatio}=await import('../public/utils/named-appearance.js');
+  const page=await mount({mode:'list',width:390}),initialLabel=await page.$eval('.task-card[data-task-id="1"] [data-action="toggle-status"]',n=>n.getAttribute('aria-label'));const images=[];if(namedGallery)mkdirSync(namedGallery,{recursive:true});
+  try{
+    for(const theme of NAMED_THEMES){
+      await page.evaluate(async id=>{
+        const {defaultNamedAppearance}=await import('/utils/named-appearance.js');
+        const {applyNamedAppearance}=await import('/utils/named-appearance-runtime.js');applyNamedAppearance({...defaultNamedAppearance(),theme:id},{persist:false});
+        for(const task of window.subject.state.tasks)task.card_color='slot-01-v1';window.subject.renderTaskList(window.taskContainer);
+      },theme.id);await frames(page);
+      const actual=await page.$eval('.task-card[data-task-id="1"]',card=>{const s=getComputedStyle(card),title=card.querySelector('.activity-card__title'),points=card.querySelector('.activity-card__points');return{fill:s.backgroundColor,ink:getComputedStyle(title).color,border:s.borderColor,points:getComputedStyle(points).backgroundColor,mode:document.documentElement.getAttribute('data-theme'),label:card.querySelector('[data-action="toggle-status"]').getAttribute('aria-label'),overflow:document.documentElement.scrollWidth>innerWidth};});
+      const hex=s=>'#'+s.match(/\d+/g).slice(0,3).map(n=>Number(n).toString(16).padStart(2,'0')).join('');
+      assert.equal(hex(actual.fill),cardColor(theme,'slot-01-v1').fill,theme.name+' actual fill');assert.ok(contrastRatio(hex(actual.fill),hex(actual.ink))>=4.5,theme.name+' Task text contrast');assert.ok(contrastRatio(hex(actual.fill),hex(actual.border))>=3,theme.name+' essential border contrast');assert.equal(actual.mode,theme.kind);assert.equal(actual.label,initialLabel,'identified status action preserved');assert.equal(actual.overflow,false);
+      if(namedGallery){const filename=path.join(namedGallery,theme.id+'.png');const clip=await page.$eval('.task-card[data-task-id="1"]',n=>{const r=n.getBoundingClientRect();return{x:r.x-8,y:r.y-18,width:r.width+16,height:r.height+26};});const bytes=await page.screenshot({path:filename,clip});images.push({name:theme.name,canvas:theme.canvas,pattern:theme.pattern,src:'data:image/png;base64,'+Buffer.from(bytes).toString('base64')});}
+    }
+    assert.deepEqual(writes,[]);
+    if(namedGallery){
+      const sheet=await browser.newPage();await sheet.setViewport({width:1500,height:1400});await sheet.goto(base+'/card-test');
+      for(let batch=0;batch<4;batch++){
+        await sheet.setContent('<!doctype html><html><head><style>body{margin:0;padding:16px;background:#e1e3e7;font:16px system-ui;display:grid;grid-template-columns:repeat(4,1fr);gap:14px}figure{margin:0;padding:14px;border-radius:10px}figcaption{font-weight:700;padding:7px;background:#fff;color:#182126;border-radius:5px;margin-bottom:18px}img{display:block;width:100%;height:auto}</style></head><body></body></html>');
+        await sheet.evaluate(rows=>{for(const row of rows){const f=document.createElement('figure');f.style.backgroundColor=row.canvas;f.style.backgroundImage=row.pattern;const label=document.createElement('figcaption');label.textContent=row.name;const img=document.createElement('img');img.src=row.src;img.alt=row.name+' actual Task card';f.append(label,img);document.body.append(f);}},images.slice(batch*11,batch*11+11));
+        await sheet.screenshot({path:path.join(namedGallery,'catalog-'+(batch+1)+'.png'),fullPage:true});
+      }await sheet.close();
+    }
+  }finally{await page.close();}
 });

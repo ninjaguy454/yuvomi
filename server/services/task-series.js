@@ -2,6 +2,8 @@
  * imports: migration and explicit writes share these helpers; reads never
  * bootstrap or advance an occurrence. */
 import { backfillRecurrenceProvenance, registerRecurrenceOccurrence, registerRecurrenceAction,peekRewardOccurrenceProvenance } from './task-recurrence-frontier.js';
+import {taskCardColorPolicy} from './task-card-colors.js';
+import {normalizeCardColorChoice} from '../../public/utils/card-colors.js';
 import { addCalendarDays } from './activity-schedule.js';
 import { nextDueAfterCompletion, nextDueAfterExpiration, nextOccurrenceAfter, parseRRule } from './recurrence.js';
 import { captureTaskActivityBindingDefinition } from './task-activity-snapshot.js';
@@ -38,7 +40,7 @@ export const TASK_SERIES_SCHEMA_SQL = `
 const TASK_FIELDS = ['title','description','category','priority','start_date','start_time','due_date','due_time',
   'due_date_offset_days','is_recurring','recurrence_rule','recurrence_from_completion','assignment_mode',
   'rotation_group','rotation_slot','rotation_bindings_json','points','visibility','countdown','locked','expiration_policy','is_optional','sort_order','activity_template_checklist_item_id','scoring_mode','scoring_review_required'];
-const selectedTask = row => Object.fromEntries(TASK_FIELDS.map(key => [key, row[key] ?? (key==='rotation_bindings_json'?'[]':null)]));
+const selectedTask = row => ({...Object.fromEntries(TASK_FIELDS.map(key => [key, row[key] ?? (key==='rotation_bindings_json'?'[]':null)])),card_color_policy:Object.hasOwn(row,'card_color_policy')?normalizeCardColorChoice(row.card_color_policy):taskCardColorPolicy(row)});
 const parseDefinition = row => row ? { ...row, data: JSON.parse(row.definition_json) } : null;
 const occurrenceRow = (d,taskId) => d.prepare('SELECT * FROM task_recurrence_occurrences WHERE task_id=?').get(taskId) || null;
 

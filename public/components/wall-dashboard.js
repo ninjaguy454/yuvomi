@@ -12,6 +12,11 @@ import { watchRewardChanges } from '/utils/reward-live.js';
 import { displayTimeZone, setDisplayTimeZone } from '/utils/timezone.js';
 import { bindTaskCountdowns } from '/utils/task-countdown.js';
 import { taskScoringLabel, renderTaskScoringHistory } from '/utils/task-fields.js';
+import {mountNamedAppearancePicker} from '/components/named-appearance-picker.js';
+import {applyAppearancePreferences} from '/utils/appearance-preferences.js';
+import {currentNamedAppearance,applyNamedAppearance,clearNamedAppearance} from '/utils/named-appearance-runtime.js';
+import {mountUiSoundSettings} from '/components/ui-sound-settings.js';
+import {currentUiSounds,configureUiSounds,captureCompletionSound,confirmCompletionSound} from '/utils/ui-sounds.js';
 
 const LABELS = { tasks:'Tasks', calendar:'Upcoming events', meals:'Today’s meals', shopping:'Shopping',
   presence:'Household presence', points:'Points', rewards:'Rewards', notes:'Announcements', weather:'Weather' };
@@ -44,6 +49,7 @@ export async function mountWallDashboard(container, { user, signal, renderers })
   let snapshot, configuration, defaults, actor = null, expiryTimer, refreshTimer, refreshPending = false, refreshAgain = false;
   let generation = 0, disposed = false, detail = null, detailGeneration = 0, mutationPending = false, supportedActions=[];
   const originalAppearance = ['data-theme','data-color-theme','data-typography'].map(key => [key,document.documentElement.getAttribute(key)]);
+  const originalNamedAppearance=currentNamedAppearance(),originalSounds=currentUiSounds();let paintedAppearance='';
   const originalZone = displayTimeZone();
   const stopTaskCountdowns = bindTaskCountdowns(container);
   // Natural-height rows fill the space beside taller Task widgets. The DOM and
@@ -104,9 +110,14 @@ export async function mountWallDashboard(container, { user, signal, renderers })
 
   function appearance() {
     const root=document.documentElement, a=configuration.appearance;
-    root.setAttribute('data-color-theme',a.palette); root.setAttribute('data-typography',a.font);
-    root.removeAttribute('data-wall-night');
-    if(a.theme==='system') root.removeAttribute('data-theme'); else root.setAttribute('data-theme',a.theme);
+    const signature=JSON.stringify(a);
+    if(signature!==paintedAppearance){
+      clearNamedAppearance({removeCache:false});
+      root.removeAttribute('data-wall-night');
+      if(a.theme==='system') root.removeAttribute('data-theme'); else root.setAttribute('data-theme',a.theme);
+      applyAppearancePreferences({color_theme:a.palette,heading_font:a.font,named_appearance:a.named_appearance??null,ui_sounds:a.ui_sounds},{persist:false});
+      paintedAppearance=signature;
+    }
     container.querySelector('.wall-dashboard')?.setAttribute('data-density',a.density);
   }
   function shell() {
@@ -244,14 +255,14 @@ export async function mountWallDashboard(container, { user, signal, renderers })
     html+='<p role="alert" class="form-error" data-wall-error hidden></p>';return html;
   }
   function wireDetail(panel,data,kind,id){
-    const run=(selector,work)=>panel.querySelectorAll(selector).forEach(btn=>btn.onclick=()=>identify(async()=>{
+    const run=(selector,work)=>panel.querySelectorAll(selector).forEach(btn=>btn.onclick=event=>{const cue=captureCompletionSound(event);return identify(async()=>{
       if(mutationPending)return;mutationPending=true;btn.disabled=true;
       const initiator=actor;
       const intent={headers:{'X-Wall-Actor':initiator.actor_token},memberId:initiator.member.id,
         assertCurrent(){if(actor!==initiator||!actorValid())throw new Error('Your identity changed or expired. Identify yourself and try the action again.');}};
-      try{const reopen=await work(btn,intent);await refresh();if(reopen!==false)await openDetail(kind,id);}catch(error){settingsError(panel,error);await openDetail(kind,id);fail(error);}finally{mutationPending=false;if(btn.isConnected)btn.disabled=false;}
-    }));
-    const complete=async (target,intent)=>{
+      try{const reopen=await work(btn,intent,cue);await refresh();if(reopen!==false)await openDetail(kind,id);}catch(error){settingsError(panel,error);await openDetail(kind,id);fail(error);}finally{mutationPending=false;if(btn.isConnected)btn.disabled=false;}
+    });});
+    const complete=async (target,intent,cue)=>{
       // Read current revision after identity verification. Canonical API still
       // validates it and all supervision, permission, and start-date rules.
       const action=(await api.get(`/wall/tasks/${target}`,{headers:intent.headers})).data;
@@ -261,10 +272,11 @@ export async function mountWallDashboard(container, { user, signal, renderers })
       const remaining=(action.subtasks || action.children || []).some(s=>s.status!=='done');
       if(remaining&&!(await confirmOverModal(`Complete the remaining permitted steps in “${action.title}”?`,{closeOnConfirm:false})))return false;
       intent.assertCurrent();
-      await api.patch(`/wall/tasks/${target}/status`,{status:'done',expected_revision:action.revision,expected_parent_revision:action.parent_revision,complete_remaining:remaining},{headers:intent.headers});
+      const response=await api.patch(`/wall/tasks/${target}/status`,{status:'done',expected_revision:action.revision,expected_parent_revision:action.parent_revision,complete_remaining:remaining},{headers:intent.headers});
+      confirmCompletionSound(cue,response?.data?.status==='done');
     };
-    run('[data-wall-step]',(btn,intent)=>complete(Number(btn.dataset.wallStep),intent));
-    run('[data-wall-complete]',(_btn,intent)=>complete(id,intent));
+    run('[data-wall-step]',(btn,intent,cue)=>complete(Number(btn.dataset.wallStep),intent,cue));
+    run('[data-wall-complete]',(_btn,intent,cue)=>complete(id,intent,cue));
     run('[data-wall-claim]',async(_btn,intent)=>{const fresh=(await api.get(`/wall/tasks/${id}`,{headers:intent.headers})).data;intent.assertCurrent();await api.post(`/wall/tasks/${id}/claim`,{expected_revision:fresh.revision,expected_parent_revision:fresh.parent_revision},{headers:intent.headers});});
     // One key belongs to this explicit redemption attempt, including network
     // retries. A failed/uncertain request does not get a new key on another tap.
@@ -286,9 +298,9 @@ export async function mountWallDashboard(container, { user, signal, renderers })
     safeModal({title:'Wall settings',initialFocus:'none',content:`<form class="wall-form" data-wall-settings-form>
       <p>Saved for the household Wall display, independently of personal Dashboards.</p>
       <h3>Layout</h3><div data-wall-layout></div>${button('Reset Wall layout','data-wall-reset')}
-      <h3>Appearance</h3><div class="wall-settings-grid">
-      ${choose('theme','Light / Dark',['system','light','dark'],draft.appearance.theme)}${choose('palette','Colors',['warm','neutral','cool'],draft.appearance.palette)}
-      ${choose('font','Headings',['default','serif'],draft.appearance.font)}${choose('density','Density',['comfortable','compact'],draft.appearance.density)}
+      <h3>Appearance</h3><div data-wall-named-appearance></div><div data-wall-ui-sounds></div><div class="wall-settings-grid">
+      <div data-wall-legacy${draft.appearance.named_appearance?' hidden':''}>${choose('theme','Light / Dark',['system','light','dark'],draft.appearance.theme)}${choose('palette','Colors',['warm','neutral','cool'],draft.appearance.palette)}
+      ${choose('font','Headings',['default','serif'],draft.appearance.font)}</div>${choose('density','Density',['comfortable','compact'],draft.appearance.density)}
       <label><input type="checkbox" name="clock" ${draft.appearance.clock?'checked':''}> Show clock and date</label></div>
       <h3>Interaction</h3>${choose('mode','Display mode',['read_only','interactive'],draft.interaction.mode)}
       <p>Every action requires a verified member. Verification expires after two minutes; use Done when finished. Password and existing two-factor authentication are supported. Member PINs are not configured in Vidamia.</p>
@@ -298,6 +310,8 @@ export async function mountWallDashboard(container, { user, signal, renderers })
       <label><input type="checkbox" name="showPresence" ${draft.privacy.showPresence?'checked':''}> Show household presence</label>
       <p>Private and assignee-only content stays hidden. Personal photo screensavers are disabled here. Configure device brightness, sleep and kiosk lockdown in Fully Kiosk.</p>
       <p class="form-error" role="alert" data-wall-error hidden></p><div class="modal-footer"><button type="submit" class="btn btn--primary">Save Wall settings</button>${button('Cancel','data-action="close-modal"')}</div></form>`,onSave(panel){
+        mountNamedAppearancePicker(panel.querySelector('[data-wall-named-appearance]'),{value:draft.appearance.named_appearance,prefix:'wall-theme',onChange:value=>{draft.appearance.named_appearance=value;panel.querySelector('[data-wall-legacy]').hidden=!!value;}});
+        mountUiSoundSettings(panel.querySelector('[data-wall-ui-sounds]'),{value:draft.appearance.ui_sounds,prefix:'wall-sounds',theme:()=>draft.appearance.named_appearance?.theme,onChange:value=>{draft.appearance.ui_sounds=value;}});
         const layout=panel.querySelector('[data-wall-layout]');
         function rows(){layout.innerHTML=draft.widgets.map((w,i)=>`<div class="wall-layout-row" data-id="${w.id}"><label><input type="checkbox" data-visible ${w.visible?'checked':''}>${LABELS[w.id]}</label><select class="form-input" data-size aria-label="${LABELS[w.id]} size">${['small','medium','large'].map(v=>option(v,v,w.size)).join('')}</select>${button('↑',`data-move="-1" aria-label="Move ${LABELS[w.id]} up" ${i===0?'disabled':''}`)}${button('↓',`data-move="1" aria-label="Move ${LABELS[w.id]} down" ${i===draft.widgets.length-1?'disabled':''}`)}</div>`).join('');}
         rows();
@@ -307,13 +321,13 @@ export async function mountWallDashboard(container, { user, signal, renderers })
         panel.querySelector('form').onsubmit=async event=>{
           event.preventDefault();const submit=panel.querySelector('[type=submit]');if(submit.disabled)return;submit.disabled=true;
           const f=new FormData(event.currentTarget);
-          draft.appearance={theme:f.get('theme'),palette:f.get('palette'),font:f.get('font'),density:f.get('density'),clock:f.has('clock')};
+          draft.appearance={...draft.appearance,theme:f.get('theme'),palette:f.get('palette'),font:f.get('font'),density:f.get('density'),clock:f.has('clock')};
           draft.interaction={mode:f.get('mode'),actions:f.getAll('action')};draft.privacy={notifications:f.get('notifications'),showPoints:f.has('showPoints'),showPresence:f.has('showPresence')};
           try{await api.put('/wall/config',draft,{headers:actorHeaders()});configuration=draft;await closeModal({force:true});await refresh();}catch(error){settingsError(panel,error);}finally{submit.disabled=false;}
         };
       }});
   }
-  function dispose(){disposed=true;generation++;detailGeneration++;clearTimeout(expiryTimer);clearInterval(refreshTimer);stopTaskCountdowns();stopLive?.();stopRewards?.();layoutObserver.disconnect();css.remove();actor=null;setDisplayTimeZone(originalZone);for(const [key,value] of originalAppearance){if(value===null)document.documentElement.removeAttribute(key);else document.documentElement.setAttribute(key,value);}}
+  function dispose(){disposed=true;generation++;detailGeneration++;clearTimeout(expiryTimer);clearInterval(refreshTimer);stopTaskCountdowns();stopLive?.();stopRewards?.();layoutObserver.disconnect();css.remove();actor=null;setDisplayTimeZone(originalZone);clearNamedAppearance({removeCache:false});for(const [key,value] of originalAppearance){if(value===null)document.documentElement.removeAttribute(key);else document.documentElement.setAttribute(key,value);}if(originalNamedAppearance)applyNamedAppearance(originalNamedAppearance,{persist:false});configureUiSounds(originalSounds,originalNamedAppearance?.theme);}
   let stopLive,stopRewards;
   signal?.addEventListener('abort',dispose,{once:true});
   try{

@@ -1,3 +1,4 @@
+import {assignNewTaskCardColor} from '../services/task-card-colors.js';
 import { assertCapability } from '../permissions.js';
 import { assertTaskMutation, taskVisibilityWhere } from '../services/task-access.js';
 import { assertTaskRevision, changeTaskStatus } from '../services/task-lifecycle.js';
@@ -309,6 +310,7 @@ function createPaymentTask(database, worker, checkIn, amount, actorId, title = n
     visitDate,
     actorId,
   );
+  assignNewTaskCardColor(database,result.lastInsertRowid);
   return result.lastInsertRowid;
 }
 

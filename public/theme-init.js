@@ -117,3 +117,21 @@
     }
   } catch (e) { /* Storage nicht verfuegbar → kein Wand-Modus in dieser Sitzung */ }
 })();
+
+// Resolve the same validated graph used by the live runtime before CSS paints.
+// This cache is visual only; paired/public launch still requires authentication.
+(function () {
+  try {
+    var root=document.documentElement,key='vidamia-named-appearance';
+    if(/^\/(login|setup|join|device)(\/|$)/.test(location.pathname)||localStorage.getItem('vidamia-paired-device')==='1'||root.hasAttribute('data-wall-mode')) {
+      localStorage.removeItem(key);return;
+    }
+    if(!window.VidamiaAppearance)return;
+    var api=window.VidamiaAppearance,value=api.normalizeNamedAppearance(JSON.parse(localStorage.getItem(key)||'null')),resolved=value&&api.resolveNamedAppearance(value);
+    if(!resolved)return;
+    root.setAttribute('data-named-legacy-theme',root.getAttribute('data-theme')||'system');
+    root.setAttribute('data-named-theme',resolved.theme.id);root.setAttribute('data-named-material',resolved.theme.motif);root.setAttribute('data-theme',resolved.theme.kind);root.style.setProperty('color-scheme',resolved.theme.kind);
+    Object.entries(api.namedThemeVariables(resolved.theme)).forEach(function(pair){root.style.setProperty(pair[0],pair[1]);});
+    document.querySelectorAll('meta[name="theme-color"]').forEach(function(meta){meta.setAttribute('data-named-legacy-color',meta.getAttribute('content'));meta.setAttribute('content',resolved.theme.canvas);});
+  } catch(e) { /* unsupported caches safely retain legacy appearance */ }
+})();

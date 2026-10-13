@@ -146,6 +146,7 @@ const darkSchemeQuery = window.matchMedia?.('(prefers-color-scheme: dark)') ?? n
  * @param {string} [darkColor] - Falls nicht angegeben, wird lightColor für beide gesetzt
  */
 function setThemeColor(lightColor, darkColor) {
+  if (document.documentElement.hasAttribute('data-named-theme')) return;
   if (!isStandalone) return;
   const metas = document.querySelectorAll('meta[name="theme-color"]');
   const dark = darkColor || lightColor;
@@ -198,6 +199,10 @@ function getCSSToken(name) {
  * Text darauf fiel im Dunkelmodus auf 2.71:1 statt 7.81:1 - unter WCAG AA.
  */
 function applyModuleAccentForRoute(route) {
+  if(document.documentElement.hasAttribute('data-named-theme')) {
+    document.documentElement.style.setProperty('--active-module-accent',getCSSToken('--color-accent'));
+    return;
+  }
   const accentToken = moduleAccentToken(route?.module);
   const accent = route?.thirdPartyModule?.accent || (accentToken ? getCSSToken(accentToken) : '');
   document.documentElement.style.setProperty('--active-module-accent', accent);
@@ -1034,7 +1039,7 @@ async function syncPreferencesOnce() {
       else document.documentElement.removeAttribute('data-theme');
     }
     // Logout and a newer personal choice invalidate an older appearance read.
-    if (appearanceRevision() === requestedAppearanceRevision) applyAppearancePreferences(res?.data ?? {});
+    if (appearanceRevision() === requestedAppearanceRevision) applyAppearancePreferences(res?.data ?? {}, {persist:!pairedDeviceHint()});
     const dateFormat = res?.data?.date_format;
     if (dateFormat) {
       localStorage.setItem('yuvomi-date-format', dateFormat);
@@ -4741,7 +4746,9 @@ if (/iPhone|iPad|iPod/.test(navigator.userAgent)) {
   try {
     // Vorab-Theme-Anwendung ohne Abhängigkeit von window.yuvomi
     const stored = localStorage.getItem('yuvomi-theme');
-    if (stored === 'dark') {
+    if (document.documentElement.hasAttribute('data-named-theme')) {
+      // Cached named appearance already chose its intrinsic mode before paint.
+    } else if (stored === 'dark') {
       document.documentElement.setAttribute('data-theme', 'dark');
     } else if (stored === 'light') {
       document.documentElement.setAttribute('data-theme', 'light');
@@ -4824,6 +4831,7 @@ window.yuvomi = {
   // zweites Mal holen zu lassen. Begruendung an `primeModuleCountsFrom`.
   primeModuleCountsFrom,
   applyTheme: (value) => {
+    if(document.documentElement.hasAttribute('data-named-theme')) return;
     if (value === 'dark') {
       document.documentElement.setAttribute('data-theme', 'dark');
     } else if (value === 'light') {

@@ -30,7 +30,9 @@ db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
   applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );`);
 db.exec(MIGRATIONS_SQL[1]);
+db.exec(MIGRATIONS_SQL[2]); // Household new-task defaults.
 db.exec(MIGRATIONS_SQL[41]);  // tasks.start_date (geplante Aufgaben)
+db.exec(MIGRATIONS_SQL[10059]); // Persisted color fields, without newer lifecycle fixtures.
 db.exec(MIGRATIONS_SQL[74]);  // access_permissions (Modulrechte, #467)
 // DIESE DREI SIND EINE AUSWAHL, KEIN SCHEMA: Migration 1 legt `tasks` in der
 // Fassung von damals an, jede spaeter ergaenzte Spalte fehlt hier. Wer eine

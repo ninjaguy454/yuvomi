@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';import vm from 'node:vm';
 let model;
 try { model = await import('../public/utils/named-appearance.js'); }
 catch (e) { if (e.code !== 'ERR_MODULE_NOT_FOUND') throw e; }
@@ -48,4 +49,12 @@ test('sound choices are independent, strictly validated and legacy defaults rema
   const {normalizeUiSounds:n,validateUiSounds:v}=need();assert.deepEqual(n(null),{version:1,mode:'off',pack:'soft',volume:15});
   for(const mode of ['off','theme','pack'])for(const pack of ['soft','glass','wood','playful'])assert.deepEqual(v({version:1,mode,pack,volume:15}),{version:1,mode,pack,volume:15});
   for(const p of [{mode:'automatic'},{pack:'remote-url'},{volume:-1},{volume:101},{volume:'15'},{version:2}])assert.throws(()=>v({version:1,mode:'off',pack:'soft',volume:15,...p}));
+});
+test('generated classic prepaint uses the exact registry and scheduling contract',()=>{
+  const m=need(),context={};vm.runInNewContext(readFileSync(new URL('../public/named-appearance-init.js',import.meta.url),'utf8'),context);const pre=context.VidamiaAppearance;
+  assert.deepEqual(JSON.parse(JSON.stringify(pre.NAMED_THEMES)),JSON.parse(JSON.stringify(m.NAMED_THEMES)));
+  for(const d of ['2026-10-28T12:00:00Z','2026-11-02T08:00:01Z'])assert.equal(pre.resolveNamedAppearance(schedule,new Date(d)).theme.id,m.resolveNamedAppearance(schedule,new Date(d)).theme.id);
+});
+test('every colored card keeps metadata, warning text and essential control focus readable',()=>{
+  const {NAMED_THEMES,CARD_SLOTS,cardColor,contrastRatio}=need();for(const theme of NAMED_THEMES)for(const slot of CARD_SLOTS){const c=cardColor(theme,slot);for(const role of['muted','danger','success','warning','info','focus'])assert.ok(c[role]&&contrastRatio(c[role],c.fill)>=4.5,theme.name+' '+slot+' '+role);}
 });

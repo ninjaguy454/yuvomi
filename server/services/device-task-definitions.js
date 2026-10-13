@@ -5,7 +5,7 @@ import {deviceTaskVisible,assertTaskMutation} from './task-access.js';
 import {assertTaskRevision} from './task-lifecycle.js';
 import {fingerprint,MAX_KEY_LENGTH} from '../middleware/idempotency.js';
 
-const fields=new Set(['title','description','assigned_to','start_date','start_time','due_date','due_time','points',
+const fields=new Set(['card_color_choice','title','description','assigned_to','start_date','start_time','due_date','due_time','points',
   'is_recurring','recurrence_rule','recurrence_from_completion','expiration_policy','expected_revision','expected_parent_revision']);
 const fail=(message,status=403)=>{throw Object.assign(new Error(message),{status,code:status});};
 const ids=value=>[...new Set((Array.isArray(value)?value:value==null?[]:[value]).map(Number))].sort((a,b)=>a-b);

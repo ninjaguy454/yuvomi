@@ -15,6 +15,9 @@ import { isDevicePrincipal, deviceBootstrap } from '/utils/device-context.js';
 import { api } from '/api.js';
 import { canTask, canCapability } from '/permissions.js';
 import { actionableSubtasks, changeTaskStatus, taskRevision, taskStatusConfirmation } from '/utils/task-state.js';
+import {captureCompletionSound,playUiSound} from '/utils/ui-sounds.js';
+import {mountCardColorPicker} from '/components/card-color-picker.js';
+import {cardColorAttribute} from '/utils/card-colors.js';
 import { structuralSubtasks, helperWaitingLabel } from '/utils/task-progress.js';
 import { watchTaskChanges, latestTaskLoader, createTaskStartRefresh, taskConnectionState } from '/utils/task-live.js';
 import { reconcileTaskMarkup, captureTaskViewport } from '/utils/task-view-state.js';
@@ -674,7 +677,7 @@ function renderTaskCard(task, opts = {}) {
   const statusLabel = ({ open: 'Not Started', in_progress: 'In Progress', done: 'Completed', expired: 'Expired', skipped:'Skipped' })[task.status] || task.status;
 
   return `<article class="task-card activity-card${hasDetails ? ' activity-card--has-details' : ''}${showCheckbox ? ' activity-card--selecting' : ''}${points !== null && String(points).length > 3 ? ' activity-card--large-points' : ''}${board ? ' kanban-card' : ''}${isDone ? ' task-card--done kanban-card--done' : ''}${archived ? ' task-card--archived' : ''}"
-      data-task-id="${task.id}">
+         data-task-id="${task.id}"${cardColorAttribute(task.card_color)}>
     ${points===null?'':`<span class="activity-card__points" role="img" aria-label="${esc(taskScoringLabel(task,state.currentUserId))}" title="${esc(taskScoringLabel(task,state.currentUserId))}">${points}</span>`}
     <div class="activity-card__surface">
     <div class="activity-card__summary">
@@ -1128,6 +1131,7 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
 
       <section class="task-editor__section" aria-labelledby="task-main-heading">
       <h3 id="task-main-heading">Task</h3>
+      <div class="form-group"><span class="label">${t('cardColors.color')}</span><div id="task-card-color-choice"></div></div>
       <div class="form-group">
         <div class="form-field">
           <label class="label" for="task-title">${t('tasks.titleLabel')}<span class="required-marker" aria-hidden="true"> *</span></label>
@@ -1606,8 +1610,8 @@ function cardSubtaskController(container) {
       children: actionableSubtasks,
       canComplete: canToggleCardSubtask,
       invalidateReads: () => taskPageLoaders.get(container)?.invalidate(),
-      send: async (child, status, parent) => {
-        const result = await changeTaskStatus(child, status);
+      send: async (child, status, parent,context) => {
+        const result = await changeTaskStatus(child, status,context||{});
         if (!result) throw Object.assign(new Error('This step was not changed.'), { outcome: 'rejected' });
         const fresh = [result.data, result.data?.parent_task, result.data?.projection_parent_task]
           .find(row => Number(row?.id) === Number(parent.id) && Number.isSafeInteger(row?.revision));
@@ -2016,7 +2020,7 @@ function wireActivityTemplatePrefill(panel, { task = null, presetActivityTemplat
     const occurrenceStartDate = nextTemplate ? parseDateInput(startDate?.value || '') || null : null;
     modalTags = normalizeTagList(nextTemplate?.tags);
     const body = panel.querySelector('.modal-panel__body');
-    controls.disposeMentions?.();
+    controls.disposeMentions?.();controls.colorPicker?.dispose();
     body.replaceChildren();
     body.insertAdjacentHTML('beforeend', renderModalContent({ users: state.users, presetActivityTemplate: nextTemplate, presetDates, occurrenceStartDate }));
     mountFooter(panel);
@@ -2326,11 +2330,12 @@ function wireTaskForm(panel, {
     form.querySelector('[data-rotation-bindings]')?.addEventListener('input', refreshRotationMentions);
     disposeMentions = wireVariableMentions(form);
   }
-  taskFormControls.set(form, { skills, subtasks, rotations, refreshAssignment, addSkill, disposeMentions, originalTask: task ? structuredClone(task) : null });
+  const colorPicker=mountCardColorPicker(form.querySelector('#task-card-color-choice'),{value:task?.card_color_choice||(task?.card_color?{version:1,mode:'fixed',slot:task.card_color}:null),disabled:task?!canTask(task,'edit'):!canCapability('tasks.create')});
+  taskFormControls.set(form, { colorPicker, skills, subtasks, rotations, refreshAssignment, addSkill, disposeMentions, originalTask: task ? structuredClone(task) : null });
   wireActivityTemplatePrefill(panel, { task, presetActivityTemplate, presetDates, container, onChanged, syncReady });
   panel.querySelector('[data-save-as-template]')?.addEventListener('click', () => saveTaskAsTemplate(form));
 
-  applyTaskFormPermissions(panel, task, { skills, subtasks });
+  applyTaskFormPermissions(panel, task, { skills, subtasks,colorPicker });
   bindTaskScoringForm(form, taskFormControls.get(form));
   if (task) {
     const controls = taskFormControls.get(form);
@@ -2398,17 +2403,18 @@ function bindTaskScoringForm(form, controls) {
   }
 }
 
-const scoringFormFields = {'task-title':'title','task-description':'description','task-priority':'priority','task-category':'category','task-points':'points','task-start-date':'start_date','task-start-time':'start_time','task-due-date':'due_date','task-due-time':'due_time','task-expiration-policy':'expiration_policy','task-assignment-mode':'assignment_mode','task-rotation-group':'rotation_group','task-rotation-position':'rotation_slot','task-visibility':'visibility','task-countdown':'countdown','task-locked':'locked'};
+const scoringFormFields = {'task-card-color-choice':'card_color_choice','task-title':'title','task-description':'description','task-priority':'priority','task-category':'category','task-points':'points','task-start-date':'start_date','task-start-time':'start_time','task-due-date':'due_date','task-due-time':'due_time','task-expiration-policy':'expiration_policy','task-assignment-mode':'assignment_mode','task-rotation-group':'rotation_group','task-rotation-position':'rotation_slot','task-visibility':'visibility','task-countdown':'countdown','task-locked':'locked'};
 const taskScoringSubmitButton = form => form.closest('.modal-panel')?.querySelector('#task-submit-btn') || form.querySelector('#task-submit-btn');
 
 function snapshotTaskScoringForm(form, controls) {
-  return { fields: Object.fromEntries(Object.keys(scoringFormFields).map(id=>{const node=form.querySelector(`#${id}`);return [id,node?.type==='checkbox'?node.checked:node?.value];})),
+  return {colorChoice:controls.colorPicker?.getValue(),colorChanged:controls.colorPicker?.isChanged(), fields: Object.fromEntries(Object.keys(scoringFormFields).map(id=>{const node=form.querySelector(`#${id}`);return [id,node?.type==='checkbox'?node.checked:node?.value];})),
     mode:form.querySelector('[name="scoring_mode"]:checked')?.value, assigned:getSelectedUserIds(form,'task_assigned'), skills:controls.skills.getValue(),
     subtasks:controls.subtasks?.getValue({withKeys:true}) || [], rotationIds:getRotationUserIds(form), bindings:controls.rotations.getValue(), tags:[...modalTags], recurrence:getRRuleValues(form,'task'), intent:[...controls.rootIntent], modeTouched:controls.modeTouched };
 }
 
 function applyScoringFormSnapshot(form, controls, snapshot) {
   controls.rebasing=true;
+  controls.colorPicker?.setValue(snapshot.colorChoice??snapshot.fields['task-card-color-choice'],{dirty:snapshot.colorChanged??false});
   for (const [id,value] of Object.entries(snapshot.fields)) {const node=form.querySelector(`#${id}`);if(!node)continue;if(node.type==='checkbox')node.checked=!!value;else node.value=value??'';}
   for(const node of form.querySelectorAll('[name="scoring_mode"]'))node.checked=node.value===snapshot.mode;
   for(const node of form.querySelectorAll('[data-ms-input="task_assigned"]'))node.checked=snapshot.assigned.includes(Number(node.value));
@@ -2507,6 +2513,7 @@ async function submitFutureScoring(form, controls, onChanged) {
 
 function applyTaskFormPermissions(panel, task, controls) {
   const allowed = action => task ? canTask(task, action) : canCapability(`tasks.${action}`);
+  controls.colorPicker?.setDisabled(task?!allowed('edit'):!canCapability('tasks.create'));
   const gates = {
     change_priority: '#task-priority', change_points: '#task-points',
     change_category_tags: '#task-category, #task-tag-input, #task-tags',
@@ -2560,12 +2567,13 @@ function permittedTaskBody(body, task) {
     if (!validTaskPoints(child.points) || task?.scoring?.settled_task_ids?.includes(Number(child.id))) delete child.points;
   }
   if (isDevicePrincipal()) {
-    const supported = new Set(['title','description','assigned_to','start_date','start_time','due_date','due_time','points','is_recurring','recurrence_rule','recurrence_from_completion','expiration_policy','expected_revision','expected_parent_revision']);
+    const supported = new Set(['card_color_choice','title','description','assigned_to','start_date','start_time','due_date','due_time','points','is_recurring','recurrence_rule','recurrence_from_completion','expiration_policy','expected_revision','expected_parent_revision']);
     body = Object.fromEntries(Object.entries(body).filter(([key]) => supported.has(key)));
   }
   if (!task) return body;
   const gates = {
     change_priority: ['priority'], change_points: ['points','scoring_mode'], change_category_tags: ['category', 'tags'],
+    edit:['card_color_choice'],
     change_dates: ['start_date', 'start_time', 'due_date', 'due_time', 'expiration_policy', 'is_recurring', 'recurrence_rule', 'recurrence_from_completion', 'countdown'],
     change_assignment: ['assigned_to', 'assignment_mode', 'rotation_user_ids', 'rotation_group', 'rotation_slot', 'activity_template_id', 'activity_subject_user_id', 'activity_inputs'],
     change_required_skills: ['skill_ids'], complete: ['status'],
@@ -2731,6 +2739,7 @@ function readTaskEditState(form, controls) {
   const dates = { start_date: parseDateInput(value('task-start-date')) || null, due_date: parseDateInput(value('task-due-date')) || null };
   const definition = taskEditDefinition({
     title: value('task-title'), description: value('task-description'), category: value('task-category'), priority: value('task-priority'),
+    ...(controls.colorPicker?.isChanged()?{card_color_choice:controls.colorPicker.getValue()}:{}),
     points: value('task-points'), scoring_mode: form.querySelector('[name="scoring_mode"]:checked')?.value || controls.originalTask?.scoring?.mode,
     tags: normalizeTagList([...modalTags, ...value('task-tag-input').split(',')]),
     subtasks: controls.subtasks?.getValue() || [], skill_ids: controls.skills.getValue(),
@@ -2749,7 +2758,7 @@ function readTaskEditState(form, controls) {
   } };
 }
 
-async function chooseTaskEditScope(submitButton, task) {
+async function chooseTaskEditScope(submitButton, task,{colorOnly=false,hasColor=false}={}) {
   let selection = null;
   const historical = task.status === 'done' || isClosedOccurrence(task) || isArchived(task);
   const child = openChildModal({
@@ -2758,7 +2767,7 @@ async function chooseTaskEditScope(submitButton, task) {
       ${historical ? '<p class="form-hint">This historical occurrence will be preserved.</p>' : ''}
       <fieldset class="task-edit-scope__choices" aria-labelledby="task-edit-scope-question">
         <label class="task-edit-scope__option"><input type="radio" name="edit_scope" value="occurrence" ${historical ? 'disabled' : 'checked'}><span>This occurrence only<br><small class="form-hint">Changes only this Task.</small></span></label>
-        <label class="task-edit-scope__option"><input type="radio" name="edit_scope" value="future" ${task.permissions?.edit_series === false ? 'disabled' : ''} ${historical ? 'checked' : ''}><span>This and future occurrences<br><small class="form-hint">Changes this Task and future occurrences in this recurring series.</small></span></label>
+        <label class="task-edit-scope__option"><input type="radio" name="edit_scope" value="future" ${task.permissions?.edit_series === false ? 'disabled' : ''} ${historical ? 'checked' : ''}><span>${colorOnly?t('cardColors.newOccurrences'):'This and future occurrences'}<br><small class="form-hint">${colorOnly?t('cardColors.scopeColor'):hasColor?t('cardColors.scopeMixed'):'Changes this Task and future occurrences in this recurring series.'}</small></span></label>
       </fieldset>
       <div class="modal-panel__footer"><button type="button" class="btn btn--secondary" data-task-scope-cancel>Cancel</button><button type="submit" id="task-scope-apply" class="btn btn--primary">Apply</button></div>
     </form>`,
@@ -2885,6 +2894,7 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
 
   const body = {
     title:           form.title.value.trim(),
+    ...(!taskId||taskFormControls.get(form)?.colorPicker?.isChanged()?{card_color_choice:taskFormControls.get(form)?.colorPicker?.getValue()||{version:1,mode:'default'}}:{}),
     description:     form.description.value.trim() || null,
     priority:        form.priority.value,
     category:        form.category.value,
@@ -3010,7 +3020,8 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
         && JSON.stringify(edited.definition) !== JSON.stringify(controls.editBaseline.definition)) {
       // Validation precedes this choice; uploads and all mutations follow it.
       submitBtn.disabled = false; submitBtn.textContent = originalLabel;
-      const scope = await chooseTaskEditScope(submitBtn, controls.originalTask);
+      const withoutColor=value=>{const {card_color_choice,...rest}=value;return rest;};
+      const scope = await chooseTaskEditScope(submitBtn, controls.originalTask,{hasColor:controls.colorPicker?.isChanged(),colorOnly:controls.colorPicker?.isChanged()&&JSON.stringify(withoutColor(edited.definition))===JSON.stringify(withoutColor(controls.editBaseline.definition))});
       if (!scope || !form.isConnected) return;
       submitBtn.disabled = true; submitBtn.textContent = t('common.saving');
       body.edit_scope = scope;
@@ -5275,6 +5286,7 @@ function wireTaskList(container) {
     }
 
     if (action === 'toggle-activity-details') {
+      playUiSound(state.expandedTasks.has(Number(id))?'close':'open',e);
       const taskId = Number(id);
       if (state.expandedTasks.has(taskId)) state.expandedTasks.delete(taskId);
       else state.expandedTasks.add(taskId);
@@ -5303,7 +5315,7 @@ function wireTaskList(container) {
       if (!task || !canToggleTask(task)) return;
       target.disabled = true;
       try {
-        await changeTaskStatus(task, task.status === 'done' ? 'in_progress' : 'done');
+        await changeTaskStatus(task, task.status === 'done' ? 'in_progress' : 'done',{gesture:e});
       } catch (err) { window.yuvomi.showToast(err.message, 'danger'); }
       finally { target.disabled = false; }
       await loadTasks(container);
@@ -5359,7 +5371,7 @@ function wireTaskList(container) {
         if (!taskCardPendingFocus.has(listEl)) taskCardPendingFocus.set(listEl, new Map());
         taskCardPendingFocus.get(listEl).set(Number(parent.id), target);
       }
-      const queued = cardSubtaskController(container).enqueue(parent, child.id, child.status === 'done' ? 'in_progress' : 'done');
+      const queued = cardSubtaskController(container).enqueue(parent, child.id, child.status === 'done' ? 'in_progress' : 'done',{soundTicket:child.status!=='done'?captureCompletionSound(e):null});
       if (!queued) taskCardPendingFocus.get(listEl)?.delete(Number(parent.id));
     }
 

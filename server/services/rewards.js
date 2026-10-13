@@ -176,22 +176,30 @@ export function createRedemption(d, {actorId, userId, catalogId, note = null, re
       if (!row) throw new RewardError('This redemption is no longer available. Its request cannot be reused.', 410);
       return {row, replayed: true};
     }
-    const item = d.prepare('SELECT * FROM reward_catalog WHERE id=? AND is_active=1').get(catalogId);
-    if (!item) throw new RewardError('Reward not found.', 404);
-    if (!isEnrolled(d, userId)) throw new RewardError('User does not participate in the reward system.');
-    if (getBalance(d, userId) < item.cost) throw new RewardError('Insufficient points.');
-    const autoFulfill = !pendingDelivery && d.prepare("SELECT value FROM sync_config WHERE key='rewards_require_approval'").get()?.value === '0';
-    const result = d.prepare(`INSERT INTO reward_redemptions
-      (user_id,catalog_id,reward_name,reward_icon,cost,note,requested_by,status,decided_by,decided_at)
-      VALUES (?,?,?,?,?,?,?, ?,?, CASE WHEN ? THEN strftime('%Y-%m-%dT%H:%M:%SZ','now') ELSE NULL END)`)
-      .run(userId,item.id,item.name,item.icon,item.cost,note,actorId,autoFulfill?'fulfilled':'pending',
-        autoFulfill?actorId:null,autoFulfill?1:0);
-    postLedger(d, {userId,delta:-item.cost,type:'redeem',reason:item.name,
-      redemptionId:result.lastInsertRowid,createdBy:actorId});
+    const row=createRedemptionRecord(d,{actorId,userId,catalogId,note,pendingDelivery});
     d.prepare(`INSERT INTO reward_redemption_requests(actor_user_id,request_key,request_fingerprint,redemption_id)
-      VALUES (?,?,?,?)`).run(actorId,key,fingerprint,result.lastInsertRowid);
-    return {row:d.prepare('SELECT * FROM reward_redemptions WHERE id=?').get(result.lastInsertRowid),replayed:false};
+      VALUES (?,?,?,?)`).run(actorId,key,fingerprint,row.id);
+    return {row,replayed:false};
   }).immediate();
+}
+
+/** Internal atomic writer. The authorized adapter owns the durable request
+ * claim and any delivery Task in this same reserved write transaction. */
+export function createRedemptionRecord(d,{actorId=null,userId,catalogId,note=null,pendingDelivery=false,expectedCost}) {
+  if(!d.inTransaction)throw new RewardError('Purchase must be coordinated.',409);
+  const item=d.prepare('SELECT * FROM reward_catalog WHERE id=? AND is_active=1').get(catalogId);
+  if(!item)throw new RewardError('Reward not found.',404);
+  if(!Number.isSafeInteger(item.cost)||item.cost<0)throw new RewardError('This prize has an invalid point price.',409);
+  if(expectedCost!==undefined&&item.cost!==expectedCost)throw new RewardError('This prize price changed. Review it before redeeming.',409,'reward_price_changed');
+  if(!isEnrolled(d,userId))throw new RewardError('User does not participate in the reward system.');
+  if(getBalance(d,userId)<item.cost)throw new RewardError('Insufficient points.',400,'insufficient_points');
+  const autoFulfill=!pendingDelivery&&d.prepare("SELECT value FROM sync_config WHERE key='rewards_require_approval'").get()?.value==='0';
+  const result=d.prepare(`INSERT INTO reward_redemptions
+    (user_id,catalog_id,reward_name,reward_icon,cost,note,requested_by,status,decided_by,decided_at)
+    VALUES(?,?,?,?,?,?,?,?,?,CASE WHEN ? THEN strftime('%Y-%m-%dT%H:%M:%SZ','now') ELSE NULL END)`)
+    .run(userId,item.id,item.name,item.icon,item.cost,note,actorId,autoFulfill?'fulfilled':'pending',autoFulfill?actorId:null,autoFulfill?1:0);
+  postLedger(d,{userId,delta:-item.cost,type:'redeem',reason:item.name,redemptionId:result.lastInsertRowid,createdBy:actorId});
+  return d.prepare('SELECT * FROM reward_redemptions WHERE id=?').get(result.lastInsertRowid);
 }
 
 /** Decisions and refunds share one transaction. Identical retries are a no-op;

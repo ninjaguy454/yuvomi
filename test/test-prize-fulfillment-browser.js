@@ -45,7 +45,7 @@ async function pageFor(context,username,width){const page=await context.newPage(
   assert.equal(await page.evaluate(async ({username,password})=>(await fetch('/api/v1/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password})})).status,{username,password}),200);
   return page;
 }
-test('unavailable device prize control preserves saved settings on open, cancel and unchanged Save',{timeout:60000},async()=>{
+test('functional device prize policy preserves saved settings on open, cancel and unchanged Save',{timeout:60000},async()=>{
   const context=await browser.createBrowserContext();
   try {
     const page=await pageFor(context,'Prize Dad',1280),writes=[];
@@ -57,8 +57,9 @@ test('unavailable device prize control preserves saved settings on open, cancel 
       await page.setViewport({width,height:844,isMobile:width<500,hasTouch:width<500});
       await page.goto(origin+'/settings/admin/devices');await page.waitForSelector('[data-device-edit="'+item.id+'"]');
       await page.click('[data-device-edit="'+item.id+'"]');await page.waitForSelector('[name="reward:redeem"]');
-      assert.deepEqual(await page.$eval('[name="reward:redeem"]',el=>({disabled:el.disabled,checked:el.checked})),{disabled:true,checked:false});
-      assert.match(await page.$eval('[name="reward:redeem"]',el=>el.closest('label').textContent),/unavailable|not yet available/i);
+      assert.deepEqual(await page.$eval('[name="reward:redeem"]',el=>({disabled:el.disabled,checked:el.checked})),{disabled:false,checked:flag==='allow'});
+      assert.equal(await page.$eval('[name="reward:mode"]',el=>el.value),'member_signin');
+      assert.match(await page.$eval('[name="reward:mode"]',el=>el.closest('section').textContent),/anyone.*choose.*member.*spend/i);
       assert.deepEqual(snapshot(item.id),before,'opening the configuration must not change saved settings');assert.equal(writes.length,writeCount);
       await page.click('.device-config__footer [data-action="close-modal"]');await page.waitForSelector('[data-device-config]',{hidden:true});
       assert.deepEqual(snapshot(item.id),before,'cancel must not change saved settings');assert.equal(writes.length,writeCount);
@@ -68,13 +69,13 @@ test('unavailable device prize control preserves saved settings on open, cancel 
       await page.$eval('[name="reward:redeem"]',el=>el.closest('section').scrollIntoView({block:'center'}));
       await page.waitForFunction(()=>{const r=document.querySelector('[name="reward:redeem"]').getBoundingClientRect();return r.top>0&&r.bottom<innerHeight;});
       const unavailableSection=await page.$('section.device-config__section:has([name="reward:redeem"])');
-      await unavailableSection.screenshot({path:join(output,'device-unavailable-'+flag+'-'+width+'.png')});
+      await unavailableSection.screenshot({path:join(output,'device-policy-'+flag+'-'+width+'.png')});
       const saved=page.waitForResponse(r=>r.request().method()==='PATCH'&&r.url().endsWith('/devices/'+item.id));
       await page.click('[data-device-save]');assert.equal((await saved).status(),200);await page.waitForSelector('[data-device-config]',{hidden:true});
       assert.deepEqual(snapshot(item.id),before,'unchanged Save must preserve saved permissions, scope, preferences and timeouts');
       assert.equal(snapshot(item.id).permissions_json.capabilities['device_rewards.redeem'],flag);
       assert.equal(writes.length,writeCount+1);assert.equal(d.prepare('SELECT revision FROM household_devices WHERE id=?').get(item.id).revision,revision+1);
-      evidence.steps.push({deviceUnavailable:true,width,savedFlag:flag,openAndCancelNoWrites:true,unchangedSavePreservesAllSettings:true});
+      evidence.steps.push({devicePolicyFunctional:true,width,savedFlag:flag,openAndCancelNoWrites:true,unchangedSavePreservesAllSettings:true});
     }
   }finally{await context.close();}
 });
@@ -145,7 +146,7 @@ test('authenticated parent sees prize record Undo and pending delivery on the re
     evidence.steps.push({width:390,strongDeliveredConfirmation:true,completionHistoryPreserved:true,noHorizontalOverflow:true});
     await dad.goto(origin+'/settings/admin/devices');await dad.waitForSelector('[data-device-edit="'+device.id+'"]');await dad.click('[data-device-edit="'+device.id+'"]');await dad.waitForSelector('[name="reward:redeem"]');
     assert.equal(await dad.$eval('[name="reward:redeem"]',el=>el.checked),false);
-    assert.equal(await dad.$eval('[name="reward:redeem"]',el=>el.disabled),true);
+    assert.equal(await dad.$eval('[name="reward:redeem"]',el=>el.disabled),false);
     await dad.click('[data-device-save]');await dad.waitForSelector('[data-device-config]',{hidden:true});
     assert.equal(JSON.parse(d.prepare('SELECT permissions_json FROM household_devices WHERE id=?').get(device.id).permissions_json).capabilities['device_rewards.redeem'],'none');
     evidence.steps.push({deviceDefaultOff:true,unrelatedSavePreservesOff:true});

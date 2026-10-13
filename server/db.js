@@ -45,6 +45,7 @@ import fs from 'node:fs/promises';
 import { mkdirSync, existsSync, renameSync, rmSync, copyFileSync, openSync, readSync, closeSync } from 'node:fs';
 import { createLogger } from './logger.js';
 import { addRewardFulfillmentSchema } from './services/reward-fulfillment-schema.js';
+import { addDevicePrizeSchema } from './services/device-prize-schema.js';
 import { decodeHtmlEntities } from './utils/html-entities.js';
 import { toE164, defaultCountryFromConfig } from './utils/phone.js';
 
@@ -9121,6 +9122,7 @@ FORK_MIGRATIONS.push({version:10054, description:'Tasks: durable whole-occurrenc
 FORK_MIGRATIONS.push({version:10055, description:'Tasks: exclusive scoring modes and immutable completion settlements', up:addTaskScoringSchema});
 FORK_MIGRATIONS.push({version:10056, description:'Trips: ordinary parent Tasks and durable preparation steps', up:addTripTaskSchema});
 FORK_MIGRATIONS.push({version:10057, description:'Rewards: parent prize delivery Tasks and audited Undo', up:addRewardFulfillmentSchema});
+FORK_MIGRATIONS.push({version:10058, description:'Rewards: scoped device purchases and one-action member authentication', up:addDevicePrizeSchema});
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];
 
 const FORK_MIGRATION_REMAPS = [

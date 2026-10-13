@@ -17,9 +17,18 @@ export function createParentPrizeRedemption(d,{actorId,userId,catalogId,note=nul
     const delivery=child?.family_role==='child';
     const result=createRedemption(d,{actorId,userId,catalogId,note,requestKey,pendingDelivery:delivery});
     if(result.replayed||!delivery)return result;
+    createPrizeDelivery(d,result.row,child);
+    return result;
+  }).immediate();
+}
+
+/** Internal delivery writer shared by human and device purchase adapters. */
+export function createPrizeDelivery(d,row,child) {
+    if(!d.inTransaction)throw new RewardError('Prize delivery must be coordinated.',409);
+    if(child.family_role!=='child')return;
     const parents=eligibleRewardParents(d);
     if(!parents.length)throw new RewardError('No household parent currently has permission to fulfill this prize.',409,'no_eligible_parent');
-    const row=result.row,columns=new Set(d.prepare('PRAGMA table_info(tasks)').all().map(c=>c.name));
+    const columns=new Set(d.prepare('PRAGMA table_info(tasks)').all().map(c=>c.name));
     const scoring=columns.has('scoring_mode')?',scoring_mode,scoring_review_required':'';
     const scoringValues=scoring?",'whole_task',0":'';
     const taskId=Number(d.prepare(`INSERT INTO tasks(title,description,created_by,assigned_to,points,visibility,
@@ -29,8 +38,7 @@ export function createParentPrizeRedemption(d,{actorId,userId,catalogId,note=nul
     setTaskAssignments(d,taskId,parents);
     d.prepare('INSERT INTO reward_fulfillment_task_links(redemption_id,task_id) VALUES(?,?)').run(row.id,taskId);
     notifyTaskAssignments(d,taskId,[],{sourceKey:`task:${taskId}:assigned:reward-redemption:${row.id}`});
-    return result;
-  }).immediate();
+    return taskId;
 }
 
 const redemption=(d,id)=>{

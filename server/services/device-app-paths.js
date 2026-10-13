@@ -4,13 +4,14 @@ const reads=new Set(['/notes','/notes/board','/notes/changes','/tasks','/tasks/m
   '/tasks/changes','/tasks/sync-targets','/dashboard','/weather','/preferences','/auth/users','/auth/member-labels','/module-counts',
   '/calendar','/calendar/holidays','/calendar/search','/calendar/sync-targets',
   '/meals','/meals/week-model','/meals/status','/meals/planning','/meals/selection-requests',
-  '/shopping','/shopping/categories','/rewards/overview','/rewards/catalog','/rewards/redemptions','/rewards/changes',
+  '/shopping','/shopping/categories','/rewards/overview','/rewards/catalog','/rewards/redemptions','/rewards/changes','/rewards/device-options',
   '/automation/rotation-groups','/automation/rotation-members','/automation/rotation-changes',
   '/automation/activity-options','/automation/obligations','/planning/places','/planning/place-search/status','/reminders']);
 /** Used by authentication to admit only routes subsequently intercepted here. */
 export function deviceAppRouteSupported(method,path) {
   if(typeof method==='object'){path=method.originalUrl||method.path||method.url;method=method.method;}
   path=canonicalPath(path);method=String(method||'GET').toUpperCase();
+  if(path==='/device/rewards/request/abandon'&&method==='POST')return true;
   if(path==='/notes'&&method==='POST')return true;
   if(path==='/notes/group-operations'&&method==='POST')return true;
   if(/^\/notes\/\d+$/.test(path)&&['PUT','DELETE'].includes(method))return true;
@@ -18,6 +19,6 @@ export function deviceAppRouteSupported(method,path) {
   if(/^\/notes\/\d+$/.test(path)&&method==='GET')return true;
   if(method==='GET')return reads.has(path)||/^\/tasks\/\d+(?:\/(?:activity|completions|comments|documents|acceptance))?$/.test(path)
     ||/^\/calendar\/\d+$/.test(path)||/^\/shopping\/\d+\/items$/.test(path)||/^\/automation\/rotation-groups\/\d+$/.test(path);
-  if(method==='POST')return path==='/tasks'||/^\/tasks\/\d+\/accept$/.test(path)||/^\/automation\/tasks\/\d+\/claim$/.test(path);
+  if(method==='POST')return path==='/rewards/redemptions'||path==='/tasks'||/^\/tasks\/\d+\/accept$/.test(path)||/^\/automation\/tasks\/\d+\/claim$/.test(path);
   return method==='PUT'&&/^\/tasks\/\d+$/.test(path)||method==='PATCH'&&/^\/tasks\/\d+\/status$/.test(path);
 }

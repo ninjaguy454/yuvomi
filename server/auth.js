@@ -38,18 +38,25 @@ import { deviceCookie, assertDeviceContext, readDeviceContext, isTemporaryContex
 import { assertCurrentDeviceRequest, sendDeviceLeaseError } from './services/device-lease.js';
 import { withDeviceWriteLease, withoutDeviceWriteLease } from './services/device-write-context.js';
 import { validateDeviceApproval, completeDeviceApproval } from './services/device-approval.js';
+import { assertDevicePrizeApprovalActor, devicePrizeApprovalFailureReason } from './services/device-prize-approval.js';
 import { deviceAppRouteSupported } from './services/device-app-paths.js';
 import { deviceMembers } from './services/device-content.js';
 import { householdMemberPresentation } from './services/member-presentation.js';
 import {cancelRewardDeliveriesForMemberDeletion} from './services/reward-fulfillment.js';
 
-// A proof for one displayed Task must never establish a personal session. Bind
+// A proof for one displayed action must never establish a personal session. Bind
 // every async authentication step to its original durable intent, not whatever
 // intent another tab might have installed while authentication was in flight.
 function deviceApprovalProof(req, expectedId = req.body?.approval_id) {
   if (!req.session?.deviceApprovalIntent && !expectedId) return null;
-  if (!expectedId) throw Object.assign(new Error('Request approval again from the Task.'), {status:409});
-  return validateDeviceApproval(db.get(), req, {expectedId}).row.id;
+  if (!expectedId) throw Object.assign(new Error('Request approval again from the display.'), {status:409});
+  return validateDeviceApproval(db.get(), req, {expectedId,allowCompleted:req.session?.deviceApprovalIntent?.kind==='prize'}).row.id;
+}
+function assertPrizeApprovalActor(req,user,approvalId){
+  if(approvalId&&req.session?.deviceApprovalIntent?.kind==='prize')assertDevicePrizeApprovalActor(db.get(),req,user,{expectedId:approvalId});
+}
+function prizeApprovalFailurePayload(req,error){
+  const reason=devicePrizeApprovalFailureReason(req,error);return reason?{reason}:{};
 }
 function finishDeviceApproval(req, res, user, approvalId) {
   const result = completeDeviceApproval(db.get(), req, user, {expectedId:approvalId});
@@ -1163,6 +1170,7 @@ router.post('/login', loginLimiter, async (req, res) => {
     // `userId` - `requireAuth` prueft genau den und ist damit blind fuer einen
     // halb angemeldeten Zustand. Ein neuer Schluessel kann hier nichts
     // aufschliessen, was der alte nicht schon aufgeschlossen haette.
+    assertPrizeApprovalActor(req,user,approvalId);
     if (twoFactor.isEnabled(db.get(), user.id)) {
       req.session.pendingTwoFactor = { userId: user.id, expiresAt: Date.now() + TWO_FACTOR_WINDOW_MS, ...(approvalId ? {approvalId} : {}) };
       return res.json({
@@ -1177,11 +1185,11 @@ router.post('/login', loginLimiter, async (req, res) => {
       res.json(loginPayload(req, user));
     } catch (sessionErr) {
       log.error('Session regeneration failed:', sessionErr);
-      res.status(sessionErr.status||500).json({ error: sessionErr.status?sessionErr.message:'Internal server error.', code: sessionErr.status||500 });
+      res.status(sessionErr.status||500).json({ error: sessionErr.status?sessionErr.message:'Internal server error.', code: sessionErr.status||500, ...prizeApprovalFailurePayload(req,sessionErr) });
     }
   } catch (err) {
     log.error('Login error:', err);
-    res.status(err.status||500).json({ error: err.status?err.message:'Internal server error.', code: err.status||500 });
+    res.status(err.status||500).json({ error: err.status?err.message:'Internal server error.', code: err.status||500, ...prizeApprovalFailurePayload(req,err) });
   }
 });
 
@@ -1729,9 +1737,10 @@ router.delete('/oidc/link', requireAuth, csrfMiddleware, (req, res) => {
  */
 router.get('/oidc/callback', async (req, res) => {
   const approvalId = req.session.oidc?.deviceApprovalId;
-  const approvalFailure = () => {
+  const approvalFailure = error => {
     if (req.session.deviceApprovalIntent?.id === approvalId)
-      req.session.deviceApprovalError = {id:approvalId,message:'Authentication could not be completed. Try again.'};
+      req.session.deviceApprovalError = {id:approvalId,message:'Authentication could not be completed. Try again.',
+        ...(devicePrizeApprovalFailureReason(req,error,approvalId)?{reason:error.reason}:{})};
     return res.redirect('/device-approval-return.html');
   };
   try {
@@ -1826,6 +1835,7 @@ router.get('/oidc/callback', async (req, res) => {
     //
     // Der Wartezustand ist derselbe wie beim Passwort-Login, deshalb landet
     // der Browser auf der Anmeldeseite und wird dort nach dem Code gefragt.
+    assertPrizeApprovalActor(req,user,approvalId);
     if (twoFactor.isEnabled(db.get(), user.id)) {
       req.session.pendingTwoFactor = { userId: user.id, expiresAt: Date.now() + TWO_FACTOR_WINDOW_MS, ...(approvalId ? {approvalId} : {}) };
       if (approvalId) return res.redirect('/device-approval-return.html');
@@ -1842,7 +1852,7 @@ router.get('/oidc/callback', async (req, res) => {
     res.redirect(deviceCookie(req)?'/device?temporary_handoff=1':'/');
   } catch (err) {
     log.error('OIDC callback error:', err);
-    if (approvalId) return approvalFailure();
+    if (approvalId) return approvalFailure(err);
     res.redirect('/login?error=oidc_failed');
   }
 });
@@ -2028,6 +2038,7 @@ router.post('/2fa/verify', twoFactorLimiter, async (req, res) => {
     }
     if ((pending.approvalId || null) !== approvalId)
       return res.status(409).json({error:'This approval changed. Authenticate again for this action.'});
+    assertPrizeApprovalActor(req,{id:pending.userId},approvalId);
 
     const code = String(req.body?.code || '');
     if (code.length > 64) {
@@ -2060,7 +2071,7 @@ router.post('/2fa/verify', twoFactorLimiter, async (req, res) => {
     });
   } catch (err) {
     log.error('Second factor error:', err);
-    res.status(err.status||500).json({ error: err.status?err.message:'Internal server error.', code: err.status||500 });
+    res.status(err.status||500).json({ error: err.status?err.message:'Internal server error.', code: err.status||500, ...prizeApprovalFailurePayload(req,err) });
   }
 });
 

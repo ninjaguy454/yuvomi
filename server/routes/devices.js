@@ -9,6 +9,7 @@ import {deviceDashboard} from '../services/device-content.js';
 import {deviceTaskList,deviceTaskDetail,deviceTaskStatus,deviceTaskClaim} from '../services/device-tasks.js';
 import {deviceTaskCreateOnce,deviceTaskUpdate} from '../services/device-task-definitions.js';
 import {beginDeviceApproval,readDeviceApproval,cancelDeviceApproval} from '../services/device-approval.js';
+import {beginDevicePrizeApproval} from '../services/device-prize-approval.js';
 import {DEVICE_COOKIE,DEVICE_ACTIONS,deviceCookie,deviceError,devicePreset,publicDevice,devicePrincipal,auditDevice,
   updateDevice,revokeDevice,beginPairing,approvePairing,pairingStatus,claimPairing,readDeviceContext,assertDeviceContext,
   deviceContextPayload,isTemporaryContext,beginTemporary,returnToDevice,touchTemporary,retireBrowserSession,deviceRequestStillValid} from '../services/devices.js';
@@ -63,6 +64,7 @@ deviceRouter.post('/launch',guarded(async(req,res)=>{
   }
   if(req.session.deviceApprovalIntent) {
     d.prepare("UPDATE device_task_approvals SET status='cancelled' WHERE credential_id=? AND status='pending'").run(ctx.credential.id);
+    d.prepare("UPDATE device_prize_approvals SET status='cancelled' WHERE credential_id=? AND status='pending'").run(ctx.credential.id);
     delete req.session.deviceApprovalIntent;delete req.session.deviceApprovalError;delete req.session.pendingTwoFactor;delete req.session.oidc;
     await save(req);
   }
@@ -86,6 +88,9 @@ deviceRouter.post('/activity',guarded((req,res)=>contextResponse(req,res,touchTe
 deviceRouter.use((req,res,next)=>req.devicePrincipal?next():res.status(403).json({error:'Return to the device view for display actions.'}));
 deviceRouter.post('/tasks/:id/approval/begin',rate,guarded(async(req,res)=>{
   const result=beginDeviceApproval(db.get(),req,Number(req.params.id),req.body);await save(req);res.status(201).json(result);
+}));
+deviceRouter.post('/rewards/approval/begin',rate,guarded(async(req,res)=>{
+  const result=beginDevicePrizeApproval(db.get(),req,req.body,{requestKey:req.get('Idempotency-Key')});await save(req);res.status(201).json(result);
 }));
 deviceRouter.get('/approval',guarded((req,res)=>res.json(readDeviceApproval(db.get(),req))));
 deviceRouter.post('/approval/cancel',guarded(async(req,res)=>{

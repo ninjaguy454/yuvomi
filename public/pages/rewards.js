@@ -21,6 +21,8 @@ import { openEmojiPicker } from '/components/emoji-picker.js';
 import { rewardRequest, pendingPrizeUndo } from '/utils/reward-request.js';
 import { watchRewardChanges } from '/utils/reward-live.js';
 import { openPointAdjustment } from '/components/point-adjustment.js';
+import { isDevicePrincipal } from '/utils/device-context.js';
+import { renderDevicePrizes } from '/components/device-prizes.js';
 
 const TABS = ['overview', 'catalog', 'ledger'];
 
@@ -977,6 +979,7 @@ async function refreshActiveTab() {
 }
 
 export async function render(container, { user } = {}) {
+  if (isDevicePrincipal()) return renderDevicePrizes(container);
   if (state.user?.id !== user?.id) {
     state.tab = 'overview'; state.overview = null; state.catalog = []; state.ledger = []; state.redemptions = []; state.pendingRedemptions=[];state.historyCursor=null;state.historyOpen=false; state.ledgerFilter = null;
   }

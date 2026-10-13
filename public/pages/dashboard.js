@@ -1776,13 +1776,15 @@ function renderRotationsWidget(rotations) {
 
 function renderRewardsWidget(rewards) {
   const standings = Array.isArray(rewards?.standings) ? rewards.standings : [];
+  const devicePrizeEntry = isDevicePrincipal() && canCapability('device_rewards.redeem')
+    ? `<button type="button" class="btn btn--secondary" data-device-prize-entry data-route="/rewards"><i data-lucide="gift" aria-hidden="true"></i>${esc(t('rewards.devicePrize.redeem'))}</button>` : '';
   if (!standings.length) {
     return `<div class="widget widget--rewards">
       ${widgetHeader('rewards', t('nav.rewards'), 0, '/rewards')}
       <div class="widget__empty">
         <i data-lucide="award" class="empty-state__icon" aria-hidden="true"></i>
         <div>${t('dashboard.noRewards')}</div>
-        ${emptyStateCta('/rewards?new=1', t('rewards.addReward'))}
+        ${isDevicePrincipal() ? devicePrizeEntry : emptyStateCta('/rewards?new=1', t('rewards.addReward'))}
       </div>
     </div>`;
   }
@@ -1816,6 +1818,7 @@ function renderRewardsWidget(rewards) {
     <div class="widget__body">
       <div class="rewards-widget">${rows}</div>
       ${footer}
+      ${devicePrizeEntry}
     </div>
   </div>`;
 }

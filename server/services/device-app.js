@@ -18,6 +18,7 @@ import { assertDeviceModule,deviceMembers,deviceCalendar,deviceMeals,deviceShopp
 import { normalizeDevicePreferences,deviceRequestStillValid } from './devices.js';
 import { householdTimeZone,todayKey } from '../utils/timezone.js';
 import { deviceWeather } from './device-weather.js';
+import {devicePrizeOptions,createDevicePrizeRedemption,abandonDevicePrizeIntent} from './device-prizes.js';
 
 const pick=(row,keys)=>Object.fromEntries(keys.filter(key=>row?.[key]!==undefined).map(key=>[key,row[key]]));
 const fail=(message='This action requires personal sign-in.',status=403)=>{throw Object.assign(new Error(message),{status});};
@@ -113,10 +114,11 @@ export function deviceAppMiddleware(req,res,next) {
   const p=req.devicePrincipal;if(!p)return next();
   const path=canonicalPath(req.originalUrl||req.url),method=req.method,d=db.get(),query=req.query||{};
   // Bootstrap/context management already use their own device-aware handlers.
-  if(path.startsWith('/device/')||['/auth/me','/auth/logout','/version'].includes(path))return next();
+  if(path.startsWith('/device/')&&path!=='/device/rewards/request/abandon'||['/auth/me','/auth/logout','/version'].includes(path))return next();
   res.set('Cache-Control','private, no-store');
   try {
     if(!deviceAppRouteSupported(method,path))fail();
+    if(path==='/device/rewards/request/abandon')return res.json(abandonDevicePrizeIntent(d,req,req.body,{requestKey:req.get('Idempotency-Key')}));
     if(path==='/weather')return deviceWeather(req,res);
     if(path==='/notes'||path.startsWith('/notes/')) {
       if(path==='/notes/changes')return changes(req,res,'note_change_clock',(database,principal)=>assertNoteAction(database,principal,null,'view'));
@@ -198,6 +200,12 @@ export function deviceAppMiddleware(req,res,next) {
     }
     if(path.startsWith('/rewards/')) {
       assertDeviceModule(p,'rewards');
+      if(path==='/rewards/device-options')return res.json({data:devicePrizeOptions(d,p)});
+      if(path==='/rewards/redemptions'&&method==='POST') {
+        const result=createDevicePrizeRedemption(d,req,req.body,{requestKey:req.get('Idempotency-Key')});
+        if(result.replayed)res.set('Idempotent-Replayed','true');
+        return res.status(result.replayed?200:201).json(result);
+      }
       if(path==='/rewards/changes')return changes(req,res,'reward_change_clock',(_d,p)=>assertDeviceModule(p,'rewards'));
       const value=deviceRewards(d,p);
       return res.json({data:path==='/rewards/overview'?value:path==='/rewards/catalog'?value.catalog:[]});

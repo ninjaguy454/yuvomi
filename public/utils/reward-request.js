@@ -65,6 +65,7 @@ export function pendingPointAdjustment(userId,storage) {
 }
 
 export function rewardRequest(userId, body, storage) {
+  if(body.operation==='device-prize')return devicePrizeRequest(userId,body,storage);
   const {cache,mergeStored,write}=requestStore(userId,storage);
   const intent = body.operation==='undo'
     ? JSON.stringify(['undo',body.redemption_id,body.expected_status,body.confirm_delivered,body.reason])
@@ -82,6 +83,66 @@ export function rewardRequest(userId, body, storage) {
     cache.pending.delete(request.key);
     write();
   } };
+}
+
+// Device purchases use one durable record per request, so another tab cannot
+// overwrite an unresolved purchase by writing a stale aggregate list.
+function devicePrizeStore(area,storage) {
+  const useDefaultArea=storage===undefined;
+  if(useDefaultArea){try{storage=globalThis.sessionStorage;}catch{storage=null;}}
+  const prefix=`vidamia-device-prize-requests:${area}:`,cache=pendingCache(storage,prefix,useDefaultArea);
+  try {
+    for(let index=0;index<storage.length;index++) {
+      const name=storage.key(index);if(!name?.startsWith(prefix))continue;
+      const request=JSON.parse(storage.getItem(name));
+      if(typeof request?.key==='string'&&request.key&&name===prefix+request.key
+        &&typeof request.intent==='string'&&!cache.completed.has(request.key))cache.pending.set(request.key,request);
+    }
+  }catch{/* The stable cache preserves known intent while storage is denied. */}
+  return {cache,persist(request){
+    const name=prefix+request.key,value=JSON.stringify(request);
+    try{storage.setItem(name,value);return storage.getItem(name)===value;}catch{return false;}
+  },remove(key){try{storage.removeItem(prefix+key);}catch{/* A future reload can safely replay its retained receipt. */}}};
+}
+function devicePrizeRequest(area,body,storage,requestKey=null) {
+  const {cache,persist,remove}=devicePrizeStore(area,storage);
+  const intent=JSON.stringify(['device-prize',body.catalog_id,body.user_id,body.expected_cost,body.note||'']);
+  let request=requestKey?cache.pending.get(requestKey):[...cache.pending.values()].find(item=>item.intent===intent);
+  if(request&&request.intent!==intent)throw new Error('The previous purchase intent changed.');
+  if(!request)request={intent,key:requestKey||newRewardRequestKey()};
+  // A Check dialog retains its exact key even if another handle confirmed and
+  // removed that slot while the dialog was open. Restore only that receipt.
+  cache.completed.delete(request.key);cache.pending.set(request.key,request);
+  const durable=persist(request);
+  return {key:request.key,durable,finish(){cache.completed.add(request.key);cache.pending.delete(request.key);remove(request.key);}};
+}
+
+/** Claim the pending member purchase before dispatch. Web Locks serialize tabs
+ * when supported; individual records still retain all intents without locks. */
+export async function claimDevicePrize(area,body,storage,{requestKey=null}={}) {
+  const claim=()=>{
+    const pending=requestKey?null:pendingDevicePrize(area,storage),original=pending?.body||body;
+    const attempt=devicePrizeRequest(area,original,storage,requestKey);
+    if(!attempt.durable){const error=new Error('Browser storage is unavailable. Allow storage before redeeming a prize.');error.reason='device_prize_storage_unavailable';throw error;}
+    return {...attempt,body:original};
+  };
+  const locks=globalThis.navigator?.locks;
+  return locks?.request?locks.request(`vidamia-device-prize:${area}`,claim):claim();
+}
+
+/** Shared displays must reconcile the original purchase before starting another
+ * for this member. Never replace its submitted price after an uncertain result. */
+export function pendingDevicePrize(area,storage) {
+  const {cache}=devicePrizeStore(area,storage);
+  for(const request of cache.pending.values()) {
+    let value;try{value=JSON.parse(request.intent);}catch{continue;}
+    if(!Array.isArray(value)||value.length!==5||value[0]!=='device-prize')continue;
+    const [,catalog_id,user_id,expected_cost,note]=value;
+    if(!Number.isSafeInteger(catalog_id)||catalog_id<=0||!Number.isSafeInteger(user_id)||user_id<=0
+      ||!Number.isSafeInteger(expected_cost)||expected_cost<0||typeof note!=='string')continue;
+    return {key:request.key,body:{operation:'device-prize',catalog_id,user_id,expected_cost,...(note?{note}:{})}};
+  }
+  return null;
 }
 
 /** Reconcile the submitted Undo after reload, using its original confirmation. */

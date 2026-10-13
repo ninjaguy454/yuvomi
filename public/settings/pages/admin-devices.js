@@ -2,6 +2,7 @@ import { deviceConfigContent } from './admin-device-config.js';
 import { api } from '/api.js';
 import { esc } from '/utils/html.js';
 import { openModal, closeModal, confirmModal } from '/components/modal.js';
+import { t } from '/i18n.js';
 
 const modules=['tasks','calendar','meals','shopping','rewards'];
 const noteActions={view:'View notes',create:'Create notes',edit:'Edit content, checklist and Dashboard visibility',delete:'Delete notes'};
@@ -15,7 +16,7 @@ export async function render(container) {
     try{
       model=await api.get('/devices');if(disposed)return;
       const devices=model.data || [];
-      container.innerHTML=`<section class="settings-section"><h2>Household Devices</h2><p>Pair a shared display with its own permissions and preferences. Devices are not household members and never receive points.</p><p>Anyone using a display can complete the permitted Tasks shown there. Supervised work can request authenticated approval on the Task board. Full temporary personal sign-in remains available for rewards redemption and administration.</p><button type="button" class="btn btn--primary" data-device-approve>Approve pairing code</button><a href="/device/pair" data-link class="btn btn--secondary">Pair this browser as a device</a><p role="alert" data-devices-error></p><div>${devices.length?devices.map(device=>`<article class="settings-card"><h3>${esc(device.name)}</h3><p>${esc(device.status)} · Last connection: ${esc(device.last_seen_at || 'Not connected yet')}</p><button type="button" class="btn btn--secondary" data-device-edit="${device.id}">Configure</button><button type="button" class="btn btn--secondary" data-device-replace="${device.id}">Replace access</button>${device.status==='active'?`<button type="button" class="btn btn--danger" data-device-revoke="${device.id}">Revoke</button>`:''}</article>`).join(''):'<p>No paired devices.</p>'}</div></section>`;
+      container.innerHTML=`<section class="settings-section"><h2>Household Devices</h2><p>Pair a shared display with its own permissions and preferences. Devices are not household members and never receive points.</p><p>Anyone using a display can complete the permitted Tasks shown there. Supervised work can request authenticated approval on the Task board. ${esc(t('rewards.devicePrize.devicesHint'))}</p><button type="button" class="btn btn--primary" data-device-approve>Approve pairing code</button><a href="/device/pair" data-link class="btn btn--secondary">Pair this browser as a device</a><p role="alert" data-devices-error></p><div>${devices.length?devices.map(device=>`<article class="settings-card"><h3>${esc(device.name)}</h3><p>${esc(device.status)} · Last connection: ${esc(device.last_seen_at || 'Not connected yet')}</p><button type="button" class="btn btn--secondary" data-device-edit="${device.id}">Configure</button><button type="button" class="btn btn--secondary" data-device-replace="${device.id}">Replace access</button>${device.status==='active'?`<button type="button" class="btn btn--danger" data-device-revoke="${device.id}">Revoke</button>`:''}</article>`).join(''):'<p>No paired devices.</p>'}</div></section>`;
       container.querySelector('[data-device-approve]').onclick=()=>pair();
       container.querySelectorAll('[data-device-edit]').forEach(button=>button.onclick=()=>edit(devices.find(device=>device.id===Number(button.dataset.deviceEdit))));
       container.querySelectorAll('[data-device-replace]').forEach(button=>button.onclick=()=>pair(devices.find(device=>device.id===Number(button.dataset.deviceReplace))));
@@ -42,7 +43,8 @@ export async function render(container) {
       panel.querySelector('form').onsubmit=async event=>{event.preventDefault();const form=new FormData(event.target),submit=event.submitter||panel.querySelector('[data-device-save]');submit.disabled=true;
         for(const key of modules)permissions.modules[key]=form.has(`module:${key}`)?'read':'none';
         permissions.widgets.weather=form.has('weather')?'allow':'none';
-        // The unavailable redemption control never changes its saved flag.
+        permissions.capabilities['device_rewards.redeem']=form.has('reward:redeem')?'allow':'none';
+        permissions.prize_redemption_mode=form.get('reward:mode') || permissions.prize_redemption_mode || 'member_signin';
         for(const key of Object.keys(actions))permissions.capabilities[`device_tasks.${key}`]=form.has(`action:${key}`)?'allow':'none';
         for(const key of Object.keys(definitions))permissions.capabilities[key]=form.has(`definition:${key}`)?'allow':'none';
         for(const key of Object.keys(noteActions))permissions.capabilities[`device_notes.${key}`]=form.has(`note:${key}`)?'allow':'none';

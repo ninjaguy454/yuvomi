@@ -20,7 +20,7 @@ export function deviceCookie(req) {
   return raw?.slice(DEVICE_COOKIE.length+1)||null;
 }
 export function devicePreset() {
-  return {admin:false,
+  return {admin:false,prize_redemption_mode:'member_signin',
     modules:Object.fromEntries(PERMISSION_MODULES.map(m=>[m.key,['dashboard','tasks','calendar','meals','shopping','rewards'].includes(m.key)?'read':'none'])),
     widgets:Object.fromEntries(PERMISSION_WIDGETS.map(w=>[w.id,['tasks','calendar','meals','shopping','rewards','clock'].includes(w.id)?'allow':'none'])),
     capabilities:{...Object.fromEntries(PERMISSION_CAPABILITIES.map(c=>[c.key,['tasks.view_household','rotations.view'].includes(c.key)?'allow':'none'])),
@@ -32,6 +32,9 @@ const allowedModules=new Set(['dashboard','tasks','calendar','meals','shopping',
 export function normalizeDevicePermissions(input=devicePreset()) {
   if(!input||typeof input!=='object'||Array.isArray(input))throw deviceError('Invalid device permissions.');
   const result=devicePreset();
+  const prizeMode=input.prize_redemption_mode??'member_signin';
+  if(!['member_signin','trusted_display'].includes(prizeMode))throw deviceError('Choose whether prize redemption requires member sign-in.');
+  result.prize_redemption_mode=prizeMode;
   const weather=input.widgets?.weather??result.widgets.weather;
   if(!['allow','none'].includes(weather))throw deviceError('Choose whether household Weather is allowed.');
   result.widgets.weather=weather;
@@ -118,10 +121,15 @@ export function invalidateDeviceContexts(d,id,{revoke=false}={}) {
   if(revoke)d.prepare('UPDATE device_pairings SET consumed_at=COALESCE(consumed_at,?) WHERE device_id=?').run(Date.now(),id);
   const rows=d.prepare('SELECT * FROM device_credentials WHERE device_id=?').all(id);
   for(const row of rows) {
+    cancelPendingPrizeApprovals(d,row.id);
     if(row.temporary_sid)retireBrowserSession(d,row.temporary_sid);
     d.prepare(`UPDATE device_credentials SET context_key=?,temporary_sid=NULL,temporary_user_id=NULL,temporary_started_at=NULL,temporary_idle_at=NULL,login_intent_at=NULL,
       revoked_at=CASE WHEN ? THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE revoked_at END WHERE id=?`).run(random(),revoke?1:0,row.id);
   }
+}
+function cancelPendingPrizeApprovals(d,credentialId) {
+  if(d.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='device_prize_approvals'").get())
+    d.prepare("UPDATE device_prize_approvals SET status='cancelled' WHERE credential_id=? AND status='pending'").run(credentialId);
 }
 export function revokeDevice(d,id,revision,actor) {
   return d.transaction(()=>{
@@ -209,6 +217,7 @@ export function beginTemporary(d,req,now=Date.now()) {
   const context=assertDeviceContext(d,req,{now});if(!context)throw deviceError('Pair this display first.',403);
   if(context.credential.temporary_sid)throw deviceError('Return to the device before signing in again.',409);
   d.prepare("UPDATE device_task_approvals SET status='cancelled' WHERE credential_id=? AND status='pending'").run(context.credential.id);
+    cancelPendingPrizeApprovals(d,context.credential.id);
   delete req.session.deviceApprovalIntent;delete req.session.pendingTwoFactor;delete req.session.oidc;
   d.prepare('UPDATE device_credentials SET login_intent_at=? WHERE id=?').run(now,context.credential.id);
   req.session.deviceLoginIntent={credentialId:context.credential.id,context:context.credential.context_key,expiresAt:now+5*60_000};
@@ -233,6 +242,7 @@ export function establishTemporary(d,req,context,user,now=Date.now()) {
 export function returnToDevice(d,credential,event='temporary_return') {
   return d.transaction(()=>{
     d.prepare("UPDATE device_task_approvals SET status='cancelled' WHERE credential_id=? AND status='pending'").run(credential.id);
+    cancelPendingPrizeApprovals(d,credential.id);
     if(credential.temporary_sid)retireBrowserSession(d,credential.temporary_sid);
     const changed=d.prepare('UPDATE device_credentials SET context_key=?,temporary_sid=NULL,temporary_user_id=NULL,temporary_started_at=NULL,temporary_idle_at=NULL,login_intent_at=NULL WHERE id=? AND context_key=?')
       .run(random(),credential.id,credential.context_key);
@@ -276,7 +286,7 @@ export function deviceBoundary(d,req,res,next) {
     if(!ctx)return res.status(401).json({error:'Pair this display again.',reason:'device_revoked'});
     if(login&&!req.session?.deviceLoginIntent) {
       if(!req.session?.deviceApprovalIntent)return res.status(403).json({error:'Choose supervisor approval or temporary sign-in first.',reason:'device_login_required'});
-      validateDeviceApproval(d,req,{expectedId:req.body?.approval_id||req.query?.approval_id||req.session?.oidc?.deviceApprovalId});
+      validateDeviceApproval(d,req,{expectedId:req.body?.approval_id||req.query?.approval_id||req.session?.oidc?.deviceApprovalId,allowCompleted:req.session?.deviceApprovalIntent?.kind==='prize'});
     }
     if(bootstrap||login||path==='/api/v1/auth/logout'||isTemporaryContext(req,ctx))return next();
     if(deviceAppRouteSupported(req.method,path))return next();

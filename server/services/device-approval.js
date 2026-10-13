@@ -6,6 +6,7 @@ import {assertTaskRevision,changeTaskStatus} from './task-lifecycle.js';
 import {inspectTaskSupervision,reconcileTaskSupervision} from './task-supervision.js';
 import {deviceTaskDetail} from './device-tasks.js';
 import {flushOutbound} from './caldav-todo-outbound.js';
+import {validateDevicePrizeApproval,readDevicePrizeApproval,cancelDevicePrizeApproval,completeDevicePrizeApproval} from './device-prize-approval.js';
 
 const fail=(message,status=409,reason='device_approval_invalid')=>{throw deviceError(message,status,reason);};
 function clearProof(req) {delete req.session.pendingTwoFactor;delete req.session.oidc;}
@@ -34,6 +35,7 @@ export function beginDeviceApproval(d,req,taskId,body={}, {now=Date.now()}={}) {
     assertTaskRevision(d,task,body,{required:true,requireParent:true});protectedAction(d,task);
     const id=crypto.randomBytes(24).toString('hex'),expiresAt=now+120_000;
     d.prepare("UPDATE device_task_approvals SET status='cancelled' WHERE credential_id=? AND status='pending'").run(context.credential.id);
+    d.prepare("UPDATE device_prize_approvals SET status='cancelled' WHERE credential_id=? AND status='pending'").run(context.credential.id);
     d.prepare(`INSERT INTO device_task_approvals(id,credential_id,session_id,context_key,task_id,task_revision,parent_task_id,parent_revision,created_at,expires_at)
       VALUES(?,?,?,?,?,?,?,?,?,?)`).run(id,context.credential.id,req.sessionID,context.credential.context_key,task.id,task.revision,
       task.parent_task_id,task.parent_task_id?body.expected_parent_revision:null,now,expiresAt);
@@ -42,6 +44,7 @@ export function beginDeviceApproval(d,req,taskId,body={}, {now=Date.now()}={}) {
   clearProof(req);delete req.session.deviceApprovalError;req.session.deviceApprovalIntent={id:result.approval.id};return result;
 }
 export function validateDeviceApproval(d,req,{now=Date.now(),allowCompleted=false,expectedId}={}) {
+  if(req.session?.deviceApprovalIntent?.kind==='prize')return validateDevicePrizeApproval(d,req,{now,allowCompleted,expectedId});
   const id=req.session?.deviceApprovalIntent?.id;
   if(!id||expectedId&&id!==expectedId)fail('This approval changed. Request approval again.');
   const row=d.prepare('SELECT * FROM device_task_approvals WHERE id=?').get(id);
@@ -65,6 +68,7 @@ function receipt(d,validated) {
   return {approval:{...approval,approved:true,actorName:actor?.display_name||'Supervisor'},data};
 }
 export function readDeviceApproval(d,req,options={}) {
+  if(req.session?.deviceApprovalIntent?.kind==='prize')return readDevicePrizeApproval(d,req,options);
   if(!req.session?.deviceApprovalIntent)return {approval:null};
   const result=receipt(d,validateDeviceApproval(d,req,{...options,allowCompleted:true}));
   if(result.approval.state==='pending') {
@@ -76,6 +80,7 @@ export function readDeviceApproval(d,req,options={}) {
   return result;
 }
 export function cancelDeviceApproval(d,req,{expectedId=req.session?.deviceApprovalIntent?.id}={}) {
+  if(req.session?.deviceApprovalIntent?.kind==='prize')return cancelDevicePrizeApproval(d,req,{expectedId});
   const context=assertDeviceContext(d,req);
   if(!context)fail('Pair this display first.',403);
   const id=expectedId;
@@ -90,6 +95,7 @@ export function cancelDeviceApproval(d,req,{expectedId=req.session?.deviceApprov
   return {cancelled:true};
 }
 export function completeDeviceApproval(d,req,user,{now=Date.now(),expectedId}={}) {
+  if(req.session?.deviceApprovalIntent?.kind==='prize')return completeDevicePrizeApproval(d,req,user,{now,expectedId});
   let outbound=false;
   const result=d.transaction(()=>{
     const validated=validateDeviceApproval(d,req,{now,expectedId,allowCompleted:true}),{row,context,principal}=validated;

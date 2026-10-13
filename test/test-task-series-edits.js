@@ -64,6 +64,12 @@ test('card colors persist on creation, child snapshots, edits and stale Random r
   r=await call('PUT',`/tasks/${id}`,{card_color_choice:random,expected_revision:revision});assert.equal(r.status,409,JSON.stringify(r));assert.equal(row(id).card_color,slot);assert.equal(row(id).revision,after);
   r=await edit(id,{card_color_choice:{...fixed,slot:'purple'}});assert.equal(r.status,400);
 });
+test('an unrelated series edit cannot promote an occurrence-only color override into future policy',async()=>{
+  const fixed=slot=>({version:1,mode:'fixed',slot});let r=await call('POST','/tasks',{title:'Synthetic color series',is_recurring:true,recurrence_rule:'FREQ=DAILY',due_date:'2026-09-14',card_color_choice:fixed('slot-01-v1'),subtasks:[{title:'Synthetic step'}]});assert.equal(r.status,201,JSON.stringify(r));const id=r.data.id;
+  r=await edit(id,{card_color_choice:fixed('slot-09-v1')});assert.equal(r.status,200,JSON.stringify(r));
+  r=await edit(id,{title:'Updated series title',edit_scope:'future'});assert.equal(r.status,200,JSON.stringify(r));assert.equal(row(id).card_color,'slot-09-v1');
+  await finish(id);const successor=next(id);assert.equal(successor.card_color,'slot-01-v1');assert.equal(children(successor.id)[0].card_color,'slot-01-v1');
+});
 function document(taskId){const id=Number(d.prepare(`INSERT INTO family_documents(name,original_name,mime_type,file_size,content_data,created_by)
   VALUES('School note','note.txt','text/plain',1,?,?)`).run(Buffer.from('x'),parent).lastInsertRowid);
   d.prepare('INSERT INTO task_documents(task_id,document_id,created_by) VALUES(?,?,?)').run(taskId,id,parent);return id;}

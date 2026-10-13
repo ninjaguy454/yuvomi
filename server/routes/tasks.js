@@ -15,8 +15,8 @@ import {skipTaskOccurrence,taskSkipUnsupportedReason,taskSkipHasRotationScope} f
 import { createLogger } from '../logger.js';
 import { randomUUID } from 'node:crypto';
 import express from 'express';
-import {assignNewTaskCardColor,setTaskCardColor,freezeSeriesCardColorPolicy} from '../services/task-card-colors.js';
-import {validateCardColorChoice} from '../../public/utils/card-colors.js';
+import {assignNewTaskCardColor,setTaskCardColor,freezeSeriesCardColorPolicy,preserveFutureCardColorPolicies} from '../services/task-card-colors.js';
+import {validateCardColorChoice,normalizeCardColorChoice} from '../../public/utils/card-colors.js';
 import * as db from '../db.js';
 import { documentVisibleSql } from '../services/document-access.js';
 import { nextDueAfterCompletion, nextDueAfterExpiration } from '../services/recurrence.js';
@@ -377,7 +377,8 @@ function assertCompatibleFutureDefinition(req,task,series,definition) {
  * this intent rather than forecasting settled selected work. */
 function compatibleFutureDefinition(req,task,series,before,edited,{normalizeSchedule=true}={}) {
   const body=req.body,fields={...before.task};
-  if(body.card_color_choice!==undefined)fields.card_color_policy=validateCardColorChoice(body.card_color_choice);
+  const colorBase=seriesDefinitionForGeneration(db.get(),series.series_id,series.occurrence.generation+1)?.data||series.definition.data;
+  fields.card_color_policy=body.card_color_choice!==undefined?validateCardColorChoice(body.card_color_choice):normalizeCardColorChoice(colorBase.task.card_color_policy);
   for(const key of ['title','description','category','priority','start_date','start_time','due_date','due_time','is_recurring','recurrence_rule',
     'recurrence_from_completion','points','scoring_mode','visibility','countdown','locked','expiration_policy','is_optional'])if(body[key]!==undefined)fields[key]=body[key];
   if(typeof fields.title!=='string'||!fields.title.trim())throw new TaskStateError('Give the Task a title.',{},400);
@@ -435,6 +436,7 @@ function compatibleFutureDefinition(req,task,series,before,edited,{normalizeSche
       external_provider:location.provider??null,external_place_id:location.externalPlaceId??null,user_label:location.userLabel??null,
       manual_address:location.manualAddress??null,latitude:location.latitude??null,longitude:location.longitude??null}:null,
     authorId:req.authUserId||req.session.userId,assignmentExplicit:body.assigned_to!==undefined&&!desired});
+  preserveFutureCardColorPolicies(proposed,colorBase,body.card_color_choice);
   return normalizeSchedule?normalizeSeriesSchedule(proposed,series.occurrence):proposed;
 }
 function compatiblePreviewNoop(task,body,series,current,proposed) {
@@ -2877,6 +2879,8 @@ export function updateTaskDefinition(req, res) {
       if(series) {
         if(editScope==='future') {
           const definition=normalizeSeriesSchedule(captureSeriesDefinition(db.get(),task.id),series.occurrence);
+          const colorBase=seriesDefinitionForGeneration(db.get(),series.series_id,series.occurrence.generation+1)?.data||series.definition.data;
+          preserveFutureCardColorPolicies(definition,colorBase,req.body.card_color_choice);
           assertCompatibleFutureDefinition(req,current,series,definition);
           const revised=appendSeriesDefinition(db.get(),task.id,{expectedRevision:req.body.expected_series_revision,
             actorId:req.authUserId||req.session.userId,definition});
@@ -3220,7 +3224,8 @@ function spawnRecurrenceFollowupSingle(task, {expirationAnchor=false}={}) {
       task.countdown ? 1 : 0,
       task.id, task.start_time, task.expiration_policy || 'keep_overdue', task.due_date_offset_days ?? null,task.locked||0
     );
-    if(task.card_color_policy)assignNewTaskCardColor(db.get(),newTask.lastInsertRowid,{choice:task.card_color_policy});else assignNewTaskCardColor(db.get(),newTask.lastInsertRowid,{legacySlot:null});
+    const colorPolicy=normalizeCardColorChoice(task.card_color_policy);
+    if(colorPolicy)assignNewTaskCardColor(db.get(),newTask.lastInsertRowid,{choice:colorPolicy});else assignNewTaskCardColor(db.get(),newTask.lastInsertRowid,{legacySlot:null});
     if(task.source_device_id||task.source_device_name) db.get().prepare('UPDATE tasks SET source_device_id=?,source_device_name=? WHERE id=?')
       .run(task.source_device_id??null,task.source_device_name??null,newTask.lastInsertRowid);
     db.get().prepare('UPDATE tasks SET scoring_mode=?,scoring_review_required=? WHERE id=?')
@@ -3257,7 +3262,8 @@ function spawnRecurrenceFollowupSingle(task, {expirationAnchor=false}={}) {
         sub.due_time, subAssignedTo, creator, newTask.lastInsertRowid,
         sub.points, sub.visibility, originId, checklistItemId, sub.start_time, sub.expiration_policy || 'keep_overdue', sub.is_optional || 0,sub.sort_order||0,sub.locked||0
       );
-      assignNewTaskCardColor(db.get(),newSub.lastInsertRowid,sub.card_color_policy?{choice:sub.card_color_policy}:{inheritFrom:newTask.lastInsertRowid});
+      const childColor=normalizeCardColorChoice(sub.card_color_policy);
+      assignNewTaskCardColor(db.get(),newSub.lastInsertRowid,childColor?{choice:childColor}:{inheritFrom:newTask.lastInsertRowid});
       registerSeriesAction(db.get(),Number(newSub.lastInsertRowid),Number(newTask.lastInsertRowid),savedSub.action_key);
       setAssignments(db.get(), newSub.lastInsertRowid, subAssignments);
       setTags(db.get(), newSub.lastInsertRowid, subTags);

@@ -20,6 +20,7 @@ import { BULK_PILL_LAYER, clearBulkPill } from '/utils/bulk-pill.js';
 import { init as initReminders, stop as stopReminders } from '/reminders.js';
 import { openNotificationCenter, paintNotificationBadges } from '/notification-center.js';
 import { applyAppearancePreferences, resetAppearancePreferences, appearanceRevision } from '/utils/appearance-preferences.js';
+import {playUiSound} from '/utils/ui-sounds.js';
 import { watchSessionChanges, sessionRevision } from '/utils/session-lifecycle.js';
 import { loadMemberLabels } from '/utils/member-label-loader.js';
 import { clearMemberLabels, memberLabel } from '/utils/member-label.js';
@@ -207,6 +208,7 @@ function applyModuleAccentForRoute(route) {
   const accent = route?.thirdPartyModule?.accent || (accentToken ? getCSSToken(accentToken) : '');
   document.documentElement.style.setProperty('--active-module-accent', accent);
 }
+window.addEventListener('named-appearance-changed',()=>applyModuleAccentForRoute(currentRoute()));
 
 /**
  * Setzt theme-color - app-weit auf den Seitengrund, NICHT pro Modul.
@@ -2280,6 +2282,7 @@ function renderAppShell(container) {
   container.querySelectorAll('[data-route]').forEach((el) => {
     el.addEventListener('click', (e) => {
       e.preventDefault();
+      playUiSound('select',e);
       navigate(el.dataset.navHref ?? el.dataset.route);
     });
   });

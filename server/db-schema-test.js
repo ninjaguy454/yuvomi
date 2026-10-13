@@ -1084,5 +1084,4 @@ export { MIGRATIONS_SQL, NOTE_LAYOUTS_SCHEMA_SQL, NOTE_GROUPS_SCHEMA_SQL, NOTE_L
 export {addTaskSkipSchema as TASK_SKIP_SCHEMA_UPGRADE} from './services/task-skip-schema.js';
 export {addTripTaskSchema as TRIP_TASK_SCHEMA_UPGRADE} from './services/trip-task-schema.js';
 export {addCardColorSchema as CARD_COLOR_SCHEMA_UPGRADE} from './services/card-color-schema.js';
-import {CARD_COLOR_FIELDS_SQL} from './services/card-color-schema.js';
-MIGRATIONS_SQL[10059]=CARD_COLOR_FIELDS_SQL;
+export {CARD_COLOR_FIELDS_SQL} from './services/card-color-schema.js';

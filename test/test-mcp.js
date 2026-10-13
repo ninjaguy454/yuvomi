@@ -14,7 +14,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
-import { MIGRATIONS_SQL } from '../server/db-schema-test.js';
+import { MIGRATIONS_SQL,CARD_COLOR_FIELDS_SQL } from '../server/db-schema-test.js';
 import { handleMcpRequest, LATEST_PROTOCOL_VERSION } from '../server/mcp/protocol.js';
 import { callTool, TOOL_DEFINITIONS } from '../server/mcp/tools.js';
 import { buildSessionModuleAccess, resolvePermissions } from '../server/permissions.js';
@@ -32,7 +32,7 @@ db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
 db.exec(MIGRATIONS_SQL[1]);
 db.exec(MIGRATIONS_SQL[2]); // Household new-task defaults.
 db.exec(MIGRATIONS_SQL[41]);  // tasks.start_date (geplante Aufgaben)
-db.exec(MIGRATIONS_SQL[10059]); // Persisted color fields, without newer lifecycle fixtures.
+db.exec(CARD_COLOR_FIELDS_SQL); // Fork schema excerpt, without newer lifecycle fixtures.
 db.exec(MIGRATIONS_SQL[74]);  // access_permissions (Modulrechte, #467)
 // DIESE DREI SIND EINE AUSWAHL, KEIN SCHEMA: Migration 1 legt `tasks` in der
 // Fassung von damals an, jede spaeter ergaenzte Spalte fehlt hier. Wer eine

@@ -81,6 +81,8 @@ const APP_SHELL = [
   '/components/ui-sound-settings.js',
   '/components/card-color-picker.js',
   '/utils/card-colors.js',
+  '/components/trip-checklist.js',
+  '/utils/trip-task-deadline.js',
   '/styles/named-appearance.css',
   '/named-appearance-init.js',
   '/assets/themes/wood.webp',

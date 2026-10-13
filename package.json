@@ -395,7 +395,7 @@
     "test:task-scoring": "node --test --test-concurrency=1 test/test-task-scoring.js test/test-task-scoring-migration.js test/test-task-scoring-history-privacy.js test/test-task-prospective-execution.js test/test-task-scoring-routes.js test/test-task-scoring-series.js test/test-task-scoring-corrections.js test/test-task-scoring-future-projection.js test/test-task-scoring-merged-migration.js test/test-task-scoring-read-performance.js",
     "test:task-scoring-ui": "node --test test/test-task-scoring-ui.js",
     "test:task-scoring-browser": "node --test test/test-task-scoring-full-app-browser.js",
-    "test:trip-checklist-browser": "node --test test/test-trip-checklist-full-app-browser.js",
+    "test:trip-checklist-browser": "node --test --test-concurrency=1 test/test-trip-checklist-full-app-browser.js test/test-trip-place-picker-browser.js",
     "test:trip-prize": "node --experimental-sqlite --test --test-concurrency=1 test/test-trip-task-grouping.js test/test-trip-prize-integration.js"
   },
   "dependencies": {

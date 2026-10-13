@@ -1,3 +1,4 @@
+import { renderPlaceSearch, bindPlaceSearch, saveSearchPlace } from '/components/place-search.js';
 import { memberLabel } from '/utils/member-label.js';
 import { canCapability, isPermAdmin } from '/permissions.js';
 import { api } from '/api.js';
@@ -869,7 +870,8 @@ function placeMapsUrl(place) {
 }
 
 export async function renderTripsManager(body, manager, { openTripId = null } = {}) {
-  const [tripsResponse, context] = await Promise.all([api.get('/planning/trips'), api.get('/planning/admin/context')]);
+  const [tripsResponse, context, searchStatus] = await Promise.all([api.get('/planning/trips'), api.get('/planning/admin/context'), api.get('/planning/place-search/status').catch(() => ({data:{configured:false}}))]);
+  context.placeSearchStatus = searchStatus.data;
   const trips = tripsResponse.data || [];
   replaceHtml(body, `${managerHeader('Trips and itineraries', 'automation-add-trip', 'Plan trip')}
     <p class="form-hint automation-manager__hint">Coordinate travelers, destination and lodging Places, Away periods, arrival/departure stages, and phase-relative Tasks. Trip stages also appear on the main Calendar.</p>
@@ -922,6 +924,64 @@ export async function renderTripsManager(body, manager, { openTripId = null } = 
   }
 }
 
+function tripPlaceField(label, field, places, selected, emptyLabel) {
+  return inputRow(label, `<select class="input" name="${field}">${placeOptions(places, selected, emptyLabel)}</select>
+    ${canCapability('places.manage') ? `<div class="automation-list-row__actions" style="margin-top:var(--space-2)"><button class="btn btn--secondary btn--sm" type="button" data-trip-find-place="${field}" aria-label="Search ${label}">Search places</button><button class="btn btn--ghost btn--sm" type="button" data-trip-add-place="${field}" aria-label="Add ${label}">+ Add Place</button></div>` : ''}`);
+}
+
+function bindTripPlaces(panel, context, places) {
+  const selectPlace = (field, saved) => {
+    if (!panel.isConnected) return;
+    const index = places.findIndex(place => Number(place.id) === Number(saved.id));
+    if (index < 0) places.push(saved); else places[index] = saved;
+    for (const name of ['destination_place_id', 'lodging_place_id']) {
+      const select = panel.querySelector(`[name="${name}"]`), selected = name === field ? saved.id : select.value;
+      replaceHtml(select, placeOptions(places, selected, name === 'destination_place_id' ? 'No saved destination' : 'No saved lodging'));
+      select.value = String(selected || '');
+    }
+    panel.querySelector(`[name="${field}"]`).dispatchEvent(new Event('change', {bubbles:true}));
+  };
+  const addPlace = field => openPlaceForm(null, places, null, {child:true,onSaved:saved=>selectPlace(field,saved)});
+  panel.querySelectorAll('[data-trip-add-place]').forEach(button => button.addEventListener('click', () => addPlace(button.dataset.tripAddPlace)));
+  panel.querySelectorAll('[data-trip-find-place]').forEach(button => button.addEventListener('click', () => {
+    const field = button.dataset.tripFindPlace;
+    let child, open = true;
+    child = openChildModal({title:field === 'destination_place_id' ? 'Find a destination Place' : 'Find a lodging Place',size:'lg',
+      onClose() { open = false; },
+      content:`<p class="form-hint">Use a result to save it in Vidamia Places and select it for this Trip. The Trip is saved when you press Create trip or Save trip.</p>${renderPlaceSearch({prefix:'trip',places,status:context.placeSearchStatus,useLabel:'Use for Trip'})}<button type="button" class="btn btn--ghost" data-trip-search-add-place>+ Add Place manually</button><div class="modal-panel__footer"><button type="button" class="btn btn--secondary" data-action="close-modal">Cancel</button></div>`,
+      onSave(searchPanel) {
+        bindPlaceSearch(searchPanel,{places,onUse:async (result,name) => {
+          if (!name) throw Error('Give the saved Vidamia Place a name.');
+          const saved = await saveSearchPlace(result,name,places);
+          if (!open || !await waitForPlaceDialog(searchPanel)) return;
+          selectPlace(field,saved); await child.close({force:true});
+        }});
+        searchPanel.querySelector('[data-trip-search-add-place]').addEventListener('click',async()=>{
+          if (await child.close({force:true})) addPlace(field);
+        });
+      },
+    });
+  }));
+}
+
+function activePlaceDialog(panel) {
+  return panel.isConnected && !panel.closest('.modal-overlay')?.inert && !panel.classList.contains('modal-panel--closing');
+}
+
+// A save may finish beneath the shared discard prompt. Wait for Keep Editing
+// or Discard before selecting/closing, and keep Create disabled in the meantime.
+function waitForPlaceDialog(panel) {
+  return new Promise(resolve => {
+    const check = () => {
+      if (activePlaceDialog(panel)) { observer?.disconnect(); resolve(true); }
+      else if (!panel.isConnected || panel.classList.contains('modal-panel--closing')) { observer?.disconnect(); resolve(false); }
+    };
+    const observer = new MutationObserver(check);
+    observer.observe(document.body, {childList:true,subtree:true,attributes:true,attributeFilter:['inert','class']});
+    check();
+  });
+}
+
 export function openTripForm(trip, context, manager) {
   const members = context.members || []; const places = context.places || [];
   const grouped=!trip||trip.task_structure==='grouped';
@@ -937,7 +997,7 @@ export function openTripForm(trip, context, manager) {
     ${inputRow('Trip name', `<input class="input" name="name" required maxlength="120" value="${h(trip?.name || '')}" placeholder="Summer vacation">`)}
     <div class="automation-workflow-condition">${inputRow('Trip type', `<select class="input" name="trip_type">${[['vacation','Vacation'],['business','Business'],['family','Family visit'],['road_trip','Road trip'],['other','Other']].map(([value,label]) => `<option value="${value}" ${trip?.trip_type === value ? 'selected' : ''}>${label}</option>`).join('')}</select>`)}${inputRow('Status', `<select class="input" name="status">${['planning','active','completed','cancelled'].map((value) => `<option value="${value}" ${trip?.status === value ? 'selected' : ''}>${value}</option>`).join('')}</select>`)}</div>
     <fieldset class="automation-fieldset"><legend class="label">Travelers</legend>${members.map((member) => `<label class="automation-check-row"><input type="checkbox" name="participant_id" value="${member.id}" ${selected.has(Number(member.id)) ? 'checked' : ''}>${h(memberLabel(member))}</label>`).join('')}</fieldset>
-    <div class="automation-workflow-condition">${inputRow('Destination Place', `<select class="input" name="destination_place_id">${placeOptions(places, trip?.destination_place_id, 'No saved destination')}</select>`)}${inputRow('Lodging Place', `<select class="input" name="lodging_place_id">${placeOptions(places, trip?.lodging_place_id, 'No saved lodging')}</select>`)}</div>
+    <div class="automation-workflow-condition">${tripPlaceField('Destination Place', 'destination_place_id', places, trip?.destination_place_id, 'No saved destination')}${tripPlaceField('Lodging Place', 'lodging_place_id', places, trip?.lodging_place_id, 'No saved lodging')}</div>
     <div class="automation-workflow-condition">${inputRow('Departure', `<input class="input" type="datetime-local" name="starts_at" required value="${h(localDateTimeValue(trip?.starts_at, context.timezone))}">`)}${inputRow('Return', `<input class="input" type="datetime-local" name="ends_at" required value="${h(localDateTimeValue(trip?.ends_at, context.timezone))}">`)}</div>
     ${inputRow('Notes', `<textarea class="input" name="notes" rows="3">${h(trip?.notes || '')}</textarea>`)}
     <label class="automation-check-row"><input type="checkbox" name="create_away_periods" ${trip?.create_away_periods !== 0 ? 'checked' : ''}> Create matching Away periods for travelers</label>
@@ -951,6 +1011,7 @@ export function openTripForm(trip, context, manager) {
     ${footer(trip ? 'Save trip' : 'Create trip')}
   </form>`;
   openModal({ title: trip ? 'Edit trip' : 'Plan a trip', content, size: 'lg', onSave(panel) {
+    bindTripPlaces(panel, context, places);
     bindTripStepRows(panel);
     panel.querySelector('[data-add-trip-step]')?.addEventListener('click',()=>{
       const host=panel.querySelector('[data-trip-steps]');
@@ -971,7 +1032,7 @@ export function openTripForm(trip, context, manager) {
   }});
 }
 
-function openPlaceForm(place, places, manager) {
+function openPlaceForm(place, places, manager, {child = false, onSaved} = {}) {
   const parents = places.filter((candidate) => Number(candidate.id) !== Number(place?.id));
   const content = `<form id="automation-place-form">
     ${inputRow('Name', `<input class="input" name="name" required maxlength="120" value="${h(place?.name || '')}">`)}
@@ -984,7 +1045,8 @@ function openPlaceForm(place, places, manager) {
     <details><summary class="form-hint">Advanced coordinates (optional)</summary><div class="automation-workflow-condition">${inputRow('Latitude', `<input class="input" name="latitude" type="number" min="-90" max="90" step="any" value="${h(place?.latitude ?? '')}">`)}${inputRow('Longitude', `<input class="input" name="longitude" type="number" min="-180" max="180" step="any" value="${h(place?.longitude ?? '')}">`)}</div></details>
     <label class="automation-check-row"><input type="checkbox" name="active" ${place?.active !== 0 ? 'checked' : ''}> Active and available for new schedules</label>${footer(place ? 'Save Place' : 'Create Place')}
   </form>`;
-  openModal({ title: place ? 'Edit Place' : 'New Place', content, size: 'lg', onSave(panel) {
+  let dialog, open = true;
+  dialog = (child ? openChildModal : openModal)({ title: place ? 'Edit Place' : 'New Place', content, size: 'lg', onSave(panel) {
     panel.querySelector('#automation-place-form')?.addEventListener('submit', async (event) => {
       event.preventDefault(); const data = new FormData(event.currentTarget);
       const payload = Object.fromEntries(['name', 'type', 'description', 'street_address', 'city', 'region', 'postal_code', 'country'].map((key) => [key, data.get(key)]));
@@ -992,10 +1054,18 @@ function openPlaceForm(place, places, manager) {
       payload.latitude = data.get('latitude') === '' ? null : Number(data.get('latitude'));
       payload.longitude = data.get('longitude') === '' ? null : Number(data.get('longitude'));
       payload.active = data.has('active');
-      try { if (place) await api.put(`/planning/admin/places/${place.id}`, payload); else await api.post('/planning/admin/places', payload); toast('Place saved.'); await refreshAutomationManager(manager, 'places'); }
-      catch (error) { toast(error.message, 'danger'); }
+      if (child && !payload.active) { toast('Choose an active Place for this Trip.', 'danger'); return; }
+      const submit = event.submitter || panel.querySelector('[type="submit"]');
+      if (submit.disabled) return; submit.disabled = true;
+      try {
+        const response = place ? await api.put(`/planning/admin/places/${place.id}`, payload) : await api.post('/planning/admin/places', payload);
+        toast('Place saved.');
+        if (child) { if (open && await waitForPlaceDialog(panel)) { onSaved?.(response.data); await dialog.close({force:true}); } }
+        else await refreshAutomationManager(manager, 'places');
+      } catch (error) { toast(error.message, 'danger'); }
+      finally { submit.disabled = false; }
     });
-  } });
+  }, onClose() { open = false; } });
 }
 
 const WEEKDAYS = [['Mon', 0], ['Tue', 1], ['Wed', 2], ['Thu', 3], ['Fri', 4], ['Sat', 5], ['Sun', 6]];
@@ -1809,7 +1879,8 @@ function openWorkflowForm(workflow, context, manager = null, { asChild = false, 
     <label class="automation-check-row automation-check-row--section-end"><input type="checkbox" name="quick_add_enabled" ${(workflow?.quick_add_enabled ?? true) ? 'checked' : ''}> Show in Task Workflows</label>
     ${renderRotationBindings(workflow?.rotation_bindings || [], {...context,workflowOperations:true})}
 
-    <div class="automation-workflow-step__header"><strong>Workflow questions and variables</strong><div class="automation-question-add"><select class="input" id="workflow-reusable-variable"><option value="">Reusable variable…</option>${(context.variables || []).map((variable) => `<option value="${variable.id}">${h(variable.label)} · {{${h(variable.variable_key)}}}</option>`).join('')}</select><button type="button" class="btn btn--ghost btn--sm" id="workflow-use-reusable">Use reusable</button><button type="button" class="btn btn--ghost btn--sm" id="workflow-add-question">Add local variable</button></div></div>      <details class="automation-help"><summary>${h(t('settings.workflowVariableHelp'))}</summary><p class="form-hint">${h(t('settings.workflowVariableHelpIds'))}</p><p class="form-hint">${h(t('settings.workflowVariableHelpRotation'))}</p></details>
+    <div class="automation-workflow-step__header"><strong>Workflow questions and variables</strong><div class="automation-question-add"><select class="input" id="workflow-reusable-variable"><option value="">Reusable variable…</option>${(context.variables || []).map((variable) => `<option value="${variable.id}">${h(variable.label)} · {{${h(variable.variable_key)}}}</option>`).join('')}</select><button type="button" class="btn btn--ghost btn--sm" id="workflow-use-reusable">Use reusable</button><button type="button" class="btn btn--ghost btn--sm" id="workflow-add-question">Add local variable</button></div></div>
+      <details class="automation-help"><summary>${h(t('settings.workflowVariableHelp'))}</summary><p class="form-hint">${h(t('settings.workflowVariableHelpIds'))}</p><p class="form-hint">${h(t('settings.workflowVariableHelpRotation'))}</p></details>
     <div id="workflow-questions">${(workflow?.input_schema || []).map((question) => questionHtml(question, workflow?.id)).join('')}</div>
 
     <div class="automation-workflow-step__header automation-workflow-step__header--section"><strong>Activities</strong><button type="button" class="btn btn--ghost btn--sm" id="workflow-add-step">Add activity</button></div>

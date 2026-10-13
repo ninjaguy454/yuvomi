@@ -1,3 +1,4 @@
+import { renderPlaceSearch, bindPlaceSearch } from '/components/place-search.js';
 import { memberLabel } from '/utils/member-label.js';
 import { renderTaskCountdown, bindTaskCountdowns } from '/utils/task-countdown.js';
 import { tripTaskDeadline } from '/utils/trip-task-deadline.js';
@@ -4958,25 +4959,9 @@ function placeSelectOptions(selected = null) {
   ).join('');
 }
 
-function googleAttributionHtml(result) {
-  const thirdParty = (result.attributions || []).map((attribution) => {
-    const name = attribution?.displayName || attribution?.provider || attribution?.name;
-    const uri = attribution?.uri || attribution?.providerUri;
-    if (!name) return '';
-    if (typeof uri === 'string' && /^https:\/\//i.test(uri)) {
-      return `<a href="${esc(uri)}" target="_blank" rel="noopener noreferrer">${esc(name)}</a>`;
-    }
-    return esc(name);
-  }).filter(Boolean);
-  return `<small class="form-hint">Results from Google Maps${thirdParty.length ? ` · Attribution: ${thirdParty.join(', ')}` : ''}</small>`;
-}
-
 function renderTaskLocationFields(task = null) {
   const location = task?.location || null;
   const kind = location?.kind || 'none';
-  const origin = state.places.find((place) => place.type === 'home') || state.places[0];
-  const searchConfigured = Boolean(state.placeSearchStatus?.configured);
-  const setupMessage = 'Google place search is off. An administrator must configure GOOGLE_MAPS_API_KEY, enable the integration, and accept the Google Maps terms. You can still save ordinary addresses.';
   return `<fieldset class="form-group task-location" id="task-location-fieldset">
     <legend class="label">Location</legend>
     <select class="input" id="task-location-kind" name="location_kind" aria-label="Location type">
@@ -4995,18 +4980,10 @@ function renderTaskLocationFields(task = null) {
       <details style="margin-top:var(--space-2)"><summary class="task-field-hint">Advanced coordinates (optional)</summary><div class="modal-grid modal-grid--2" style="margin-top:var(--space-2)"><input class="input" id="task-location-latitude" type="number" step="any" min="-90" max="90" placeholder="Latitude" value="${kind === 'manual' && location?.latitude != null ? location.latitude : ''}"><input class="input" id="task-location-longitude" type="number" step="any" min="-180" max="180" placeholder="Longitude" value="${kind === 'manual' && location?.longitude != null ? location.longitude : ''}"></div></details>
     </div>
     <div data-location-pane="google_place" style="margin-top:var(--space-3)">
-      <p class="task-field-hint"><strong>Privacy:</strong> your search text and selected origin are sent to Google through this Vidamia server. Search runs only when you press Search.</p>
-      <div class="modal-grid modal-grid--2"><input class="input" id="task-place-query" minlength="3" maxlength="120" placeholder="UPS Store, pharmacy, dentist…"><select class="input" id="task-place-category"><option value="">Any type</option><option value="pharmacy">Pharmacy</option><option value="restaurant">Restaurant</option><option value="dentist">Dentist</option><option value="lodging">Hotel / lodging</option><option value="store">Store</option></select></div>
-      <select class="input" id="task-place-origin-mode" style="margin-top:var(--space-2)"><option value="saved">Near a saved Place</option><option value="text">Near an address, city, or ZIP</option><option value="anywhere">No specific origin</option></select>
-      <div data-origin-pane="saved" style="margin-top:var(--space-2)"><select class="input" id="task-place-origin"><option value="">Choose search origin</option>${placeSelectOptions(origin?.id)}</select></div>
-      <div data-origin-pane="text" style="margin-top:var(--space-2)" hidden><input class="input" id="task-origin-text" maxlength="160" placeholder="Address, city, or ZIP (for example, 27513)"></div>
-      <div data-origin-pane="anywhere" hidden></div>
-      <button class="btn btn--secondary btn--sm" type="button" id="task-place-search" style="margin-top:var(--space-2)" ${searchConfigured ? '' : 'disabled'}><i data-lucide="search" class="icon-sm"></i>Search Google Places</button>
-      <p class="task-field-hint" id="task-place-search-status">${searchConfigured ? `${state.placeSearchStatus.usage?.household_today ?? 0} of ${state.placeSearchStatus.limits?.household_per_day ?? 100} household searches used today.` : setupMessage}</p>
+      ${renderPlaceSearch({ places: state.places, status: state.placeSearchStatus, allowSave: state.isAdmin })}
       <input type="hidden" id="task-location-external-id" value="${esc(kind === 'google_place' ? location?.external_place_id || '' : '')}">
       <input type="hidden" id="task-location-external-label" value="${esc(kind === 'google_place' ? location?.label || '' : '')}">
       <div id="task-place-selected" class="task-field-hint">${kind === 'google_place' ? `Selected for this Task: <strong>${esc(location?.label || 'Google place')}</strong>` : ''}</div>
-      <div id="task-place-results" class="automation-list" style="margin-top:var(--space-2)"></div>
     </div>
   </fieldset>`;
 }
@@ -5032,56 +5009,26 @@ function wireTaskLocationForm(panel) {
   const kind = panel.querySelector('#task-location-kind');
   const refresh = () => panel.querySelectorAll('[data-location-pane]').forEach((pane) => { pane.hidden = pane.dataset.locationPane !== kind?.value; });
   kind?.addEventListener('change', refresh); refresh();
-  const originMode = panel.querySelector('#task-place-origin-mode');
-  const refreshOrigin = () => panel.querySelectorAll('[data-origin-pane]').forEach((pane) => { pane.hidden = pane.dataset.originPane !== originMode?.value; });
-  originMode?.addEventListener('change', refreshOrigin); refreshOrigin();
-  const search = panel.querySelector('#task-place-search');
-  search?.addEventListener('click', async () => {
-    const query = panel.querySelector('#task-place-query')?.value.trim() || '';
-    const status = panel.querySelector('#task-place-search-status');
-    if (query.length < 3) { status.textContent = 'Enter at least three characters.'; return; }
-    const body = { query, included_type: panel.querySelector('#task-place-category')?.value || null };
-    if (originMode.value === 'saved') body.origin_place_id = Number(panel.querySelector('#task-place-origin')?.value) || null;
-    else if (originMode.value === 'text') body.origin_text = panel.querySelector('#task-origin-text')?.value.trim() || null;
-    search.disabled = true; status.textContent = 'Searching Google Places…';
-    try {
-      const response = await api.post('/planning/place-search', body);
-      const results = response.data || [];
-      status.textContent = results.length ? `${results.length} live result${results.length === 1 ? '' : 's'} from Google.` : 'No matching places found.';
-      const list = panel.querySelector('#task-place-results');
-      list.replaceChildren();
-      results.forEach((result, index) => {
-        const row = document.createElement('div');
-        row.className = 'list-row automation-list-row';
-        const distance = result.distance_meters == null ? '' : ` • ${(result.distance_meters / 1609.344).toFixed(1)} mi`;
-        row.insertAdjacentHTML('beforeend', `<div class="automation-list-row__copy"><strong>${esc(result.display_name)}</strong><br><small class="form-hint">${esc(result.formatted_address || '')}${esc(distance)}${result.primary_type ? ` • ${esc(result.primary_type)}` : ''}</small><br>${googleAttributionHtml(result)}<input class="input" data-place-save-name="${index}" maxlength="120" value="${esc(result.display_name)}" aria-label="Vidamia Place name"></div><div class="automation-list-row__actions"><button type="button" class="btn btn--primary btn--sm" data-use-place="${index}">Use for Task</button>${state.isAdmin ? `<button type="button" class="btn btn--secondary btn--sm" data-save-place="${index}">Save to Places</button>` : ''}</div>`);
-        list.appendChild(row);
-      });
-      list.querySelectorAll('[data-use-place]').forEach((button) => button.addEventListener('click', () => {
-        const result = results[Number(button.dataset.usePlace)];
-        panel.querySelector('#task-location-external-id').value = result.external_place_id;
-        panel.querySelector('#task-location-external-label').value = result.display_name;
-        const selected = panel.querySelector('#task-place-selected');
-        selected.replaceChildren(document.createTextNode('Selected for this Task: '));
-        const name = document.createElement('strong');
-        name.textContent = result.display_name;
-        selected.appendChild(name);
-      }));
-      list.querySelectorAll('[data-save-place]').forEach((button) => button.addEventListener('click', async () => {
-        const index = Number(button.dataset.savePlace); const result = results[index];
-        const name = list.querySelector(`[data-place-save-name="${index}"]`)?.value.trim();
-        if (!name) { status.textContent = 'Give the saved Vidamia Place a name.'; return; }
-        button.disabled = true;
-        try {
-          const saved = await api.post('/planning/admin/places/from-google', { external_place_id: result.external_place_id, name, type: 'custom', latitude: result.latitude, longitude: result.longitude });
-          state.places.push(saved.data); kind.value = 'saved_place'; refresh();
-          const select = panel.querySelector('#task-location-place');
-          select.insertAdjacentHTML('beforeend', `<option value="${saved.data.id}">${esc(saved.data.path_label || saved.data.name)}</option>`); select.value = String(saved.data.id);
-          status.textContent = 'Saved to Vidamia Places and selected for this Task.';
-        } catch (error) { status.textContent = error.message; button.disabled = false; }
-      }));
-    } catch (error) { status.textContent = error.message; }
-    finally { search.disabled = false; }
+  bindPlaceSearch(panel, {
+    places: state.places,
+    onUse(result) {
+      panel.querySelector('#task-location-external-id').value = result.external_place_id;
+      panel.querySelector('#task-location-external-label').value = result.display_name;
+      const selected = panel.querySelector('#task-place-selected');
+      selected.replaceChildren(document.createTextNode('Selected for this Task: '));
+      const name = document.createElement('strong'); name.textContent = result.display_name;
+      selected.appendChild(name);
+    },
+    onSaved(saved) {
+      if (!state.places.some(place => Number(place.id) === Number(saved.id))) state.places.push(saved);
+      kind.value = 'saved_place'; refresh();
+      const select = panel.querySelector('#task-location-place');
+      if (![...select.options].some(option => Number(option.value) === Number(saved.id))) {
+        const option = document.createElement('option'); option.value = String(saved.id); option.textContent = saved.path_label || saved.name;
+        select.appendChild(option);
+      }
+      select.value = String(saved.id);
+    },
   });
 }
 

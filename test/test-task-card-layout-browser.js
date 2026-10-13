@@ -531,6 +531,43 @@ for (const scenario of [
   } finally { await page.close(); }
 });
 
+for(const named of[null,'hanukkah','ocean-glass','medieval-parchment','coffee'])for(const layout of[{width:320,font:16},{width:390,font:16},{width:390,font:32},{width:1280,font:16}]){
+  test(`grouped List ${named||'legacy'} ${layout.width}px/${layout.font}px keeps card gutters and badge/header clearance`,async()=>{
+    const page=await mount({mode:'list',width:layout.width,rootFont:layout.font,longList:true});
+    try{
+      await page.evaluate(async named=>{
+        if(named){const {defaultNamedAppearance}=await import('/utils/named-appearance.js');(await import('/utils/named-appearance-runtime.js')).applyNamedAppearance({...defaultNamedAppearance(),theme:named},{persist:false});}
+        const state=window.subject.state;state.groupMode='category';state.collapsedGroups.clear();state.categories.push({key:'school',name:'School',sort_order:1});state.tasks[1].category='school';
+        for(const task of state.tasks)task.card_color='slot-01-v1';window.subject.renderTaskList(window.taskContainer);
+      },named);await frames(page);
+      const inspect=()=>page.evaluate(()=>{
+        const rect=n=>{const r=n.getBoundingClientRect();return{left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height};};
+        return[...document.querySelectorAll('.task-group')].map(group=>{
+          const heading=group.querySelector('.list-group__title'),carrier=group.querySelector('.list-rows');if(!carrier)return{heading:rect(heading),collapsed:true};
+          const cards=[...carrier.querySelectorAll('.task-card')],bounds=rect(carrier),first=cards[0],last=cards.at(-1),badge=rect(first.querySelector('.activity-card__points'));
+          return{heading:rect(heading),carrier:bounds,gutters:cards.map(n=>{const r=rect(n);return{left:r.left-bounds.left,right:bounds.right-r.right};}),badge,first:rect(first),last:rect(last),gaps:cards.slice(1).map((n,i)=>rect(n).top-rect(cards[i]).bottom)};
+        });
+      });
+      const assertGeometry=groups=>{
+        for(const group of groups.filter(g=>!g.collapsed)){
+          for(const gutter of group.gutters)assert.ok(gutter.left>=8&&gutter.right>=8,`independent card surfaces need visible inline clearance: ${JSON.stringify(gutter)}`);
+          assert.ok(group.badge.top>=group.carrier.top,'protruding badge stays inside group clearance');assert.ok(group.badge.top>=group.heading.bottom,'badge does not paint over group label');
+          assert.ok(Math.abs((group.badge.top+group.badge.bottom)/2-group.first.top)<1.5,'badge remains centered on card border');
+          assert.ok(group.gaps.every(gap=>gap>0),'separate cards retain vertical spacing');assert.ok(group.last.bottom<=group.carrier.bottom,'last card stays in group');
+        }
+        for(let i=1;i<groups.length;i++)assert.ok(groups[i].heading.top>=(groups[i-1].carrier?.bottom??groups[i-1].heading.bottom),'adjacent group heading stays below prior group');
+      };
+      assertGeometry(await inspect());
+      await page.click('.task-card[data-task-id="1"] .activity-card__details-toggle');await page.click('.task-card[data-task-id="1"] .activity-card__subtasks-toggle');await frames(page);assertGeometry(await inspect());
+      await page.focus('.task-group:first-child [data-group-toggle]');await page.keyboard.press('Enter');await frames(page);assert.equal(await page.$('.task-group:first-child .list-rows'),null);assertGeometry(await inspect());
+      await page.focus('.task-group:first-child [data-group-toggle]');await page.keyboard.press('Enter');await frames(page);assertGeometry(await inspect());
+      await page.$eval('.task-group:last-child .list-group__toggle',n=>n.scrollIntoView({block:'center',behavior:'instant'}));await frames(page);assertGeometry(await inspect());
+      const target=await page.$eval('.task-group:last-child .list-group__toggle',n=>{const r=n.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return{reachable:n===hit||n.contains(hit),position:getComputedStyle(n.closest('.list-group__title')).position};});assert.equal(target.reachable,true,'scrolled group toggle stays reachable below sticky page chrome');assert.equal(target.position,'static','do not invent sticky group behavior');
+      assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'gutter does not introduce viewport overflow');assert.deepEqual(writes,[],'layout interactions do not mutate Tasks');
+    }finally{await page.close();}
+  });
+}
+
 test('named card materials honor Wall, reduced transparency, forced colors and keyboard focus',async()=>{
   const page=await mount({mode:'list',width:390}),cdp=await page.createCDPSession();
   try{

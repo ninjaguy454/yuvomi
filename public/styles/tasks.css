@@ -604,6 +604,14 @@
   margin-bottom: var(--space-6);
 }
 
+/* Independent activity cards need room inside the shared row carrier. Its
+ * zero-padding layout is for flat rows; it put card edges against the group's
+ * clipped border. Badge clearance remains on the cards themselves. */
+.task-group > .list-rows:has(.activity-card) {
+  padding-inline: var(--space-2);
+  padding-block-end: var(--space-2);
+}
+
 /* --------------------------------------------------------
  * Swipe-Wrapper - Task-spezifische Styles
  * Basis-Styles (.swipe-row, .swipe-reveal und alle drei Reveal-Rollen)

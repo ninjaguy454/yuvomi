@@ -12,7 +12,7 @@ import { isWallModeEnabled, setWallModeEnabled } from '/utils/wall-mode.js';
 import { api } from '/api.js';
 import { clearApiCache } from '/sw-register.js';
 import { setDisplayTimeZone } from '/utils/timezone.js';
-import { applyAppearancePreferences, normalizeAppearancePreferences, appearanceRevision } from '/utils/appearance-preferences.js';
+import { applyAppearancePreferences, normalizeAppearancePreferences, appearanceRevision, appearanceContextRevision } from '/utils/appearance-preferences.js';
 import {mountNamedAppearancePicker} from '/components/named-appearance-picker.js';
 import {mountUiSoundSettings} from '/components/ui-sound-settings.js';
 import {currentNamedAppearance} from '/utils/named-appearance-runtime.js';
@@ -444,8 +444,8 @@ function bindEvents(container, user) {
     const errorElement = container.querySelector('#appearance-choice-error');
     clearError(errorElement);
     const requested = { color_theme: colorSelect.value, heading_font: fontSelect.value };
-    applyAppearancePreferences(requested);
-    const previewRevision = appearanceRevision();
+    const context=appearanceContextRevision();
+    applyAppearancePreferences({...requested,named_appearance:currentNamedAppearance(),ui_sounds:currentUiSounds()});
     colorSelect.disabled = true;
     fontSelect.disabled = true;
     try {
@@ -455,7 +455,9 @@ function bindEvents(container, user) {
     } catch (error) {
       // A failed save must not appear persisted. Do not restore stale personal
       // colors after logout or after the settings page has been replaced.
-      if (appearanceRevision() === previewRevision) applyAppearancePreferences(savedAppearance);
+      if (appearanceContextRevision()===context&&document.documentElement.getAttribute('data-color-theme')===requested.color_theme&&document.documentElement.getAttribute('data-typography')===requested.heading_font) {
+        applyAppearancePreferences({...savedAppearance,named_appearance:currentNamedAppearance(),ui_sounds:currentUiSounds()});
+      }
       if (container.isConnected) {
         colorSelect.value = savedAppearance.color_theme;
         fontSelect.value = savedAppearance.heading_font;
@@ -729,31 +731,29 @@ export async function render(container, { user }) {
       appendCurrencyOptions(container.querySelector('#currency-select'), preferences.currency);
     }
     bindEvents(container, user);
-    let savedAppearance=normalizeAppearancePreferences(preferences);
+    const liveAppearance=()=>({color_theme:document.documentElement.getAttribute('data-color-theme'),heading_font:document.documentElement.getAttribute('data-typography'),named_appearance:currentNamedAppearance(),ui_sounds:currentUiSounds()});
     mountNamedAppearancePicker(container.querySelector('[data-personal-named-appearance]'),{
-      value:savedAppearance.named_appearance,
+      value:preferences.named_appearance,
       timeZone:preferences.timezone_effective||preferences.timezone||Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC',
       onChange:async named_appearance=>{
-        const requested={...savedAppearance,color_theme:document.documentElement.getAttribute('data-color-theme'),heading_font:document.documentElement.getAttribute('data-typography'),ui_sounds:currentUiSounds(),named_appearance};
+        const previous=currentNamedAppearance(),context=appearanceContextRevision();
+        const requested={...liveAppearance(),named_appearance};
         applyAppearancePreferences(requested);
-        const revision=appearanceRevision();
         try {
           await savePreferences({named_appearance});
-          if(appearanceRevision()!==revision) return;
-          savedAppearance=requested;
+          if(appearanceContextRevision()!==context) return;
           if(container.isConnected) container.querySelector('[data-legacy-appearance]').hidden=!!named_appearance;
         } catch(error) {
-          if(appearanceRevision()===revision) applyAppearancePreferences(savedAppearance);
+          if(appearanceContextRevision()===context&&JSON.stringify(currentNamedAppearance())===JSON.stringify(named_appearance)) applyAppearancePreferences({...liveAppearance(),named_appearance:previous});
           throw error;
         }
       }
     });
-    let savedSounds=currentUiSounds();
-    mountUiSoundSettings(container.querySelector('[data-personal-ui-sounds]'),{value:savedSounds,onChange:async ui_sounds=>{
-      const snapshot={color_theme:document.documentElement.getAttribute('data-color-theme'),heading_font:document.documentElement.getAttribute('data-typography'),named_appearance:currentNamedAppearance(),ui_sounds:savedSounds};
-      applyAppearancePreferences({...snapshot,ui_sounds});const revision=appearanceRevision();
-      try{await savePreferences({ui_sounds});if(appearanceRevision()===revision)savedSounds=ui_sounds;}
-      catch(error){if(appearanceRevision()===revision)applyAppearancePreferences(snapshot);throw error;}
+    mountUiSoundSettings(container.querySelector('[data-personal-ui-sounds]'),{value:currentUiSounds(),onChange:async ui_sounds=>{
+      const previous=currentUiSounds(),context=appearanceContextRevision();
+      applyAppearancePreferences({...liveAppearance(),ui_sounds});
+      try{await savePreferences({ui_sounds});}
+      catch(error){if(appearanceContextRevision()===context&&JSON.stringify(currentUiSounds())===JSON.stringify(ui_sounds))applyAppearancePreferences({...liveAppearance(),ui_sounds:previous});throw error;}
     }});
     window.lucide?.createIcons({ el: container });
   } catch {

@@ -200,12 +200,9 @@ function getCSSToken(name) {
  * Text darauf fiel im Dunkelmodus auf 2.71:1 statt 7.81:1 - unter WCAG AA.
  */
 function applyModuleAccentForRoute(route) {
-  if(document.documentElement.hasAttribute('data-named-theme')) {
-    document.documentElement.style.setProperty('--active-module-accent',getCSSToken('--color-accent'));
-    return;
-  }
   const accentToken = moduleAccentToken(route?.module);
-  const accent = route?.thirdPartyModule?.accent || (accentToken ? getCSSToken(accentToken) : '');
+  const accent = document.documentElement.hasAttribute('data-named-theme') ? getCSSToken('--color-accent')
+    : route?.thirdPartyModule?.accent || (accentToken ? getCSSToken(accentToken) : '');
   document.documentElement.style.setProperty('--active-module-accent', accent);
 }
 window.addEventListener('named-appearance-changed',()=>applyModuleAccentForRoute(currentRoute()));

@@ -3,7 +3,9 @@ import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { eachRule } from './css-rules.js';
-import { applyAppearancePreferences, resetAppearancePreferences, normalizeAppearancePreferences, appearanceRevision } from '../public/utils/appearance-preferences.js';
+import { applyAppearancePreferences, resetAppearancePreferences, normalizeAppearancePreferences, appearanceRevision, appearanceContextRevision } from '../public/utils/appearance-preferences.js';
+import {currentNamedAppearance} from '../public/utils/named-appearance-runtime.js';
+import {currentUiSounds} from '../public/utils/ui-sounds.js';
 
 const tokens = readFileSync(new URL('../public/styles/tokens.css', import.meta.url), 'utf8');
 const rules = [...eachRule(tokens)];
@@ -96,7 +98,7 @@ function browser(storage = new Map()) {
   const events = [];
   return {
     attrs, storage, events,
-    document: { documentElement: { setAttribute: (k, v) => attrs.set(k, v), removeAttribute: (k) => attrs.delete(k) }, querySelectorAll: () => [] },
+    document: { documentElement: { getAttribute:(k)=>attrs.get(k)??null, setAttribute: (k, v) => attrs.set(k, v), removeAttribute: (k) => attrs.delete(k) }, querySelectorAll: () => [] },
     window: { dispatchEvent: (event) => events.push(event) },
     localStorage: { getItem: (k) => storage.get(k) ?? null, setItem: (k, v) => storage.set(k, v), removeItem: (k) => storage.delete(k) },
     CustomEvent: class { constructor(type, options) { this.type = type; this.detail = options.detail; } },
@@ -170,7 +172,7 @@ function bindAppearanceForm(savePreferences) {
   const end = source.indexOf('  const themeToggle =', start);
   assert.ok(start > 0 && end > start);
   vm.runInNewContext(`(function(container) { ${source.slice(start, end)} })(container);`, {
-    container, window: env.window, savePreferences, applyAppearancePreferences, normalizeAppearancePreferences, appearanceRevision,
+    container, document:env.document, window: env.window, savePreferences, applyAppearancePreferences, normalizeAppearancePreferences, appearanceRevision,appearanceContextRevision,currentNamedAppearance,currentUiSounds,
     t: (key) => key, clearError: (node) => { node.hidden = true; node.textContent = ''; },
     showError: (node, message) => { node.hidden = false; node.textContent = message; },
   });

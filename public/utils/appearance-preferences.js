@@ -5,8 +5,10 @@ import {configureUiSounds,resetUiSounds} from './ui-sounds.js';
 const COLOR_THEMES = ['neutral', 'warm', 'cool'];
 const HEADING_FONTS = ['default', 'serif'];
 let revision = 0;
+let contextRevision = 0;
 
 export function appearanceRevision() { return revision; }
+export function appearanceContextRevision() { return contextRevision; }
 
 export function normalizeAppearancePreferences(preferences = {}) {
   preferences ||= {};
@@ -41,6 +43,7 @@ export function applyStoredAppearancePreferences() {
 }
 
 export function resetAppearancePreferences() {
+  contextRevision += 1;
   resetUiSounds();
   clearNamedAppearance();
   try { localStorage.removeItem('yuvomi-appearance'); } catch { /* storage may be unavailable */ }

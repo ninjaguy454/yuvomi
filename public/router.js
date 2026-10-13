@@ -21,6 +21,7 @@ import { init as initReminders, stop as stopReminders } from '/reminders.js';
 import { openNotificationCenter, paintNotificationBadges } from '/notification-center.js';
 import { applyAppearancePreferences, resetAppearancePreferences, appearanceRevision } from '/utils/appearance-preferences.js';
 import {playUiSound} from '/utils/ui-sounds.js';
+import {deviceThemeChangesAllowed,openDeviceTheme} from '/components/device-theme.js';
 import { watchSessionChanges, sessionRevision } from '/utils/session-lifecycle.js';
 import { loadMemberLabels } from '/utils/member-label-loader.js';
 import { clearMemberLabels, memberLabel } from '/utils/member-label.js';
@@ -1225,6 +1226,11 @@ function sidebarActionEl({ labelKey, label = t(labelKey), icon, className, onCli
 }
 
 // Same explicit session action in the desktop rail and the mobile More sheet.
+function deviceThemeAction({mobile=false}={}){
+  if(!isDevicePrincipal())return null;
+  const options={labelKey:'deviceTheme.title',icon:'palette',className:mobile?'more-action--device-session':'nav-item--device-theme',onClick:()=>{if(mobile)window._closeMoreSheet?.({restoreFocus:false});void openDeviceTheme().catch(error=>window.yuvomi?.showToast(error.message,'error'));}};
+  const button=mobile?moreActionEl(options):sidebarActionEl(options);button.dataset.deviceTheme='';button.disabled=!deviceThemeChangesAllowed();button.title=button.disabled?t('deviceTheme.locked'):t('deviceTheme.title');button.setAttribute('aria-disabled',String(button.disabled));return button;
+}
 function deviceSessionAction({ mobile = false } = {}) {
   const temporary = deviceBootstrap()?.temporary;
   if (!isDevicePrincipal() && !temporary) return null;
@@ -1609,6 +1615,7 @@ function buildMoreSheetBody() {
 
   // System-Reihe im selben Vierer-Raster (Icon-über-Label, monochrom).
   const sessionAction = deviceSessionAction({ mobile: true });
+  const themeAction=deviceThemeAction({mobile:true});if(themeAction)nodes.push(themeAction);
   if (sessionAction) nodes.push(sessionAction);
   const system = document.createElement('div');
   system.className = 'more-sheet__system';
@@ -2036,6 +2043,7 @@ function renderAppShell(container) {
   // darunter, aber auch nicht mehr in den Scroller darueber.
   pinnedSidebarItems.forEach((el) => sidebar.appendChild(el));
   const sessionAction = deviceSessionAction();
+  const themeAction=deviceThemeAction();if(themeAction)sidebar.insertBefore(themeAction,pinnedSidebarItems.find(el=>el.dataset.route==='/settings')||null);
   if (sessionAction) sidebar.insertBefore(sessionAction, pinnedSidebarItems.find(el => el.dataset.route === '/settings') || null);
 
   // Footer-Aktionen (keine Routen → kein data-route, damit Delegation/Indikator

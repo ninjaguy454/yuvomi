@@ -10,6 +10,7 @@ import {deviceTaskList,deviceTaskDetail,deviceTaskStatus,deviceTaskClaim} from '
 import {deviceTaskCreateOnce,deviceTaskUpdate} from '../services/device-task-definitions.js';
 import {beginDeviceApproval,readDeviceApproval,cancelDeviceApproval} from '../services/device-approval.js';
 import {beginDevicePrizeApproval} from '../services/device-prize-approval.js';
+import {readDeviceTheme,saveDeviceTheme} from '../services/device-theme.js';
 import {DEVICE_COOKIE,DEVICE_ACTIONS,deviceCookie,deviceError,devicePreset,publicDevice,devicePrincipal,auditDevice,
   updateDevice,revokeDevice,beginPairing,approvePairing,pairingStatus,claimPairing,readDeviceContext,assertDeviceContext,
   deviceContextPayload,isTemporaryContext,beginTemporary,returnToDevice,touchTemporary,retireBrowserSession,deviceRequestStillValid} from '../services/devices.js';
@@ -86,6 +87,8 @@ deviceRouter.post('/return',guarded(async(req,res)=>{
 }));
 deviceRouter.post('/activity',guarded((req,res)=>contextResponse(req,res,touchTemporary(db.get(),req))));
 deviceRouter.use((req,res,next)=>req.devicePrincipal?next():res.status(403).json({error:'Return to the device view for display actions.'}));
+deviceRouter.get('/appearance',guarded((req,res)=>res.json({data:readDeviceTheme(db.get(),req)})));
+deviceRouter.patch('/appearance',guarded((req,res)=>res.json({data:saveDeviceTheme(db.get(),req,req.body)})));
 deviceRouter.post('/tasks/:id/approval/begin',rate,guarded(async(req,res)=>{
   const result=beginDeviceApproval(db.get(),req,Number(req.params.id),req.body);await save(req);res.status(201).json(result);
 }));
@@ -117,6 +120,7 @@ deviceRouter.get('/changes',(req,res)=>{
     if(!deviceRequestStillValid(db.get(),req)){res.write('event: context\ndata: {}\n\n');res.end();clearInterval(timer);return;}
     const d=db.get();
     const versions=['task_change_clock','rotation_change_clock','reward_change_clock'].map(table=>d.prepare(`SELECT version FROM ${table} WHERE id=1`).get()?.version||0);
+    versions.push(d.prepare('SELECT revision FROM household_devices WHERE id=?').get(req.devicePrincipal.id)?.revision||0);
     const value=JSON.stringify(versions);if(value!==last){last=value;res.write(`event: change\ndata: ${JSON.stringify({version:value})}\n\n`);}else res.write(': keepalive\n\n');
   };
   const timer=setInterval(tick,1000);timer.unref?.();req.on('close',()=>clearInterval(timer));tick();

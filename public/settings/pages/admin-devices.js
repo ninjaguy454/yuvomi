@@ -61,6 +61,7 @@ export async function render(container) {
         permissions.capabilities['rotations.view']=form.has('rotations')?'allow':'none';
         scope.member_ids=form.getAll('members').map(Number);scope.show_points=form.has('points');
         prefs.default_view=form.get('default_view');for(const key of ['theme','palette','font','density'])prefs.appearance[key]=form.get(key);
+        prefs.allow_theme_changes=form.has('allow_theme_changes');
         prefs.widgets=prefs.widgets.map(widget=>({...widget,visible:form.has(`widget:${widget.id}`),order:Number(form.get(`order:${widget.id}`)),size:form.get(`size:${widget.id}`)}));
         try{await api.patch(`/devices/${device.id}`,{revision:device.revision,name:form.get('name'),permissions,scope,preferences:prefs,idle_seconds:Number(form.get('idle')),maximum_seconds:Number(form.get('maximum'))});await closeModal({force:true});await refresh();}catch(err){panel.querySelector('[data-device-form-error]').textContent=err.message;}finally{submit.disabled=false;}
       };

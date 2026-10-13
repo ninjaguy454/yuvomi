@@ -69,6 +69,7 @@ export function normalizeDeviceScope(d,input={}) {
 export function normalizeDevicePreferences(d,input,{read=false}={}) {
   const seed=input??wallConfig(d);
   if(!seed||typeof seed!=='object'||Array.isArray(seed))throw deviceError('Invalid display preferences.');
+  if(!read&&Object.hasOwn(seed,'allow_theme_changes')&&typeof seed.allow_theme_changes!=='boolean')throw deviceError('Choose whether theme changes are allowed.');
   const supplied=input?.widgets??DEVICE_WIDGETS.map((id,order)=>({id,visible:id!=='weather',size:id==='tasks'?'large':'medium',order}));
   if(!Array.isArray(supplied)||supplied.length>DEVICE_WIDGETS.length||new Set(supplied.map(row=>row?.id)).size!==supplied.length||supplied.some(row=>!row||!DEVICE_WIDGETS.includes(row.id)))
     throw deviceError('Choose supported display widgets without duplicates.');
@@ -81,7 +82,8 @@ export function normalizeDevicePreferences(d,input,{read=false}={}) {
     const source=supplied.find(row=>row.id===id),validated=id==='rotations'?rotationWidget:normalized.widgets.find(row=>row.id===id);
     return {id,visible:validated?.visible??false,size:validated?.size||'medium',order:Number.isSafeInteger(source?.order)?source.order:DEVICE_WIDGETS.indexOf(id)};
   }).sort((a,b)=>a.order-b.order).map((row,order)=>({...row,order}));
-  return {...normalized,widgets,default_view:['wall','list','kanban'].includes(seed.default_view)?seed.default_view:'wall'};
+  return {...normalized,widgets,allow_theme_changes:!Object.hasOwn(seed,'allow_theme_changes')||seed.allow_theme_changes===true,
+    default_view:['wall','list','kanban'].includes(seed.default_view)?seed.default_view:'wall'};
 }
 export function publicDevice(row) {
   if(!row)return null;

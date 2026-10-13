@@ -4,6 +4,7 @@ import { broadcastSessionChange } from './session-lifecycle.js';
 import { clearApiCache } from '/sw-register.js';
 import { esc } from './html.js';
 import { setPermissions } from '/permissions.js';
+import {installDeviceThemeControls,refreshDeviceTheme} from '/components/device-theme.js';
 
 let timer, heartbeat = 0, leaving = false, installed = false, stopDeviceChanges, sessionSignature;
 const LOGIN_INTENT = 'vidamia-temporary-login';
@@ -53,6 +54,7 @@ export async function prepareDeviceBoot() {
 export function installDeviceSession() {
   if (installed) return;
   installed = true;
+  installDeviceThemeControls();
   if(pairedDeviceHint()){const css=document.createElement('link');css.rel='stylesheet';css.href='/styles/device.css';document.head.append(css);}
   const update = () => {
     const data = deviceBootstrap();
@@ -63,7 +65,7 @@ export function installDeviceSession() {
     document.documentElement.toggleAttribute('data-device-principal', isDevicePrincipal());
     document.documentElement.toggleAttribute('data-paired-context', !!data?.device);
     if (isDevicePrincipal()) {
-      if (!stopDeviceChanges) stopDeviceChanges = deviceChanges(() => window.dispatchEvent(new CustomEvent('task-data-changed')));
+      if (!stopDeviceChanges) stopDeviceChanges = deviceChanges(() => {void refreshDeviceTheme();window.dispatchEvent(new CustomEvent('task-data-changed'));});
       return;
     }
     stopDeviceChanges?.(); stopDeviceChanges = null;

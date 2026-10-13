@@ -50,7 +50,7 @@ export function deviceAppPreferences(d,p) {
   return {family_name:setting('family_name',''),timezone:householdTimeZone(d),language:setting('language','en'),date_format:setting('date_format','locale'),
     time_format:setting('time_format','12h'),week_start:setting('week_start','monday'),currency:setting('currency','USD'),
     theme:a.theme,color_theme:a.palette,heading_font:a.font==='serif'?'serif':'default',density:a.density,
-    named_appearance:normalizeNamedAppearance(a.named_appearance),ui_sounds:normalizeUiSounds(a.ui_sounds),
+    named_appearance:normalizeNamedAppearance(a.named_appearance),ui_sounds:normalizeUiSounds(a.ui_sounds),allow_theme_changes:value.allow_theme_changes,
     dashboard_widgets:[...widgets.values()],dashboard_today_glance:true,dashboard_follows_default:false,
     disabled_modules:Object.entries(p.permissions?.modules||{}).filter(([,level])=>level==='none').map(([key])=>key),
     hidden_modules:[],tasks_subtasks_expanded:true,tasks_template_switch_warning:true,visible_meal_types:['breakfast','lunch','dinner','snack']};

@@ -48,6 +48,7 @@ const API_CACHE_WHITELIST = ['/calendar', '/tasks', '/shopping', '/meals', '/con
 
 // App-Shell: sofort benötigt für ersten Render
 const APP_SHELL = [
+  '/components/device-theme.js',
   '/components/emoji-picker.js',
   '/components/point-adjustment.js',
   '/utils/emoji-catalog.js',

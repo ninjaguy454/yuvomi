@@ -18,7 +18,7 @@
 const APP_RELEASE   = '2.54.0-kitchen.5';
 
 // Release Trip place selection and configurable shared-device prize redemption.
-const CACHE_VERSION = `${APP_RELEASE}-vidamia.79`;
+const CACHE_VERSION = `${APP_RELEASE}-vidamia.80`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;
@@ -81,8 +81,6 @@ const APP_SHELL = [
   '/components/ui-sound-settings.js',
   '/components/card-color-picker.js',
   '/utils/card-colors.js',
-  '/components/trip-checklist.js',
-  '/utils/trip-task-deadline.js',
   '/styles/named-appearance.css',
   '/named-appearance-init.js',
   '/assets/themes/wood.webp',

@@ -13,9 +13,11 @@ import { displayTimeZone, setDisplayTimeZone } from '/utils/timezone.js';
 import { bindTaskCountdowns } from '/utils/task-countdown.js';
 import { taskScoringLabel, renderTaskScoringHistory } from '/utils/task-fields.js';
 import {mountNamedAppearancePicker} from '/components/named-appearance-picker.js';
-import {applyAppearancePreferences} from '/utils/appearance-preferences.js';
+import {applyAppearancePreferences,resetAppearancePreferences} from '/utils/appearance-preferences.js';
+import {authenticationSnapshot,sameAuthentication} from '/utils/device-context.js';
 import {currentNamedAppearance,applyNamedAppearance,clearNamedAppearance} from '/utils/named-appearance-runtime.js';
 import {mountUiSoundSettings} from '/components/ui-sound-settings.js';
+import {resolveNamedAppearance} from '/utils/named-appearance.js';
 import {currentUiSounds,configureUiSounds,captureCompletionSound,confirmCompletionSound} from '/utils/ui-sounds.js';
 
 const LABELS = { tasks:'Tasks', calendar:'Upcoming events', meals:'Today’s meals', shopping:'Shopping',
@@ -50,6 +52,9 @@ export async function mountWallDashboard(container, { user, signal, renderers })
   let generation = 0, disposed = false, detail = null, detailGeneration = 0, mutationPending = false, supportedActions=[];
   const originalAppearance = ['data-theme','data-color-theme','data-typography'].map(key => [key,document.documentElement.getAttribute(key)]);
   const originalNamedAppearance=currentNamedAppearance(),originalSounds=currentUiSounds();let paintedAppearance='';
+  const originalAuthentication=authenticationSnapshot();let contextEnded=false;
+  const endContext=()=>{contextEnded=true;};
+  window.addEventListener('auth:context-ending',endContext);
   const originalZone = displayTimeZone();
   const stopTaskCountdowns = bindTaskCountdowns(container);
   // Natural-height rows fill the space beside taller Task widgets. The DOM and
@@ -311,7 +316,7 @@ export async function mountWallDashboard(container, { user, signal, renderers })
       <p>Private and assignee-only content stays hidden. Personal photo screensavers are disabled here. Configure device brightness, sleep and kiosk lockdown in Fully Kiosk.</p>
       <p class="form-error" role="alert" data-wall-error hidden></p><div class="modal-footer"><button type="submit" class="btn btn--primary">Save Wall settings</button>${button('Cancel','data-action="close-modal"')}</div></form>`,onSave(panel){
         mountNamedAppearancePicker(panel.querySelector('[data-wall-named-appearance]'),{value:draft.appearance.named_appearance,prefix:'wall-theme',onChange:value=>{draft.appearance.named_appearance=value;panel.querySelector('[data-wall-legacy]').hidden=!!value;}});
-        mountUiSoundSettings(panel.querySelector('[data-wall-ui-sounds]'),{value:draft.appearance.ui_sounds,prefix:'wall-sounds',theme:()=>draft.appearance.named_appearance?.theme,onChange:value=>{draft.appearance.ui_sounds=value;}});
+        mountUiSoundSettings(panel.querySelector('[data-wall-ui-sounds]'),{value:draft.appearance.ui_sounds,prefix:'wall-sounds',theme:()=>resolveNamedAppearance(draft.appearance.named_appearance)?.theme.id,onChange:value=>{draft.appearance.ui_sounds=value;}});
         const layout=panel.querySelector('[data-wall-layout]');
         function rows(){layout.innerHTML=draft.widgets.map((w,i)=>`<div class="wall-layout-row" data-id="${w.id}"><label><input type="checkbox" data-visible ${w.visible?'checked':''}>${LABELS[w.id]}</label><select class="form-input" data-size aria-label="${LABELS[w.id]} size">${['small','medium','large'].map(v=>option(v,v,w.size)).join('')}</select>${button('↑',`data-move="-1" aria-label="Move ${LABELS[w.id]} up" ${i===0?'disabled':''}`)}${button('↓',`data-move="1" aria-label="Move ${LABELS[w.id]} down" ${i===draft.widgets.length-1?'disabled':''}`)}</div>`).join('');}
         rows();
@@ -327,7 +332,17 @@ export async function mountWallDashboard(container, { user, signal, renderers })
         };
       }});
   }
-  function dispose(){disposed=true;generation++;detailGeneration++;clearTimeout(expiryTimer);clearInterval(refreshTimer);stopTaskCountdowns();stopLive?.();stopRewards?.();layoutObserver.disconnect();css.remove();actor=null;setDisplayTimeZone(originalZone);clearNamedAppearance({removeCache:false});for(const [key,value] of originalAppearance){if(value===null)document.documentElement.removeAttribute(key);else document.documentElement.setAttribute(key,value);}if(originalNamedAppearance)applyNamedAppearance(originalNamedAppearance,{persist:false});configureUiSounds(originalSounds,originalNamedAppearance?.theme);}
+  function dispose(){
+    if(disposed)return;disposed=true;generation++;detailGeneration++;
+    clearTimeout(expiryTimer);clearInterval(refreshTimer);stopTaskCountdowns();stopLive?.();stopRewards?.();layoutObserver.disconnect();css.remove();actor=null;
+    window.removeEventListener('auth:context-ending',endContext);
+    setDisplayTimeZone(originalZone);
+    if(contextEnded||!sameAuthentication(originalAuthentication)){resetAppearancePreferences();return;}
+    clearNamedAppearance({removeCache:false});
+    for(const [key,value] of originalAppearance){if(value===null)document.documentElement.removeAttribute(key);else document.documentElement.setAttribute(key,value);}
+    if(originalNamedAppearance)applyNamedAppearance(originalNamedAppearance,{persist:false});
+    configureUiSounds(originalSounds,document.documentElement.getAttribute('data-named-theme'));
+  }
   let stopLive,stopRewards;
   signal?.addEventListener('abort',dispose,{once:true});
   try{

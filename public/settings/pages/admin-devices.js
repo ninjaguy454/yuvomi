@@ -1,6 +1,7 @@
 import { deviceConfigContent } from './admin-device-config.js';
 import {mountNamedAppearancePicker} from '/components/named-appearance-picker.js';
 import {mountUiSoundSettings} from '/components/ui-sound-settings.js';
+import {resolveNamedAppearance} from '/utils/named-appearance.js';
 import { api } from '/api.js';
 import { esc } from '/utils/html.js';
 import { openModal, closeModal, confirmModal } from '/components/modal.js';
@@ -41,7 +42,7 @@ export async function render(container) {
     const prefs=structuredClone(device.preferences),permissions=structuredClone(device.permissions),scope=structuredClone(device.scope);
     openModal({title:`Configure ${device.name}`,size:'xl',content:deviceConfigContent(device,model,{modules,actions,definitions,noteActions}),onSave(panel){
       mountNamedAppearancePicker(panel.querySelector('[data-device-named-appearance]'),{value:prefs.appearance.named_appearance,prefix:'device-theme',onChange:value=>{prefs.appearance.named_appearance=value;panel.querySelectorAll('[data-device-legacy]').forEach(n=>n.hidden=!!value);}});
-      mountUiSoundSettings(panel.querySelector('[data-device-ui-sounds]'),{value:prefs.appearance.ui_sounds,prefix:'device-sounds',theme:()=>prefs.appearance.named_appearance?.theme,onChange:value=>{prefs.appearance.ui_sounds=value;}});
+      mountUiSoundSettings(panel.querySelector('[data-device-ui-sounds]'),{value:prefs.appearance.ui_sounds,prefix:'device-sounds',theme:()=>resolveNamedAppearance(prefs.appearance.named_appearance)?.theme.id,onChange:value=>{prefs.appearance.ui_sounds=value;}});
       window.lucide?.createIcons({el:panel});
       panel.querySelector('form').addEventListener('invalid',event=>{const details=event.target.closest('details');if(details)details.open=true;},true);
       panel.querySelector('form').onsubmit=async event=>{event.preventDefault();const form=new FormData(event.target),submit=event.submitter||panel.querySelector('[data-device-save]');submit.disabled=true;

@@ -531,6 +531,35 @@ for (const scenario of [
   } finally { await page.close(); }
 });
 
+test('named card materials honor Wall, reduced transparency, forced colors and keyboard focus',async()=>{
+  const page=await mount({mode:'list',width:390}),cdp=await page.createCDPSession();
+  try{
+    await page.evaluate(async()=>{
+      const {defaultNamedAppearance}=await import('/utils/named-appearance.js');
+      (await import('/utils/named-appearance-runtime.js')).applyNamedAppearance({...defaultNamedAppearance(),theme:'ocean-glass'},{persist:false});
+      window.subject.state.tasks[0].card_color='slot-01-v1';window.subject.renderTaskList(window.taskContainer);
+    });
+    const blur=()=>page.$eval('.task-card[data-task-id="1"]',n=>getComputedStyle(n).backdropFilter);
+    assert.equal(await blur(),'none','existing scroll-compositor safeguard stays effective');
+    await page.evaluate(()=>{const clone=document.querySelector('.task-card[data-task-id="1"]').cloneNode(true);clone.removeAttribute('data-task-id');clone.id='material-probe';document.body.append(clone);});
+    assert.equal(await page.$eval('#material-probe',n=>getComputedStyle(n).backdropFilter),'blur(6px)','bounded blur outside protected app scrollport');
+    await page.evaluate(()=>document.documentElement.setAttribute('data-wall-mode',''));assert.equal(await blur(),'none');
+    await page.evaluate(()=>document.documentElement.removeAttribute('data-wall-mode'));
+    await cdp.send('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-transparency',value:'reduce'},{name:'prefers-reduced-motion',value:'reduce'}]});
+    assert.equal(await blur(),'none');assert.equal(await page.$eval('.task-card[data-task-id="1"]',n=>getComputedStyle(n).backgroundImage),'none');
+    await cdp.send('Emulation.setEmulatedMedia',{features:[{name:'forced-colors',value:'active'}]});
+    await page.evaluate(async()=>{
+      const {defaultNamedAppearance}=await import('/utils/named-appearance.js');
+      (await import('/utils/named-appearance-runtime.js')).applyNamedAppearance({...defaultNamedAppearance(),theme:'medieval-parchment'},{persist:false});
+    });
+    assert.equal(await page.evaluate(()=>matchMedia('(forced-colors:active)').matches),true);
+    assert.equal(await page.$eval('.task-card[data-task-id="1"]',n=>getComputedStyle(n).backgroundImage),'none','forced colors remove decorative texture');
+    await page.focus('.task-card[data-task-id="1"] [data-action="toggle-status"]');
+    await page.keyboard.press('Tab');assert.equal(await page.evaluate(()=>document.activeElement===document.body),false,'keyboard focus remains actionable');
+    assert.deepEqual(writes,[]);
+  }finally{await cdp.detach();await page.close();}
+});
+
 test('all44 named themes use their actual indexed fills with readable Task text and unchanged accessible actions',async()=>{
   const {NAMED_THEMES,cardColor,contrastRatio}=await import('../public/utils/named-appearance.js');
   const page=await mount({mode:'list',width:390}),initialLabel=await page.$eval('.task-card[data-task-id="1"] [data-action="toggle-status"]',n=>n.getAttribute('aria-label'));const images=[];if(namedGallery)mkdirSync(namedGallery,{recursive:true});

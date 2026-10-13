@@ -8,7 +8,7 @@
     "node": ">=22.0.0"
   },
   "scripts": {
-    "test:named-appearance": "node --test test/test-named-appearance.js test/test-named-appearance-runtime.js test/test-named-preferences.js test/test-named-device-appearance.js test/test-task-card-colors.js",
+    "test:named-appearance": "node --test test/test-named-appearance.js test/test-named-appearance-runtime.js test/test-named-preferences.js test/test-named-device-appearance.js test/test-task-card-colors.js test/test-appearance-encrypted-upgrade.js",
     "test:named-appearance-browser": "node --test test/test-named-appearance-browser.js",
     "test:ui-sounds": "node --test test/test-ui-sounds.js",
     "test:card-colors": "node --test test/test-card-colors.js",

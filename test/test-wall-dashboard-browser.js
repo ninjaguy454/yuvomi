@@ -90,6 +90,33 @@ async function identify(page,id=learner){
  await page.waitForSelector('[data-wall-identify-form]');await page.select('[name=user_id]',String(id));await page.type('[name=password]','wall-browser-password');await page.click('[data-wall-identify-form] [type=submit]');
  await page.waitForFunction(()=>!document.querySelector('[data-wall-identify-form]'));
 }
+test('Wall disposal after context end cannot restore a captured personal theme or enabled sounds',async()=>{
+  saveWallConfig(d,config('warm','dark'));const page=await browser.newPage();await page.goto(base+'/wall-browser-test');
+  const result=await page.evaluate(async()=>{
+    window.yuvomi={showToast(){}};window.EventSource=class{addEventListener(){}close(){}};await(await import('/i18n.js')).initI18n();
+    const {defaultNamedAppearance}=await import('/utils/named-appearance.js'),{applyAppearancePreferences}=await import('/utils/appearance-preferences.js');
+    applyAppearancePreferences({named_appearance:{...defaultNamedAppearance(),theme:'coffee'},ui_sounds:{version:1,mode:'pack',pack:'glass',volume:15}});
+    const controller=new AbortController(),renderers=Object.fromEntries(['tasks','calendar','meals','shopping','notes','points'].map(key=>[key,()=>'' ]));
+    await(await import('/components/wall-dashboard.js')).mountWallDashboard(document.querySelector('main'),{user:{id:1,role:'admin'},signal:controller.signal,renderers});
+    window.dispatchEvent(new CustomEvent('auth:context-ending'));controller.abort();
+    return{named:document.documentElement.getAttribute('data-named-theme'),mode:(await import('/utils/ui-sounds.js')).currentUiSounds().mode,cache:localStorage.getItem('vidamia-named-appearance')};
+  });assert.deepEqual(result,{named:null,mode:'off',cache:null});await page.close();
+});
+test('ordinary Wall exit restores Dynamic personal appearance and its resolved Theme-default sound',async()=>{
+  saveWallConfig(d,config('warm','dark'));const page=await browser.newPage();await page.goto(base+'/wall-browser-test');
+  await page.evaluate(async()=>{
+    const NativeAudioContext=window.AudioContext;window.soundFrequencies=[];
+    window.AudioContext=class extends NativeAudioContext{createOscillator(){const oscillator=super.createOscillator(),start=oscillator.start.bind(oscillator);oscillator.start=(...args)=>{window.soundFrequencies.push(oscillator.frequency.value);return start(...args);};return oscillator;}};
+    window.yuvomi={showToast(){}};window.EventSource=class{addEventListener(){}close(){}};await(await import('/i18n.js')).initI18n();
+    const {defaultNamedAppearance}=await import('/utils/named-appearance.js');
+    (await import('/utils/appearance-preferences.js')).applyAppearancePreferences({named_appearance:{...defaultNamedAppearance(),theme:'holidays',outside:'ocean-glass',holidays:[]},ui_sounds:{version:1,mode:'theme',pack:'soft',volume:15}});
+    const controller=new AbortController(),renderers=Object.fromEntries(['tasks','calendar','meals','shopping','notes','points'].map(key=>[key,()=>'' ]));
+    await(await import('/components/wall-dashboard.js')).mountWallDashboard(document.querySelector('main'),{user:{id:1,role:'admin'},signal:controller.signal,renderers});controller.abort();
+    const button=document.createElement('button');button.id='restored-sound';button.textContent='Synthetic select';button.addEventListener('click',async event=>(await import('/utils/ui-sounds.js')).playUiSound('select',event));document.body.append(button);
+  });
+  assert.equal(await page.$eval('html',n=>n.getAttribute('data-named-theme')),'ocean-glass');await page.click('#restored-sound');
+  await page.waitForFunction(()=>window.soundFrequencies.length>0);assert.deepEqual(await page.evaluate(()=>window.soundFrequencies),[880]);await page.close();
+});
 async function screenshot(page,name){const dir=process.env.WALL_QA_OUTPUT;if(dir){mkdirSync(dir,{recursive:true});await new Promise(r=>setTimeout(r,350));await page.screenshot({path:path.join(dir,name+'.png'),fullPage:true});}}
 
 test('large wall, tablet landscape/portrait, and mobile fit with usable touch controls and themes',async()=>{

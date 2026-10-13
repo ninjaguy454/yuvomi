@@ -17,8 +17,8 @@
 
 const APP_RELEASE   = '2.54.0-kitchen.5';
 
-// Release sequence-preserving Skip and retain the reviewed subtask Points editor.
-const CACHE_VERSION = `${APP_RELEASE}-vidamia.78`;
+// Release Trip place selection and configurable shared-device prize redemption.
+const CACHE_VERSION = `${APP_RELEASE}-vidamia.79`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;
@@ -88,6 +88,7 @@ const APP_SHELL = [
   '/utils/device-session.js',
   '/components/device-dashboard.js',
   '/components/device-approval.js',
+  '/components/device-prizes.js',
   '/components/device-approval-return.js',
   '/components/device-task-claim.js',
   '/components/task-acceptance.js',
@@ -161,6 +162,9 @@ const APP_SHELL = [
   '/nav-icons.js',
   '/permissions.js',
   '/components/activity-automation.js',
+  '/components/place-search.js',
+  '/components/trip-checklist.js',
+  '/utils/trip-task-deadline.js',
   '/components/variable-expression-editor.js',
   '/utils/variable-expressions.js',
   '/components/detail-view.js',

@@ -18,7 +18,7 @@
 const APP_RELEASE   = '2.54.0-kitchen.5';
 
 // Release Trip place selection and configurable shared-device prize redemption.
-const CACHE_VERSION = `${APP_RELEASE}-vidamia.81`;
+const CACHE_VERSION = `${APP_RELEASE}-vidamia.83`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;

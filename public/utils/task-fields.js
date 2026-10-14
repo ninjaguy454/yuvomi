@@ -21,6 +21,7 @@ import { actionableSubtasks, structuralSubtasks } from '/utils/task-progress.js'
 import { isPreviewable } from '/utils/document-preview.js';
 import { esc } from '/utils/html.js';
 import { memberLabel } from '/utils/member-label.js';
+import { deviceBootstrap } from '/utils/device-context.js';
 
 // --------------------------------------------------------
 // Prioritaet und Status
@@ -71,8 +72,34 @@ export function isExpired(task) {
 export function isSkipped(task) { return task?.status === 'skipped'; }
 export function isClosedOccurrence(task) { return isExpired(task)||isSkipped(task); }
 
-/** Keep the configured reward intact for the next occurrence or an explicit reopen. */
-export function taskCompletionPoints(task) {
+function isSharedTaskDisplay() {
+  const context=deviceBootstrap();
+  return !!context?.device && (context.principal?.kind==='device' || !!context.temporary);
+}
+
+/** Configured worth, counted once per visible source unit, never per recipient. */
+function sharedTaskPoints(task) {
+  if(task?.scoring===null || task?.is_supervision_projection || task?.is_support_task)return null;
+  if(isClosedOccurrence(task))return 0;
+  const scoring=task?.scoring;
+  if(!scoring)return Number(task?.points||0);
+  if(Object.hasOwn(scoring,'configured_total'))return scoring.configured_total;
+  if(scoring.mode==='whole_task')return Number(scoring.root_task_id)===Number(task.id)?Number(task.points||0):0;
+  if(scoring.mode==='subtasks') {
+    if(Number(scoring.root_task_id)!==Number(task.id))return Number(task.parent_task_id)===Number(scoring.root_task_id)?Number(task.points||0):0;
+    const seen=new Set();
+    return structuralSubtasks(task).reduce((total,child)=>{
+      if(seen.has(child.id) || Number(child.parent_task_id)!==Number(task.id) || child.scoring==null
+        || Number(child.scoring.root_task_id)!==Number(task.id) || isClosedOccurrence(child))return total;
+      seen.add(child.id);return total+Number(child.points||0);
+    },0);
+  }
+  return null;
+}
+
+/** Shared boards show worth; personal views retain the authoritative personal total. */
+export function taskCompletionPoints(task, {shared=isSharedTaskDisplay()}={}) {
+  if(shared)return sharedTaskPoints(task);
   if (task?.scoring === undefined) return isClosedOccurrence(task) ? 0 : Number(task?.points || 0);
   return task?.scoring?.personal_total ?? null;
 }
@@ -93,7 +120,8 @@ export function isTaskScoringOwner(task) {
   return task.scoring?.root_task_id != null ? Number(task.scoring.root_task_id) === Number(task.id) : !task.parent_task_id;
 }
 
-export function taskScoringLabel(task, userId = null) {
+export function taskScoringLabel(task, userId = null, {shared=isSharedTaskDisplay()}={}) {
+  if(shared){const points=taskCompletionPoints(task,{shared:true});return points===null?t('tasks.scoringPersonalUnavailable'):t('tasks.pointsSummary',{count:points});}
   if(task?.scoring===undefined)return t('tasks.pointsSummary',{count:taskCompletionPoints(task)});
   const amounts=taskScoringAmounts(task,userId);
   if(amounts.unavailable || amounts.total===null)return t('tasks.scoringPersonalUnavailable');

@@ -37,6 +37,41 @@ const reason=value=>error=>error.status===409&&error.reason===value;
 const unitPreview=(id,proposed={},options={})=>api('previewTaskScoring',d,id,proposed,{includeUnits:true,...options});
 const unit=(ref,points,ids=[],outcome=points===0?'zero':ids.length?'earned':'no_recipients')=>({ref,points,recipients:ids.map(user_id=>({user_id,points})),outcome});
 const taskRef=task_id=>({kind:'task',task_id});
+
+test('configured whole-task worth is independent of recipients and never changes award evidence',()=>{
+ for(const assigned of [[],[2],[2,3],[4]]){
+  const root=task(2,{mode:'whole_task',assigned}),child=task(99,{parent:root});
+  const changes=d.prepare('SELECT total_changes() n').get().n;
+  assert.equal(summary(root,1).configured_total,2);
+  assert.equal(summary(String(root),1).configured_total,2);
+  assert.equal(summary(child,1).configured_total,0);
+  assert.equal(d.prepare('SELECT total_changes() n').get().n,changes);
+ }
+ assert.deepEqual(earns(),[]);assert.equal(d.prepare('SELECT COUNT(*) n FROM task_scoring_settlements').get().n,0);
+});
+
+test('configured subtask worth includes optional scheduled source rows but only authorized direct units',()=>{
+ const root=task(999,{mode:'subtasks'}),first=task(3,{parent:root}),optional=task(5,{parent:root}),hidden=task(700,{parent:root}),nested=task(800,{parent:first});
+ d.prepare("UPDATE tasks SET is_optional=1,start_date='2030-01-01' WHERE id=?").run(optional);
+ d.prepare("UPDATE tasks SET visibility='private' WHERE id=?").run(hidden);
+ const changes=d.prepare('SELECT total_changes() n').get().n;
+ assert.equal(summary(root,2).configured_total,8);
+ assert.equal(api('taskScoringSummary',d,root,{viewerId:null,authorizedTaskIds:[root,first,optional]}).configured_total,8);
+ assert.equal(api('taskScoringSummary',d,root,{viewerId:null,authorizedTaskIds:[root,first]}).configured_total,3);
+ assert.equal(summary(first,2).configured_total,3);assert.equal(summary(nested,2).configured_total,0);
+ assert.equal(d.prepare('SELECT total_changes() n').get().n,changes);
+ d.prepare("UPDATE tasks SET status='expired' WHERE id=?").run(first);
+ assert.equal(summary(root,2).configured_total,5);
+ d.prepare("UPDATE tasks SET status='skipped' WHERE id=?").run(root);
+ const closedChanges=d.prepare('SELECT total_changes() n').get().n;
+ assert.equal(summary(root,2).configured_total,0);assert.equal(summary(optional,2).configured_total,0);
+ assert.equal(d.prepare('SELECT total_changes() n').get().n,closedChanges);
+ assert.deepEqual(earns(),[]);
+});
+
+test('unreviewed legacy configured worth is unavailable instead of a viewer personal zero',()=>{
+ assert.equal(summary(task(2,{assigned:[2]}),1).configured_total,null);
+});
 const templateRef=template_id=>({kind:'template',template_id});
 function unitTotals(units){const totals=new Map();for(const row of units)for(const {user_id,points} of row.recipients)if(points>0)totals.set(user_id,(totals.get(user_id)||0)+points);return [...totals].sort(([a],[b])=>a-b).map(([user_id,points])=>({user_id,points}));}
 

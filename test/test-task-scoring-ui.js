@@ -81,6 +81,29 @@ test('authoritative personal gross total and explicit unavailable scoring never 
   const page=await mounted();try{const values=await page.evaluate(async task=>{const {taskCompletionPoints}=await import('/utils/task-fields.js');return [taskCompletionPoints(task),taskCompletionPoints({...task,scoring:null})];},task);assert.deepEqual(values,[7,null]);}
   finally{await page.dispose();}
 });
+
+for(const [name,bootstrap,expected] of [
+  ['anonymous device',{principal:{kind:'device'},device:{id:9}},2],
+  ['temporary device member',{principal:{kind:'member'},user:{id:1},device:{id:9},temporary:{}},2],
+  ['personal member',{principal:{kind:'member'},user:{id:1}},0],
+])test(`${name} uses the same score on real cards, accessible badges and Task Details`,async()=>{
+  const page=await mounted();editing={...task,points:2,assigned_to:2,scoring:{...scoring,configured_total:2,personal_total:0,earned:[],potential:[{user_id:2,points:2}]}};
+  try{
+    const card=await page.evaluate(async({task,bootstrap})=>{
+      const {closeModal}=await import('/components/modal.js');await closeModal({force:true});
+      const {acceptAuthentication}=await import('/utils/device-context.js');acceptAuthentication({authContext:'badge-fixture',...bootstrap});
+      const {__test}=await import('/pages/tasks.js');__test.state.currentUserId=1;
+      const card=new DOMParser().parseFromString(__test.renderTaskCard(task),'text/html').querySelector('.activity-card__points');
+      const {openTaskDetail}=await import('/components/task-detail.js');openTaskDetail({task,currentUserId:1});
+      return {points:card.textContent,label:card.getAttribute('aria-label'),title:card.title};
+    },{task:editing,bootstrap});
+    assert.equal(card.points,String(expected));assert.equal(card.label,card.title);
+    await page.waitForSelector('.task-detail-points');
+    const detail=await page.$eval('.task-detail-points',el=>el.textContent);assert.equal(detail,card.label);
+    if(expected===2){assert.match(card.label,/2/);assert.doesNotMatch(card.label,/Known earned|Potential/i);}
+    else assert.match(card.label,/0/);
+  }finally{await page.dispose();}
+});
 test('canonical executable Activity under a Workflow still offers its root mode and action editor',async()=>{
   const page=await mounted();try{const markup=await page.evaluate(async task=>{const {__test}=await import('/pages/tasks.js');return __test.renderModalContent({task:{...task,parent_task_id:50},users:[]});},task);assert.match(markup,/name="scoring_mode"/);assert.match(markup,/data-task-subtask-editor/);}
   finally{await page.dispose();}

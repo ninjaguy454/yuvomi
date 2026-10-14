@@ -1,6 +1,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {scoringFixture} from './helpers/task-scoring-route-fixture.js';
+import {createDevice} from '../server/services/devices.js';
+import {deviceTaskDetail,deviceTaskList} from '../server/services/device-tasks.js';
+
+test('configured worth survives real device scheduling projection without including private child amounts',async t=>{
+ const f=await scoringFixture(t),created=await f.create({scoring_mode:'subtasks',assigned_to:[2],points:999,subtasks:[{title:'Now',points:3},{title:'Later',points:5},{title:'Optional later',points:7,is_optional:true},{title:'Private',points:900}]});
+ assert.equal(created.status,201);const root=created.data.id,[now,later,optional,hidden]=created.data.subtasks;
+ f.d.prepare("UPDATE tasks SET start_date='2026-11-02' WHERE id IN (?,?)").run(later.id,optional.id);
+ f.d.prepare("UPDATE tasks SET visibility='private' WHERE id=?").run(hidden.id);
+ const principal={kind:'device',...createDevice(f.d,{name:'Synthetic configured worth display'},1)},snapshot=f.snapshot(),changes=f.changes();
+ const list=deviceTaskList(f.d,principal).find(row=>row.id===root),detail=deviceTaskDetail(f.d,principal,root);
+ assert.deepEqual(list.subtasks.map(row=>row.id),[now.id]);
+ assert.equal(list.scoring.configured_total,15);assert.equal(detail.scoring.configured_total,15);
+ const personal=await f.call('GET','/tasks/'+root,undefined,2);assert.equal(personal.status,200);assert.equal(personal.data.scoring.configured_total,15);
+ const personalList=await f.call('GET','/tasks?status=open',undefined,2),listed=personalList.data.find(row=>row.id===root);
+ assert.equal(listed.scoring.configured_total,15);assert.deepEqual(listed.subtasks.map(row=>row.id),[now.id]);
+ assert.equal(JSON.stringify({list,detail,personal,listed}).includes('900'),false);
+ assert.equal(f.snapshot(),snapshot);assert.equal(f.changes(),changes);
+});
 
 test('creation selects exclusive public policy and rejects ambiguous omitted policy',async t=>{
  const f=await scoringFixture(t);for(const mode of ['whole_task','subtasks']){const r=await f.create({scoring_mode:mode,points:5,assigned_to:[2],subtasks:[{title:'Step',points:7}]});assert.equal(r.status,201);assert.equal(r.data.scoring_mode,mode);await f.finish(r.data.id);assert.deepEqual(f.d.prepare("SELECT user_id,delta FROM reward_ledger WHERE type='earn' AND task_id IN (?,?)").all(r.data.id,r.data.subtasks[0].id),[{user_id:2,delta:mode==='whole_task'?5:7}]);}
@@ -64,4 +82,36 @@ test('historical scoring honors view-own capability and leaf summaries stay narr
  f.grant('view_household','none');f.grant('view_own','allow');const loaded=(await f.call('GET','/tasks/'+r.data.id,undefined,2)).data;
  assert.equal(loaded.scoring.mode_locked,true);assert.deepEqual(loaded.scoring.earned,[]);assert.ok(!loaded.scoring.settled_task_ids.includes(removed));
  const leaf=(await f.call('GET','/tasks/'+r.data.subtasks[1].id,undefined,2)).data;assert.deepEqual(leaf.scoring.earned,[]);assert.equal(leaf.scoring.settled_task_ids.length,0);
+});
+
+for(const scope of ['occurrence','future'])for(const mode of ['whole_task','subtasks'])for(const policy of mode==='whole_task'?['fixed','subject_skill']:['fixed'])test(`${scope} ${mode} ${policy}: a color-only full editor retains the child's two-point award`,async t=>{
+  const subject=policy==='subject_skill',f=await scoringFixture(t),template=Number(f.d.prepare("INSERT INTO activity_templates(name,title_template,assignment_strategy,assignment_policy,fixed_user_id,subject_required,presence_policy,created_by) VALUES('Assigned bedtime','Assigned bedtime',?,?,?,?, 'ignore',1)").run(policy,policy,subject?null:2,subject?1:0).lastInsertRowid);
+  const created=await f.create({title:'Synthetic bedtime',activity_template_id:template,...(subject?{activity_subject_user_id:2}:{}),points:mode==='whole_task'?2:0,scoring_mode:mode,
+    due_date:'2026-11-01',is_recurring:1,recurrence_rule:'FREQ=DAILY',subtasks:[{title:'Bedtime step',points:mode==='subtasks'?2:0}]});
+  assert.equal(created.status,201,JSON.stringify(created));const id=created.data.id,task=created.data;
+  const terms=()=>({mode:f.row(id).scoring_mode,points:f.row(id).points,assigned:f.row(id).assigned_to,
+    joins:f.d.prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(id),
+    binding:f.d.prepare('SELECT activity_template_id,subject_user_id,assignment_override_user_id,definition_snapshot_json FROM task_activity_bindings WHERE task_id=?').get(id),
+    children:f.d.prepare('SELECT id,points FROM tasks WHERE parent_task_id=? ORDER BY id').all(id)});
+  const original=terms(),body={...Object.fromEntries(['title','description','category','priority','status','start_date','start_time','due_date','due_time','is_recurring','recurrence_rule','recurrence_from_completion','points','scoring_mode','visibility','countdown','locked','expiration_policy'].filter(key=>!subject||key!=='scoring_mode').map(key=>[key,task[key]])),
+    edit_scope:scope,activity_template_id:template,activity_subject_user_id:subject?2:null,assignment_mode:'fixed',assigned_to:[],rotation_user_ids:[],rotation_bindings:[],skill_ids:[],tags:task.tags,
+    subtasks:task.subtasks.map(child=>({id:child.id,title:child.title,points:child.points,skill_ids:child.skill_ids,is_optional:child.is_optional})),
+    card_color_choice:{version:1,mode:'fixed',slot:'slot-07-v1'}};
+  const snapshot=f.snapshot(),changes=f.changes(),preview=await f.preview(id,body);
+  assert.equal(preview.status,200,JSON.stringify(preview));assert.equal(preview.data.valid,true);assert.deepEqual(preview.data.before,[{user_id:2,points:2}]);assert.deepEqual(preview.data.after,[{user_id:2,points:2}]);assert.deepEqual(preview.data.warnings,[]);
+  assert.equal(f.snapshot(),snapshot);assert.equal(f.changes(),changes,'preview is read-only');
+  const saved=await f.edit(id,body);assert.equal(saved.status,200,JSON.stringify(saved));assert.deepEqual(terms(),original,'color edit preserves assignment, mode, amounts and Activity snapshot');assert.equal(f.row(id).card_color,'slot-07-v1');
+  // Existing occurrences and their successors use their frozen Activity policy.
+  f.d.prepare('UPDATE activity_templates SET fixed_user_id=3,points=99 WHERE id=?').run(template);
+  const awards=root=>f.d.prepare("SELECT user_id,SUM(delta) points FROM reward_ledger WHERE type='earn' AND (task_id=? OR task_id IN (SELECT id FROM tasks WHERE parent_task_id=?)) GROUP BY user_id ORDER BY user_id").all(root,root);
+  assert.equal((await f.finish(id)).status,200);assert.deepEqual(awards(id),[{user_id:2,points:2}]);
+  const next=f.d.prepare('SELECT * FROM tasks WHERE recurrence_origin_id=? AND parent_task_id IS NULL').get(id);assert.ok(next);assert.equal(next.assigned_to,2);assert.equal(next.scoring_mode,mode);assert.equal(next.points,original.points);
+  assert.equal((await f.finish(next.id)).status,200);assert.deepEqual(awards(next.id),[{user_id:2,points:2}]);
+  await f.finish(id);await f.finish(next.id);assert.deepEqual(awards(id),[{user_id:2,points:2}]);assert.deepEqual(awards(next.id),[{user_id:2,points:2}]);
+});
+
+test('an intentional manual assignment removal still previews and saves no recipient',async t=>{
+  const f=await scoringFixture(t),created=await f.create({assigned_to:[2],points:2,scoring_mode:'whole_task'}),id=created.data.id;
+  const p=await f.preview(id,{assigned_to:[],card_color_choice:{version:1,mode:'fixed',slot:'slot-07-v1'}});assert.equal(p.status,200);assert.deepEqual(p.data.before,[{user_id:2,points:2}]);assert.deepEqual(p.data.after,[]);
+  assert.equal((await f.edit(id,{assigned_to:[],card_color_choice:{version:1,mode:'fixed',slot:'slot-07-v1'}})).status,200);assert.equal(f.row(id).assigned_to,null);await f.finish(id);assert.deepEqual(f.d.prepare('SELECT * FROM reward_ledger WHERE task_id=?').all(id),[]);
 });

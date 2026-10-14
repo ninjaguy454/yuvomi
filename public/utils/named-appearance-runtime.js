@@ -1,16 +1,26 @@
 import { NAMED_THEMES, normalizeNamedAppearance, resolveNamedAppearance, namedThemeVariables } from './named-appearance.js';
 import {startLocalWeather} from './local-weather-runtime.js';
+import {mountLocalWeatherScene} from './local-weather-scene.js';
+import {queueWeatherThunder,cancelWeatherThunder} from './ui-sounds.js';
 export const NAMED_APPEARANCE_CACHE='vidamia-named-appearance';
-let config=null,resolved=null,timer=null,previousTheme=null,previousMetas=[],variables=[],listeners=false,weather=null;
+let config=null,resolved=null,timer=null,previousTheme=null,previousMetas=[],variables=[],listeners=false,weather=null,weatherScene=null,weatherSceneKey=null;
 const storage=()=>{try{return localStorage;}catch{return null;}};
 function cacheEligible(){try{return localStorage.getItem('vidamia-paired-device')!=='1'&&document.documentElement.getAttribute('data-wall-mode')==null;}catch{return false;}}
+function clearWeatherScene(){weatherScene?.dispose();weatherScene=null;weatherSceneKey=null;cancelWeatherThunder({resetOptIn:true});}
+function updateWeatherScene(value){
+  if(config?.theme!=='local-weather'||!weather||!value){clearWeatherScene();return;}
+  weatherScene??=mountLocalWeatherScene({onFlash:event=>{const reader=weather;queueWeatherThunder({...event,isCurrent:()=>config?.theme==='local-weather'&&weather===reader&&!!reader?.getScene()?.phenomena.includes('thunder')});}});
+  const scene=weather.getScene(),key=scene?JSON.stringify(scene):null;if(key!==weatherSceneKey||!scene)cancelWeatherThunder();weatherSceneKey=key;
+  weatherScene.update({theme:value,scene});
+}
+function configurationChanged(){window.dispatchEvent(new CustomEvent('named-appearance-configuration-changed',{detail:{theme:config?.theme??null}}));}
 function paint(now){
-  const next=resolveNamedAppearance(config,now,weather?.getValue());if(!next)return null;const root=document.documentElement,t=next.theme;
-  if(resolved?.theme.id===t.id&&root.getAttribute('data-named-theme')===t.id){resolved=next;return next;}
+  const observation=weather?.getValue(),next=resolveNamedAppearance(config,now,observation);if(!next)return null;const root=document.documentElement,t=next.theme;
+  if(resolved?.theme.id===t.id&&root.getAttribute('data-named-theme')===t.id){resolved=next;updateWeatherScene(observation);return next;}
   resolved=next;root.setAttribute('data-named-theme',t.id);root.setAttribute('data-named-material',t.motif);root.setAttribute('data-theme',t.kind);root.style?.setProperty('color-scheme',t.kind);
   const values=namedThemeVariables(t);variables=Object.keys(values);for(const [key,value]of Object.entries(values))root.style?.setProperty(key,value);
   for(const meta of document.querySelectorAll?.('meta[name="theme-color"]')||[])meta.setAttribute('content',t.canvas);
-  window.dispatchEvent(new CustomEvent('named-appearance-changed',{detail:{theme:t.id,reason:next.reason}}));return next;
+  updateWeatherScene(observation);window.dispatchEvent(new CustomEvent('named-appearance-changed',{detail:{theme:t.id,reason:next.reason}}));return next;
 }
 export function refreshNamedAppearance(now=new Date()){return config?paint(now):null;}
 export function currentNamedTheme(){return resolved?.theme??null;}
@@ -18,6 +28,7 @@ export function currentCardTheme(){const mode=document.documentElement.getAttrib
 export function currentNamedAppearance(){return config?structuredClone(config):null;}
 export function clearNamedAppearance({removeCache=true}={}){
   weather?.stop();weather=null;
+  clearWeatherScene();
   if(timer!==null)clearInterval(timer);timer=null;const root=document.documentElement;
   const prepaint=root.getAttribute?.('data-named-legacy-theme');
   if(prepaint!=null){previousTheme=prepaint==='system'?null:prepaint;variables=Object.keys(namedThemeVariables(NAMED_THEMES.find(t=>t.id===root.getAttribute('data-named-theme'))||NAMED_THEMES[0]));previousMetas=[...(document.querySelectorAll?.('meta[name="theme-color"]')||[])].map(m=>[m,m.getAttribute('data-named-legacy-color')??m.getAttribute('content')]);}
@@ -25,15 +36,17 @@ export function clearNamedAppearance({removeCache=true}={}){
   root.removeAttribute('data-named-legacy-theme');
   root.removeAttribute('data-named-theme');root.removeAttribute('data-named-material');for(const key of variables)root.style?.removeProperty(key);root.style?.removeProperty('color-scheme');
   config=null;resolved=null;previousMetas=[];variables=[];previousTheme=null;
+  configurationChanged();
   if(removeCache)try{storage()?.removeItem(NAMED_APPEARANCE_CACHE);}catch{}
 }
 export function applyNamedAppearance(value,{persist=true,now=new Date(),weatherEnabled=true}={}){
   const valid=normalizeNamedAppearance(value);if(!valid){clearNamedAppearance();return null;}
   if(!config){const root=document.documentElement,legacy=root.getAttribute('data-named-legacy-theme');previousTheme=legacy==='system'?null:legacy??root.getAttribute('data-theme')??null;root.removeAttribute('data-named-legacy-theme');previousMetas=[...(document.querySelectorAll?.('meta[name="theme-color"]')||[])].map(m=>{const color=m.getAttribute('data-named-legacy-color')??m.getAttribute('content');m.removeAttribute('data-named-legacy-color');return[m,color];});}
   config=valid;
-  if(config.theme==='local-weather'&&weatherEnabled){if(!weather)weather=startLocalWeather({onChange:()=>{if(config)refreshNamedAppearance();}});}
+  if(config.theme==='local-weather'&&weatherEnabled){if(!weather)weather=startLocalWeather({sceneMode:true,onChange:()=>{if(config)refreshNamedAppearance();}});}
   else{weather?.stop();weather=null;}
   const result=paint(now);
+  configurationChanged();
   if(persist&&cacheEligible())try{storage()?.setItem(NAMED_APPEARANCE_CACHE,JSON.stringify(valid));}catch{}
   else if(!cacheEligible())try{storage()?.removeItem(NAMED_APPEARANCE_CACHE);}catch{}
   if(timer!==null)clearInterval(timer);timer=setInterval(()=>{if(document.visibilityState!=='hidden')refreshNamedAppearance();},60000);timer.unref?.();

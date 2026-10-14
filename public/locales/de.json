@@ -5658,7 +5658,8 @@
         "wood": "Holzklopfen",
         "playful": "Verspielte Klicks",
         "volume": "Lautstärke",
-        "preview": "Anhören"
+        "preview": "Anhören",
+        "weatherThunder": "Wetterdonner (für diese Sitzung)"
     }
 ,
     "cardColors": {

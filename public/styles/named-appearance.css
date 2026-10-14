@@ -1,3 +1,5 @@
+@import url('/styles/local-weather-scene.css');
+
 html[data-named-theme] .btn--primary {background:var(--color-btn-primary);color:var(--color-text-on-accent)}
 html[data-named-theme] .btn--primary:hover {background:var(--color-btn-primary-hover)}
 html[data-named-theme] body,html[data-named-theme] .app-content {background-image:var(--named-theme-pattern);background-size:auto}

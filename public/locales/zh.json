@@ -5658,7 +5658,8 @@
         "wood": "Wood taps",
         "playful": "Playful clicks",
         "volume": "Volume",
-        "preview": "Preview"
+        "preview": "Preview",
+        "weatherThunder": "天气雷声（本次会话）"
     }
 ,
     "cardColors": {

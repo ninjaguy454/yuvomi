@@ -85,12 +85,12 @@ router.get('/dashboard',guarded((req,res)=>res.json({data:withTaskReadSnapshot(d
   const data=wallDashboard(db.get(),host(req),hydrateTask);
   data.urgentTasks=data.urgentTasks.map(task=>sharedScoring(task,host(req)));return data;
 })})));
-const weatherRead=themeOnly=>guarded((req,res,next)=>{
+const weatherRead=(themeOnly,sceneOnly=false)=>guarded((req,res,next)=>{
   const allowed=()=>{const d=db.get();assertWallModule(d,host(req),'dashboard');assertWallModule(d,host(req),'weather');if(wallPermissions(d,host(req)).widgets.weather!=='allow')throw wallError('Weather is not available on this Wall.',403);};
   allowed();
   if(!themeOnly&&!wallConfig(db.get()).widgets.some(w=>w.id==='weather'&&w.visible))return res.json({data:null});
   // Reuse provider/cache with household configuration, never host's personal location.
-  const forwarded=Object.create(req);forwarded.url=themeOnly?'/theme':'/';forwarded.authUserId=null;forwarded.session={};
+  const forwarded=Object.create(req);forwarded.url=sceneOnly?'/scene':themeOnly?'/theme':'/';forwarded.authUserId=null;forwarded.session={};
   const lang=typeof req.query?.lang==='string'&&/^[a-z]{2,3}(?:[-_][a-z0-9]{2,8})?$/i.test(req.query.lang)?req.query.lang:undefined;
   Object.defineProperty(forwarded,'query',{value:{lang}});
   const response=Object.create(res);response.json=body=>{try{allowed();return res.status(response.statusCode).json(body);}catch(error){return res.status(error.status||403).json({error:error.message});}};
@@ -98,6 +98,7 @@ const weatherRead=themeOnly=>guarded((req,res,next)=>{
 });
 router.get('/weather',weatherRead(false));
 router.get('/weather/theme',weatherRead(true));
+router.get('/weather/scene',weatherRead(true,true));
 function taskFor(req,userId=null) {
   assertWallModule(db.get(),host(req),'tasks',userId);
   const task=wallTaskVisible(db.get(),req.params.id,host(req),userId);

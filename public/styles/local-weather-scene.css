@@ -1,0 +1,40 @@
+/* Decorative Cole compositor; no theme palette or card fill is assigned here. */
+.local-weather-scene{position:fixed;inset:0;height:max(100dvh,calc(100vw / 2.1));z-index:0;overflow:hidden;pointer-events:none;contain:layout paint;isolation:isolate;background:#655e4e}
+.local-weather-scroll-tail{display:block;pointer-events:none;min-width:0}
+.local-weather-art,.local-weather-atmosphere,.local-weather-sky-viewport{position:absolute;inset:0;width:100%;height:100%;max-width:none;pointer-events:none}
+.local-weather-art{object-fit:cover;object-position:50% 52%}
+.local-weather-art[data-grade="clear-night"]{z-index:0}
+.local-weather-art[data-grade="clear-day"]{z-index:1}
+.local-weather-art[data-grade="snow-night"]{z-index:2}
+.local-weather-art[data-grade="snow-day"]{z-index:3}
+.local-weather-sky-viewport{z-index:4;overflow:hidden}
+.local-weather-sky-world{position:absolute;mask-image:url('/assets/weather/cole-sky-mask.webp');mask-size:100% 100%;mask-mode:luminance;mask-repeat:no-repeat;pointer-events:none}
+.local-weather-cloud-strip{position:absolute;inset:0 auto 0 0;display:flex;width:400%;height:100%;will-change:transform;pointer-events:none}
+.local-weather-cloud-tile{flex:none;height:100%;max-width:none;pointer-events:none}
+.local-weather-sky-glow{position:absolute;inset:0;opacity:0;pointer-events:none}
+.local-weather-atmosphere{z-index:5}
+.local-weather-credit{position:fixed;left:12px;bottom:12px;z-index:10;display:flex;align-items:center;max-width:min(440px,calc(100vw - 24px));min-height:44px;padding:7px 10px;border:1px solid #d5e4ed8c;border-radius:6px;background:#10212df5;color:#f7fcff;font:12px/17px system-ui,sans-serif;text-decoration:none;overflow-wrap:anywhere}
+.local-weather-credit:hover{text-decoration:underline}
+.local-weather-credit:focus-visible{outline:3px solid #f7fcff;outline-offset:3px}
+.local-weather-credit--flow{position:relative;inset:auto;z-index:auto;width:fit-content;max-width:calc(100% - 24px);margin:12px;flex:none}
+@media(min-width:1024px){.local-weather-credit{left:calc(var(--sidebar-width,220px) + 12px)}html[data-wall-mode] .local-weather-credit{left:12px}}
+html[data-local-weather-scene] .app-shell{background:transparent}
+html[data-local-weather-scene] .app-content,html[data-local-weather-scene][data-named-theme] .app-content{position:relative;background-color:transparent;background-image:none}
+html[data-local-weather-scene] .lg-backdrop{display:none}
+html[data-local-weather-scene] :is(.page-header,.dashboard-overview,.wall-dashboard__header){background:var(--color-surface);border-radius:var(--radius-md)}
+.local-weather-card-host{position:relative}
+.local-weather-card-rim{position:absolute;inset:0;z-index:2;border-radius:inherit;pointer-events:none;overflow:hidden;contain:layout paint;opacity:0;clip-path:polygon(evenodd,0 0,100% 0,100% 100%,0 100%,0 0,4px 4px,4px calc(100% - 4px),calc(100% - 4px) calc(100% - 4px),calc(100% - 4px) 4px,4px 4px);box-shadow:inset 0 1px 0 #ffffff4a,inset 0 -1px 0 #ffffff26}
+.local-weather-card-rim[data-active=true]{opacity:1}
+.local-weather-water-bead{position:absolute;top:0;border:1px solid #efffff7d;border-radius:52% 48% 44% 46%;background:radial-gradient(ellipse at 30% 25%,#ffffffc9 0 7%,#ffffff14 22%,#22455124 48%,#d8efff55 74%,#ffffff85);opacity:var(--lws-wet,0);pointer-events:none}
+.local-weather-frost{position:absolute;inset:0;border-radius:inherit;pointer-events:none;opacity:var(--lws-ice,0);box-shadow:inset 0 1px 0 #f0ffffc2,inset 0 -2px 0 #e7f6ff9c}
+.local-weather-frost svg{width:100%;height:100%;max-width:none;pointer-events:none}
+.local-weather-ice-plates{fill:#e9f9ff;opacity:.48}
+.local-weather-ice-stems{fill:none;stroke:#fbffff;stroke-opacity:.9;stroke-width:1.1}
+.local-weather-ice-ferns{fill:none;stroke:#edffff;stroke-opacity:.88;stroke-width:.7}
+.local-weather-snow-catch{position:absolute;top:0;width:26px;height:6px;pointer-events:none}
+.local-weather-snow-catch:before{content:"";position:absolute;inset:0;clip-path:polygon(0 55%,12% 25%,28% 33%,42% 0,58% 25%,76% 14%,87% 38%,100% 47%,91% 91%,62% 100%,35% 90%,8% 100%);background:radial-gradient(ellipse at 35% 20%,#fff 0 24%,#e7f1f8 64%,#b6cddd)}
+.local-weather-snow-fragment{position:absolute;width:2px;height:3px;background:#f9ffff;clip-path:polygon(40% 0,100% 28%,73% 100%,0 66%);opacity:0;pointer-events:none}
+@media(max-width:700px){.local-weather-scene{height:100dvh}.local-weather-art{height:auto;aspect-ratio:1600/1042;object-fit:contain;object-position:0% 0%}.local-weather-credit{font-size:11px;line-height:16px}}
+@media(prefers-reduced-motion:reduce){.local-weather-cloud-strip{will-change:auto}}
+@media(prefers-reduced-transparency:reduce){.local-weather-card-rim,.local-weather-sky-viewport,.local-weather-atmosphere{display:none!important}html[data-local-weather-scene] .app-content,html[data-local-weather-scene][data-named-theme] .app-content{background-color:var(--color-bg)}.local-weather-credit{background:#10212d}}
+@media(forced-colors:active){.local-weather-scene,.local-weather-card-rim{display:none!important}.local-weather-credit{background:Canvas;color:LinkText;border-color:CanvasText}html[data-local-weather-scene] .app-content,html[data-local-weather-scene][data-named-theme] .app-content{background-color:Canvas}}

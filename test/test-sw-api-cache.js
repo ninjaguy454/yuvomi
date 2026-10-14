@@ -227,6 +227,26 @@ test('Wall entry clears personal API content even if persisting its lock fails',
 
 function apiUrl(path) { return `${ORIGIN}/api/v1${path}`; }
 
+test('household and Wall Weather scene projections never become offline API snapshots',async()=>{
+  for(const path of ['/weather/scene','/wall/weather/scene']){
+    const env=loadSw({fetchImpl:async()=>new MockResponse('{"data":{"theme":{},"scene":{"provider":"open-meteo"}}}')});
+    const request=new MockRequest(apiUrl(path));await env.ready;
+    assert.equal(dispatchFetch(env,request).responded,false,'unlisted Weather reads pass directly to the browser network');
+    assert.equal(await(await env.caches.open(env.cacheNames.API_CACHE)).match(request),undefined);
+    env.setFetch(async()=>{throw new Error('offline');});
+    assert.equal(dispatchFetch(env,request).responded,false,'offline Weather reads cannot receive a service-worker snapshot');
+  }
+});
+
+test('selected public Weather artwork uses the existing first-use static asset cache',async()=>{
+  let reads=0;
+  const env=loadSw({fetchImpl:async()=>{reads++;return new MockResponse('public artwork');}});
+  const request=new MockRequest(ORIGIN+'/assets/weather/cole-clear-day.webp');await env.ready;
+  assert.equal((await dispatchFetch(env,request).result).status,200);
+  assert.equal((await dispatchFetch(env,request).result).status,200);
+  assert.equal(reads,1,'only the first use fetches unchanged artwork');
+});
+
 test('dashboard restricted-note previews never persist or replay from an older cache',async()=>{
   const env=loadSw({fetchImpl:async()=>new MockResponse('{"pinnedNotes":[{"content":"private"}]}')});
   const req=new MockRequest(apiUrl('/dashboard'));

@@ -1,0 +1,100 @@
+{
+  "prototypeOnly": false,
+  "artist": "Thomas Cole",
+  "title": "A View of the Mountain Pass Called the Notch of the White Mountains (Crawford Notch)",
+  "year": 1839,
+  "sourceFile": "cole-crawford-notch-source.jpg",
+  "sourceBytes": 573009,
+  "sourceSha256": "1536250088b9cf37b73b1adba0327009a09581c17ee0d97bf4d571ab35738c41",
+  "sourceDimensions": {
+    "width": 1800,
+    "height": 1172
+  },
+  "downloadUrl": "https://api.nga.gov/iiif/47966446-8944-44fa-9166-be2c68bbc30a/full/!1800,1800/0/default.jpg",
+  "artworkUrl": "https://www.nga.gov/artworks/50727-view-mountain-pass-called-notch-white-mountains-crawford-notch",
+  "rights": "NGA object page marks this media free and public domain; NGA Open Access policy releases qualifying images under CC0.",
+  "rightsUrl": "https://www.nga.gov/terms-and-notices#open-access-policy",
+  "courtesy": "Courtesy National Gallery of Art, Washington",
+  "retrievedAt": "2026-10-14T20:02:11.738Z",
+  "adaptations": [
+    "Sky matte follows painted mountain/ridges and preserves foreground branches.",
+    "Clear sky clone texture comes from the original upper-right painted sky; moving cloud texture comes from its incoming upper-left clouds.",
+    "Night uses conventional brightness/saturation and cool color grading; no invented stars, lights or buildings.",
+    "Snow uses terrain/roof/branch masks and original luminance texture; rider region excluded from broad ground coating.",
+    "Source JPEG is retained unchanged; no generative image model was used."
+  ],
+  "chimneyAnchor": null,
+  "windowLights": false,
+  "assets": [
+    {
+      "name": "cole-clear-day.webp",
+      "file": "cole-clear-day.webp",
+      "width": 1600,
+      "height": 1042,
+      "bytes": 1729282,
+      "sha256": "c023fb352d81c23b5eb7018e1cfbbb02b3225cd8b2a471c57fa6c7e6ed95a537",
+      "source": "Conventional derivative of NGA Thomas Cole artwork",
+      "encoding": "Lossless WebP after documented1600x1042 adaptation resize"
+    },
+    {
+      "name": "cole-clear-night.webp",
+      "file": "cole-clear-night.webp",
+      "width": 1600,
+      "height": 1042,
+      "bytes": 1337514,
+      "sha256": "a03f371e610b5c0e02be85e814f8400701f0476d9e42e331bf82020ded34af9d",
+      "source": "Conventional derivative of NGA Thomas Cole artwork",
+      "encoding": "Lossless WebP after documented1600x1042 adaptation resize"
+    },
+    {
+      "name": "cole-snow-day.webp",
+      "file": "cole-snow-day.webp",
+      "width": 1600,
+      "height": 1042,
+      "bytes": 1471252,
+      "sha256": "db6bcef2c701ab36b0d0369a741fa95ff1c28abd0da9f5e11c4908113dc38956",
+      "source": "Conventional derivative of NGA Thomas Cole artwork",
+      "encoding": "Lossless WebP after documented1600x1042 adaptation resize"
+    },
+    {
+      "name": "cole-snow-night.webp",
+      "file": "cole-snow-night.webp",
+      "width": 1600,
+      "height": 1042,
+      "bytes": 1242182,
+      "sha256": "39eb8da65174066239ac7535497b5a4487ea57dbf513264ffff57cf42382f132",
+      "source": "Conventional derivative of NGA Thomas Cole artwork",
+      "encoding": "Lossless WebP after documented1600x1042 adaptation resize"
+    },
+    {
+      "name": "cole-sky-mask.webp",
+      "file": "cole-sky-mask.webp",
+      "width": 1600,
+      "height": 1042,
+      "bytes": 16460,
+      "sha256": "eee607eea1072f09324d95cea07653ad88216e45c0916dddaa88788544a43a27",
+      "source": "Conventional derivative of NGA Thomas Cole artwork",
+      "encoding": "Lossless WebP after documented1600x1042 adaptation resize"
+    },
+    {
+      "name": "cole-clouds.webp",
+      "file": "cole-clouds.webp",
+      "width": 1600,
+      "height": 1042,
+      "bytes": 924134,
+      "sha256": "9ddde731755c8b8f9117c739ef18098e37b8ad46de7ef669313222c3373d0300",
+      "source": "Conventional derivative of NGA Thomas Cole artwork",
+      "encoding": "Lossless WebP after documented1600x1042 adaptation resize"
+    }
+  ],
+  "productionAdaptation": true,
+  "approvedPreviewSha256": "3fd197cb744870e741ae34722abb1b12ced2fc75e37f17e9b313048344388bff",
+  "integrationNotes": [
+    "Six selected WebP derivatives copied unchanged; source JPEG remains in isolated review evidence.",
+    "Production shell uses the approved 50% 52% cover camera and maximum stage aspect2.1; ordinary app scrolling reveals lower artwork in wide/shallow windows. Mobile retains full painting.",
+    "Registered masked clouds and synthetic visible-sky illumination; no observed strike, chimney, lights or blizzard is asserted.",
+    "Cards retain their existing fills, content, typography, transforms and controls; bounded artwork appears only on a narrow decorative rim.",
+    "Small-screen credit is an app-scrollport footer; desktop credit is offset past the sidebar. No control is covered by the small-screen credit."
+  ],
+  "sourceEvidencePrototypeOnly": true
+}

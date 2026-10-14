@@ -5,11 +5,52 @@ Paired devices previously rejected `/api/v1/weather`, excluded Weather from
 device widget configuration, and fixed its widget permission to `none` even
 when an administrator supplied `allow`.
 
-The paired-device adapter now admits only `GET /api/v1/weather`. It requires
+The paired-device adapter admits `GET /api/v1/weather` and the exact appearance
+reads `GET /api/v1/weather/theme` and `GET /api/v1/weather/scene`. They require
 Dashboard read access and explicit `permissions.widgets.weather: "allow"`.
 An invisible Weather widget returns `{data:null}`, preventing the normal
 Overview masthead from showing a hidden forecast. Missing or denied permission
 remains denied. New devices also start with Weather denied and hidden.
+
+The appearance reads use the same Dashboard and Weather grants independently
+of widget visibility. `/theme` retains its seven-field coarse observation.
+`/scene` returns `{data:{theme,scene}}` or `{data:null}`; valid coarse weather
+with unavailable or invalid richer facts returns `scene:null`. Wall uses
+`/api/v1/wall/weather/scene` with its existing browser-session and module gates.
+Both adapters check access again after the provider await. Scene responses are
+private and `no-store`, and neither endpoint enables a grant or personal
+location override.
+
+Scene v1 contains only provider, matching observation/fetch/expiry timestamps,
+numeric condition code, up to four supported phenomena, precipitation, wind,
+cloud cover, visibility, and solar facts. Every object has an explicit field
+whitelist, and scene JSON is bounded to 4 KiB. Unsupported codes and expired
+facts are rejected. Wind is metres/second with meteorological from-direction;
+unknown optional values remain null and a reported gust below mean wind is
+retained. Visibility is bounded to 100,000 metres. Solar uses the companion
+theme's valid ordered sunrise/sunset pair or paired null values.
+
+One provider response and cache entry serves legacy and scene readers, retaining
+the 30-minute TTL, 90-minute freshness limit, 50-entry bound, in-flight
+deduplication, local-day rollover and 60-second failure cache. Open-Meteo current
+rain and showers are summed only when both values and their units are known;
+snowfall centimetres remain separate from liquid millimetres. Its supplied
+`current.interval` is retained in seconds rather than converted into an hourly
+rate. OpenWeatherMap `rain.1h` and `snow.1h` retain their 3,600-second interval;
+snow is stored as water-equivalent millimetres, never snowfall centimetres.
+Positive liquid and snowfall may infer mixture within an interval, while codes
+615/616 report mixture directly. Thunder without reported precipitation keeps
+an unknown precipitation kind. Frost, blizzard and dry storm are not direct
+reported facts.
+
+Provider mappings and units were checked against the official
+[Open-Meteo documentation](https://open-meteo.com/en/docs),
+[OpenWeatherMap condition table](https://openweathermap.org/api/weather-conditions)
+and [current-response documentation](https://openweathermap.org/api/current)
+on 2026-10-14. Open-Meteo's current table explicitly supports 97 (heavy
+thunderstorm); 96/99 hail is model-dependent. OpenWeatherMap's published current
+condition table has no hail ID. Open-Meteo current conditions are model data;
+gust timing, illumination and glass residue remain bounded illustrations.
 
 In Household Devices → Configure, **Household Weather** grants access; the
 separate **Dashboard widgets → Weather** checkbox controls visibility, order,

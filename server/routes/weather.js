@@ -12,6 +12,7 @@ import * as db from '../db.js';
 import { utcDateKey } from '../utils/timezone.js';
 import {resolvePermissions} from '../permissions.js';
 import {makeWeatherObservation,providerWeatherInstant,unixWeatherInstant,wmoThemeCondition,owmThemeCondition} from '../../public/utils/weather-appearance.js';
+import {normalizeWeatherSceneEnvelope,projectWeatherScene} from '../../public/utils/weather-scene-facts.js';
 
 const log = createLogger('Weather');
 
@@ -91,8 +92,10 @@ export function buildRouter({ cfgGet: cfgGetFn = cfgGet, fetchFn = null, nowFn =
   // `today` traegt den Kalendertag AM WETTERORT samt Hoch/Tief; `forecast` sind
   // die Folgetage. Die Anzeige benennt ihre Tage an `today.date`, nicht am Index.
   // ---------------------------------------------------------------
-  const weatherRead=themeOnly=>async (req, res) => {
+  const weatherRead=(themeOnly,sceneOnly=false)=>async (req, res) => {
     let finishLoad=null,loadKey=null,loaded=null;
+    if(sceneOnly)res.setHeader('Cache-Control','private, no-store');
+    const projection=value=>sceneOnly?normalizeWeatherSceneEnvelope({theme:value?.theme??null,scene:value?.scene??null},new Date(nowFn())):themeOnly?value?.theme??null:value?.data??null;
     try {
       // ── 1. Resolve provider ──────────────────────────────────
       const userId = themeOnly?null:req.authUserId;
@@ -148,14 +151,15 @@ export function buildRouter({ cfgGet: cfgGetFn = cfgGet, fetchFn = null, nowFn =
       if (cached
         && nowFn() - cached.ts < (cached.failure?60000:CACHE_TTL_MS)
         && cached.dayKey === utcDateKey(new Date(nowFn() + cached.offsetMs))) {
-        return res.json({ data: themeOnly?cached.theme:cached.data });
+        return res.json({ data: projection(cached) });
       }
-      if(pending.has(cacheKey)){const value=await pending.get(cacheKey);return res.json({data:themeOnly?value?.theme??null:value?.data??null});}
+      if(pending.has(cacheKey)){const value=await pending.get(cacheKey);return res.json({data:projection(value)});}
       loadKey=cacheKey;pending.set(cacheKey,new Promise(resolve=>finishLoad=resolve));
 
       // ── 3. Fetch ─────────────────────────────────────────────
       let data;
       let themeData=null;
+      let sceneData=null;
       // Der Offset des Wetterorts, gesetzt vom jeweiligen Zweig. Gebraucht wird er
       // nur fuer die Tagesgrenze des Caches oben.
       let locationOffsetMs = 0;
@@ -167,7 +171,7 @@ export function buildRouter({ cfgGet: cfgGetFn = cfgGet, fetchFn = null, nowFn =
           'https://api.open-meteo.com/v1/forecast',
           `?latitude=${encodeURIComponent(lat)}`,
           `&longitude=${encodeURIComponent(lon)}`,
-          '&current=temperature_2m,apparent_temperature,relative_humidity_2m,is_day,weather_code,wind_speed_10m',
+          '&current=temperature_2m,apparent_temperature,relative_humidity_2m,is_day,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m,cloud_cover,visibility,rain,showers,snowfall',
           '&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset',
           '&timezone=auto',
           '&forecast_days=6',
@@ -201,6 +205,7 @@ export function buildRouter({ cfgGet: cfgGetFn = cfgGet, fetchFn = null, nowFn =
         locationOffsetMs = (Number(om.utc_offset_seconds) || 0) * 1000;
         const solarIndex=(om.daily?.time||[]).indexOf(String(cur.time||'').slice(0,10));
         themeData=makeWeatherObservation({condition:wmoThemeCondition(cur.weather_code),is_day:cur.is_day===1?true:cur.is_day===0?false:null,observed_at:providerWeatherInstant(cur.time,om.utc_offset_seconds),sunrise_at:providerWeatherInstant(om.daily?.sunrise?.[solarIndex],om.utc_offset_seconds),sunset_at:providerWeatherInstant(om.daily?.sunset?.[solarIndex],om.utc_offset_seconds)},new Date(nowFn()));
+        sceneData=projectWeatherScene(provider,om,themeData,units,new Date(nowFn()));
 
         data = {
           provider: 'open-meteo',
@@ -229,6 +234,7 @@ export function buildRouter({ cfgGet: cfgGetFn = cfgGet, fetchFn = null, nowFn =
         const icon=currentJson.weather?.[0]?.icon,rise=unixWeatherInstant(currentJson.sys?.sunrise),set=unixWeatherInstant(currentJson.sys?.sunset);
         const daylight=typeof icon==='string'&&/^[0-9]{2}[dn]$/.test(icon)?icon.endsWith('d'):rise&&set&&Date.parse(set)>Date.parse(rise)?nowFn()>=Date.parse(rise)&&nowFn()<Date.parse(set):null;
         themeData=makeWeatherObservation({condition:owmThemeCondition(currentJson.weather?.[0]?.id,icon),is_day:daylight,observed_at:unixWeatherInstant(currentJson.dt),sunrise_at:rise,sunset_at:set},new Date(nowFn()));
+        sceneData=projectWeatherScene(provider,currentJson,themeData,units,new Date(nowFn()));
 
         const forecastUrl = `https://api.openweathermap.org/data/2.5/forecast?${cityParam(owmCity)}&appid=${owmKey}&units=${units}&lang=${owmLang}&cnt=40`;
         const forecastRes = await doFetch(forecastUrl, { signal: AbortSignal.timeout(8000) });
@@ -335,12 +341,12 @@ export function buildRouter({ cfgGet: cfgGetFn = cfgGet, fetchFn = null, nowFn =
         }
       }
       cache.set(cacheKey, {
-        data,theme:themeData,
+        data,theme:themeData,scene:sceneData,
         ts: nowFn(),
         offsetMs: locationOffsetMs,
         dayKey: data.today?.date ?? utcDateKey(new Date(nowFn() + locationOffsetMs)),
       });
-      loaded={data,theme:themeData};res.json({data:themeOnly?themeData:data});
+      loaded={data,theme:themeData,scene:sceneData};res.json({data:projection(loaded)});
     } catch (err) {
       log.warn('Error:', err.message);
       res.json({ data: null }); // Fallback: Widget ausblenden, kein Error-Screen
@@ -353,6 +359,7 @@ export function buildRouter({ cfgGet: cfgGetFn = cfgGet, fetchFn = null, nowFn =
   };
   router.get('/',weatherRead(false));
   router.get('/theme',weatherRead(true));
+  router.get('/scene',weatherRead(true,true));
 
   // ---------------------------------------------------------------
   // GET /api/v1/weather/icon/:code  (OWM icon proxy - kept for legacy)
@@ -393,13 +400,16 @@ function themeReadAllowed(req){
   return permissions.widgets.weather==='allow'&&['read','write'].includes(permissions.modules.dashboard)&&!hidden.includes('dashboard')&&!hidden.includes('weather');
 }
 const weatherRouter=express.Router();
-weatherRouter.get('/theme',(req,res,next)=>{
+const householdAppearanceRead=path=>(req,res,next)=>{
+  res.setHeader('Cache-Control','private, no-store');
   if(!themeReadAllowed(req))return res.status(403).json({error:'Household weather is not available for this account.'});
-  const forwarded=Object.create(req);forwarded.url='/theme';forwarded.authUserId=null;
+  const forwarded=Object.create(req);forwarded.url=path;forwarded.authUserId=null;
   const lang=typeof req.query?.lang==='string'&&/^[a-z]{2,3}(?:[-_][a-z0-9]{2,8})?$/i.test(req.query.lang)?req.query.lang:undefined;
   Object.defineProperty(forwarded,'query',{value:{lang}});
   const response=Object.create(res);response.json=body=>themeReadAllowed(req)?res.status(response.statusCode).json(body):res.status(403).json({error:'Household weather access changed.'});
   return householdWeatherRouter.handle(forwarded,response,next);
-});
+};
+weatherRouter.get('/theme',householdAppearanceRead('/theme'));
+weatherRouter.get('/scene',householdAppearanceRead('/scene'));
 weatherRouter.use(buildRouter());
 export default weatherRouter;

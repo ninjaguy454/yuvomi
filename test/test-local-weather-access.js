@@ -69,3 +69,19 @@ test('trailing slash and case-equivalent theme reads preserve the minimal projec
   saveWallConfig(db,{...structuredClone(WALL_DEFAULTS),widgets:WALL_DEFAULTS.widgets.map(widget=>({...widget,visible:widget.id==='weather'}))});
   for(const path of['/wall/weather/theme/','/wall/WeAtHeR/ThEmE','/weather/theme/','/weather/ThEmE'])assertMinimal(await read(path));
 });
+
+function assertScene(response){assert.equal(response.status,200);assert.deepEqual(Object.keys(response.body.data).sort(),['scene','theme']);assertMinimal({status:response.status,body:{data:response.body.data.theme}});assert.equal(response.body.data.scene?.version,1);assert.ok(!JSON.stringify(response.body).includes('LOCATION'));}
+test('scene requires Dashboard/Weather grants for member, Wall and paired readers with hidden widgets',async()=>{
+  replaceSubjectPermissions(db,'user',1,{widgets:{weather:'none'}});for(const path of ['/weather/scene','/wall/weather/scene'])assert.equal((await read(path)).status,403);assert.equal(upstream.length,0);
+  replaceSubjectPermissions(db,'user',1,{});for(const path of ['/weather/scene?city=PRIVATE&lat=1','/wall/weather/scene'])assertScene(await read(path));assert.equal(upstream[0].searchParams.get('latitude'),String(41+sequence/100));
+  principal={kind:'device',...createDevice(db,{name:'Synthetic scene display'},2)};assert.equal((await read('/weather/scene')).status,403);principal.permissions.widgets.weather='allow';principal.preferences.widgets.find(widget=>widget.id==='weather').visible=false;assertScene(await read('/weather/scene'));assert.equal(upstream.length,1);principal.permissions.modules.dashboard='none';assert.equal((await read('/weather/scene')).status,403);
+  assert.equal(deviceAppRouteSupported('GET','/api/v1/weather/scene'),true);for(const [method,path]of [['POST','/weather/scene'],['GET','/weather/scene/raw'],['GET','/weather/scenes']])assert.equal(deviceAppRouteSupported(method,path),false);
+});
+test('member and Wall scene responses cannot cross permission revocation during provider await',async()=>{
+  for(const path of ['/weather/scene','/wall/weather/scene']){replaceSubjectPermissions(db,'user',1,{});setting('weather_lat',String(70+ ++sequence/100));const held=holdProvider(),pending=read(path);await held.entered;replaceSubjectPermissions(db,'user',1,{widgets:{weather:'none'}});held.release();const result=await pending;assert.equal(result.status,403);assert.equal(result.body.data,undefined);hold=null;}
+});
+test('paired scene response cannot cross a device revision update during provider await',async()=>{
+  principal={kind:'device',...createDevice(db,{name:'Synthetic scene display'},2)};principal.permissions.widgets.weather='allow';const token='synthetic-scene-token',context='synthetic-scene-context';db.prepare('INSERT INTO device_credentials(device_id,token_hash,context_key) VALUES(?,?,?)').run(principal.id,deviceHash(token),context);
+  const held=holdProvider(),req={devicePrincipal:principal,headers:{cookie:`vidamia.device=${token}`,'x-auth-context':context},query:{},method:'GET',url:'/weather/scene',session:{},authUserId:null};let finish;const result=new Promise(resolve=>finish=resolve),res={statusCode:200,setHeader(){},status(value){this.statusCode=value;return this;},json(body){finish({status:this.statusCode,body});}};
+  deviceWeather(req,res,{sceneOnly:true});await held.entered;updateDevice(db,principal.id,{revision:principal.revision,permissions:{widgets:{weather:'none'}}},2);held.release();const response=await result;assert.equal(response.status,409);assert.equal(response.body.data,undefined);
+});

@@ -123,6 +123,7 @@ export function deviceAppMiddleware(req,res,next) {
     if(path==='/device/rewards/request/abandon')return res.json(abandonDevicePrizeIntent(d,req,req.body,{requestKey:req.get('Idempotency-Key')}));
     if(path==='/weather')return deviceWeather(req,res);
     if(path==='/weather/theme')return deviceWeather(req,res,{themeOnly:true});
+    if(path==='/weather/scene')return deviceWeather(req,res,{sceneOnly:true});
     if(path==='/notes'||path.startsWith('/notes/')) {
       if(path==='/notes/changes')return changes(req,res,'note_change_clock',(database,principal)=>assertNoteAction(database,principal,null,'view'));
       if(path==='/notes/board'||path==='/notes/group-operations') {

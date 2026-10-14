@@ -8,15 +8,15 @@ import { deviceRequestStillValid, normalizeDevicePreferences } from './devices.j
 // even when that member's coordinates happen to match the household's.
 const householdWeather = householdWeatherRouter;
 
-export function deviceWeather(req, res, {themeOnly=false}={}) {
+export function deviceWeather(req, res, {themeOnly=false,sceneOnly=false}={}) {
   const principal = req.devicePrincipal;
   assertDeviceModule(principal, 'dashboard');
   if (principal.permissions?.widgets?.weather !== 'allow')
     return res.status(403).json({ error: 'Weather is not allowed on this display.' });
-  if (!themeOnly&&!normalizeDevicePreferences(db.get(), principal.preferences).widgets.some(widget => widget.id === 'weather' && widget.visible))
+  if (!themeOnly&&!sceneOnly&&!normalizeDevicePreferences(db.get(), principal.preferences).widgets.some(widget => widget.id === 'weather' && widget.visible))
     return res.json({ data: null });
   const forwarded = Object.create(req);
-  forwarded.url = themeOnly?'/theme':'/'; forwarded.authUserId = null; forwarded.session = {};
+  forwarded.url = sceneOnly?'/scene':themeOnly?'/theme':'/'; forwarded.authUserId = null; forwarded.session = {};
   // Retain language only. In particular, an OWM city query cannot select a
   // different location from the household's existing provider configuration.
   const lang = typeof req.query?.lang === 'string' && /^[a-z]{2,3}(?:[-_][a-z0-9]{2,8})?$/i.test(req.query.lang) ? req.query.lang : undefined;

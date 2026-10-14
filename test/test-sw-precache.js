@@ -86,6 +86,10 @@ function loadSwLists() {
 
 const { APP_SHELL, PAGE_MODULES, APP_LOCALES, PAGE_MODULE_SET } = loadSwLists();
 
+test('Weather artwork does not impose a multi-megabyte install download on other themes',()=>{
+  assert.deepEqual([...APP_SHELL,...PAGE_MODULES].filter(path=>path.startsWith('/assets/weather/')),[]);
+});
+
 /**
  * Statische Importe einer Datei, als absolute Pfade.
  *

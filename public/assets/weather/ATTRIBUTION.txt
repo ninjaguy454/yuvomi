@@ -1,0 +1,27 @@
+Crawford Notch — Thomas Cole, 1839 · Weather adaptation
+
+Original: A View of the Mountain Pass Called the Notch of the White Mountains
+(Crawford Notch), Thomas Cole, 1839.
+Courtesy National Gallery of Art, Washington.
+https://www.nga.gov/artworks/50727-view-mountain-pass-called-notch-white-mountains-crawford-notch
+
+Source media is marked free and public domain by NGA. NGA Open Access policy:
+https://www.nga.gov/terms-and-notices#open-access-policy
+
+The six selected WebP assets are unchanged conventional derivatives from the
+approved local Weather review. No generative model produced these derivatives.
+The source JPEG and derivation scripts remain in the isolated review evidence;
+cole-provenance.json retains its hash, source URLs and each derivative hash.
+
+Weather grades, clouds, precipitation, rim water/ice and residue are artwork.
+Gust timing, sky illumination and residue do not report actual strike locations,
+frost on a household pane, blizzards or dry thunderstorms. No chimney or lights
+were added to Cole's partly hidden inn.
+
+Production shell adaptation: desktop uses the approved 50% 52% cover camera.
+The art stage retains a maximum aspect of2.1. In very wide or shallow windows,
+normal app scrolling reveals the lower artwork without moving card targets.
+Mobile shows the full painting. All grades and the original sky mask share the
+same camera, including the scroll offset used to select visible illumination.
+On small screens the readable linked credit sits in the existing app scrollport
+footer, keeping it clear of task controls and the fixed bottom navigation.

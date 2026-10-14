@@ -2414,6 +2414,9 @@ router.post('/:id/scoring-preview',(req,res)=>{
         const wire=scoringMutationWire(req.body,edited);
         const assignment=scoringAssignmentIntent(task,req.body);
         if(assignment.changed)wire.assigned_to=assignment.assigned;
+        // Full editors send [] for policy-managed assignments that Save keeps.
+        // An unchanged placeholder must not mask the stored reward recipient.
+        else if(!Object.hasOwn(req.body,'assigned_to')||!parseAssignedTo(req.body.assigned_to).length)delete wire.assigned_to;
         preview=previewTaskScoring(db.get(),task.id,wire,{scope,viewerId,authorizedTaskIds,includeUnits:true});
         const rows=taskScoringRows(db.get(),taskScoringRoot(db.get(),task.id)).filter(row=>authorizedTaskIds.includes(row.id));
         const before=new Map(rows.map(row=>[row.id,row])),after=new Map(before);

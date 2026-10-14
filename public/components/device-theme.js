@@ -17,7 +17,7 @@ export function deviceThemeChangesAllowed(){
   return!Object.hasOwn(prefs,'allow_theme_changes')||prefs.allow_theme_changes===true;
 }
 function paintButtons(){
-  for(const button of document.querySelectorAll('[data-device-theme]')){button.disabled=!deviceThemeChangesAllowed();button.title=button.disabled?t('deviceTheme.locked'):t('deviceTheme.title');button.setAttribute('aria-disabled',String(button.disabled));}
+  for(const button of document.querySelectorAll('[data-device-theme]')){button.disabled=!deviceThemeChangesAllowed();button.title=button.disabled?t('deviceTheme.locked'):t('appearanceOptions.appearance');button.setAttribute('aria-disabled',String(button.disabled));}
 }
 function paintTheme(value){
   const prior=deviceBootstrap()?.device?.preferences?.appearance||{},sounds=currentUiSounds();

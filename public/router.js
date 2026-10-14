@@ -1228,8 +1228,8 @@ function sidebarActionEl({ labelKey, label = t(labelKey), icon, className, onCli
 // Same explicit session action in the desktop rail and the mobile More sheet.
 function deviceThemeAction({mobile=false}={}){
   if(!isDevicePrincipal())return null;
-  const options={labelKey:'deviceTheme.title',icon:'palette',className:mobile?'more-action--device-session':'nav-item--device-theme',onClick:()=>{if(mobile)window._closeMoreSheet?.({restoreFocus:false});void openDeviceTheme().catch(error=>window.yuvomi?.showToast(error.message,'error'));}};
-  const button=mobile?moreActionEl(options):sidebarActionEl(options);button.dataset.deviceTheme='';button.disabled=!deviceThemeChangesAllowed();button.title=button.disabled?t('deviceTheme.locked'):t('deviceTheme.title');button.setAttribute('aria-disabled',String(button.disabled));return button;
+  const options={labelKey:'appearanceOptions.appearance',icon:'palette',className:mobile?'more-action--device-theme':'nav-item--device-theme',onClick:()=>{if(mobile)window._closeMoreSheet?.({restoreFocus:false});void openDeviceTheme().catch(error=>window.yuvomi?.showToast(error.message,'error'));}};
+  const button=mobile?moreActionEl(options):sidebarActionEl(options);button.dataset.deviceTheme='';button.disabled=!deviceThemeChangesAllowed();button.title=button.disabled?t('deviceTheme.locked'):t('appearanceOptions.appearance');button.setAttribute('aria-disabled',String(button.disabled));return button;
 }
 function deviceSessionAction({ mobile = false } = {}) {
   const temporary = deviceBootstrap()?.temporary;
@@ -1615,7 +1615,7 @@ function buildMoreSheetBody() {
 
   // System-Reihe im selben Vierer-Raster (Icon-über-Label, monochrom).
   const sessionAction = deviceSessionAction({ mobile: true });
-  const themeAction=deviceThemeAction({mobile:true});if(themeAction)nodes.push(themeAction);
+  const themeAction=deviceThemeAction({mobile:true});
   if (sessionAction) nodes.push(sessionAction);
   const system = document.createElement('div');
   system.className = 'more-sheet__system';
@@ -1627,6 +1627,7 @@ function buildMoreSheetBody() {
       navHref: item.navHref,
     }));
   });
+  if(themeAction)system.appendChild(themeAction);
   system.appendChild(moreActionEl({
     labelKey: 'nav.help',
     icon: 'circle-help',
@@ -1677,7 +1678,7 @@ function buildMoreSheetBody() {
   // Die Spaltenzahl folgt der Besetzung: ohne Einstellungen (Modul abgeschaltet)
   // sind es drei Ziele, und drei Ziele in vier Spalten lassen eine Lücke, die
   // wie ein fehlendes Element aussieht.
-  system.style.setProperty('--more-system-cols', String(system.children.length || 1));
+  system.style.setProperty('--more-system-cols', String(themeAction?Math.min(4,system.children.length):system.children.length||1));
   nodes.push(system);
 
   body.append(...nodes);
@@ -2043,13 +2044,13 @@ function renderAppShell(container) {
   // darunter, aber auch nicht mehr in den Scroller darueber.
   pinnedSidebarItems.forEach((el) => sidebar.appendChild(el));
   const sessionAction = deviceSessionAction();
-  const themeAction=deviceThemeAction();if(themeAction)sidebar.insertBefore(themeAction,pinnedSidebarItems.find(el=>el.dataset.route==='/settings')||null);
   if (sessionAction) sidebar.insertBefore(sessionAction, pinnedSidebarItems.find(el => el.dataset.route === '/settings') || null);
 
   // Footer-Aktionen (keine Routen → kein data-route, damit Delegation/Indikator
   // sie ignorieren): Hilfe und Live-Changelog.
   const sidebarFooter = document.createElement('div');
   sidebarFooter.className = 'nav-sidebar__footer-actions';
+  const themeAction=deviceThemeAction();if(themeAction)sidebarFooter.appendChild(themeAction);
   sidebarFooter.append(
     sidebarActionEl({
       labelKey: 'nav.help',
@@ -4536,6 +4537,8 @@ function rebuildNavigation({ updateLabels = true } = {}) {
         .filter((el) => el.classList?.contains('nav-item--pinned-end'))
         .forEach((el) => el.remove());
       const footer = navSidebar.querySelector(':scope > .nav-sidebar__footer-actions');
+      const previousThemeAction=navSidebar.querySelector('[data-device-theme]'),restoreThemeFocus=previousThemeAction?.contains(document.activeElement);
+      previousThemeAction?.remove();const themeAction=deviceThemeAction();if(themeAction&&footer){footer.prepend(themeAction);if(restoreThemeFocus)themeAction.focus({preventScroll:true});}
       pinnedSidebarEls.forEach((el) => navSidebar.insertBefore(el, footer || null));
       const previousSessionAction = navSidebar.querySelector(':scope > .nav-item--device-session');
       const restoreSessionFocus = previousSessionAction?.contains(document.activeElement);

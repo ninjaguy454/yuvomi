@@ -8,6 +8,7 @@ export const THEME_PALETTES = {
  'graphite':['7fadaf,Oxide;ad8b68,Brass;8892aa,Steel;ab7381,Burgundy;8aab7d,Patina;aa8bab,Carbon violet;be9f6d,Ochre;739db5,Blueprint;a39e8a,Dust;9c8580,Titanium;87998c,Nickel;ae8799,Graphite rose'],
  'midnight':['967cd1,Orion;5e9eb9,Star blue;af78ad,Nebula;bcaa62,Moon gold;63a892,Aurora;8391c5,Comet;b87582,Red giant;8fa65e,Starlit leaf;bf976d,Horizon;8b7cac,Twilight;7fa8a8,Glacier;9c8899,Cosmic dust'],
  'coffee':['955631,Caramel;548064,Coffee leaf;8163a1,Berry cream;a26f24,Honey roast;427a8a,Ceramic teal;ae5268,Raspberry;656871,Stoneware;80833a,Olive leaf;a46345,Terracotta;536599,Denim;886377,Cocoa plum;637e70,Sage cup'],
+ 'cozy-cafe':['a58265,Latte;7e8c68,Sage pot;b29e73,Cream linen;aa836e,Clay cup;90946e,Olive leaf;a78386,Rosewood;8a8b81,Stone saucer;7e9094,Blue glaze;b79d63,Oat biscuit;96765b,Coffee bean;77917f,Plant leaf;968796,Lilac steam'],
  'espresso':['bc8c5e,Crema;8b9c71,Bean leaf;bd7e8e,Rose cream;73989a,Ceramic;9a81af,Plum foam;b7a467,Toffee;758cab,Blue saucer;b88872,Cinnamon;91a47f,Pistachio;9f8c84,Cocoa dust;a89aaf,Steam;ba9a7b,Biscuit'],
  'cocoa':['c08093,Cherry cream;a69369,Hazelnut;788fac,Blue cup;86a084,Mint leaf;ad82b2,Plum truffle;bd8f64,Praline;6fa7a7,Ceramic glaze;a29884,Cocoa powder;b08f9b,Rose ganache;92a265,Pistachio;968fae,Lilac cream;bf9e85,Biscuit'],
  'matcha':['688846,Tea leaf;8b73a1,Orchid;a38946,Bamboo;4f9290,Tea bowl;b17684,Azalea;717fb0,Ink;99845f,Roasted rice;78a06a,New leaf;aa754f,Clay cup;857991,Soft violet;59937b,Sencha;aa965d,Flax'],

@@ -11,7 +11,7 @@
     "test:device-theme": "node --test test/test-device-theme.js",
     "test:device-theme-browser": "node --test test/test-device-theme-browser.js",
     "test:named-appearance": "node --test test/test-named-appearance.js test/test-named-appearance-runtime.js test/test-named-preferences.js test/test-named-device-appearance.js test/test-task-card-colors.js test/test-appearance-encrypted-upgrade.js",
-    "test:named-appearance-browser": "node --test test/test-named-appearance-browser.js",
+    "test:named-appearance-browser": "node --test test/test-named-appearance-browser.js test/test-cozy-cafe-browser.js",
     "test:ui-sounds": "node --test test/test-ui-sounds.js",
     "test:card-colors": "node --test test/test-card-colors.js",
     "test:variable-expressions": "node --test test/test-variable-expressions.js",

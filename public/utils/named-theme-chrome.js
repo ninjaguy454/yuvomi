@@ -92,6 +92,19 @@ export const THEME_CHROME = [
     "serif"
   ],
   [
+    "Cozy Cafe",
+    "Cafe",
+    "light",
+    "#e9dfd0",
+    "#fbf7ef",
+    "#836648",
+    "#6f7f60",
+    "#43372c",
+    "cafe",
+    12,
+    "serif"
+  ],
+  [
     "Espresso",
     "Cafe",
     "dark",

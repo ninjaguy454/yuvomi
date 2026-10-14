@@ -206,11 +206,13 @@ const projectionUnavailable=()=>new TaskScoringError('The prospective execution 
 function executionRefKey(ref){
   if(ref?.kind==='definition_root'&&Object.keys(ref).length===1)return 'root';
   if(ref?.kind==='template'&&Object.keys(ref).length===2&&Number.isSafeInteger(ref.template_id)&&ref.template_id>0)return `template:${ref.template_id}`;
+  if(ref?.kind==='draft'&&Object.keys(ref).length===2&&Number.isSafeInteger(ref.draft_index)&&ref.draft_index>=0)return `draft:${ref.draft_index}`;
   throw projectionUnavailable();
 }
-function phaseExecutionFacts(d,ctx,prepared){
+function phaseExecutionFacts(d,ctx,prepared,{current=false}={}){
   const metadata=prepared?.context,date=value=>typeof value==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(value)&&!Number.isNaN(Date.parse(value));
-  if(metadata?.kind!=='next_occurrence'||!Number.isSafeInteger(metadata.generation)||metadata.generation<1||!date(metadata.as_of_date)
+  if((current?metadata?.kind!=='current_occurrence'||metadata.generation!==null||metadata.assumed_completion_date!==null||metadata.preparation!=='existing_untouched'
+    :metadata?.kind!=='next_occurrence'||!Number.isSafeInteger(metadata.generation)||metadata.generation<1)||!date(metadata.as_of_date)
     ||metadata.assumed_completion_date!=null&&!date(metadata.assumed_completion_date)||!['fresh','existing_untouched'].includes(metadata.preparation)
     ||!Array.isArray(metadata.conditions)||metadata.conditions.some(value=>typeof value!=='string')||!Array.isArray(prepared.units)
     ||!Array.isArray(prepared.warnings)||prepared.warnings.some(warning=>warning?.reason!=='prospective_supervision_unresolved'))throw projectionUnavailable();
@@ -219,7 +221,7 @@ function phaseExecutionFacts(d,ctx,prepared){
   for(const unit of prepared.units){
     if(!unit||typeof unit!=='object'||Array.isArray(unit))throw projectionUnavailable();
     const key=executionRefKey(unit.ref);
-    if(!expected.has(key)||facts.has(key)||Object.keys(unit).some(field=>!['ref','role','assigned_user_ids','supervision'].includes(field))
+    if(!current&&unit.ref.kind==='draft'||!expected.has(key)||facts.has(key)||Object.keys(unit).some(field=>!['ref','role','assigned_user_ids','supervision'].includes(field))
       ||!['source_root','source_action','helper_projection','container'].includes(unit.role)||key==='root'&&unit.role==='source_action'||key!=='root'&&unit.role==='source_root'
       ||!Array.isArray(unit.assigned_user_ids)||unit.assigned_user_ids.some(id=>!safeMember(id))||new Set(unit.assigned_user_ids).size!==unit.assigned_user_ids.length
       ||!Object.hasOwn(unit,'supervision')||unit.supervision===undefined)throw projectionUnavailable();
@@ -275,7 +277,7 @@ function validateMutation(d,ctx,next,proposed,scope){
 export function assertTaskScoringMutation(d,taskId,proposed={}, {scope='occurrence'}={}){
   const ctx=context(d,taskId),next=proposedContext(d,ctx,taskId,proposed,{fresh:scope==='future_only'});validateMutation(d,ctx,next,proposed,scope);return true;
 }
-export function previewTaskScoring(d,taskId,proposed={}, {viewerId=null,scope='occurrence',beforeDefinition=null,authorizedTaskIds=null,includeHistoricalSettlements=false,includeUnits=false,authorizedTemplateIds=null,beforeExecutionContext=undefined,afterExecutionContext=undefined}={}){
+export function previewTaskScoring(d,taskId,proposed={}, {viewerId=null,scope='occurrence',beforeDefinition=null,authorizedTaskIds=null,includeHistoricalSettlements=false,includeUnits=false,authorizedTemplateIds=null,beforeExecutionContext=undefined,afterExecutionContext=undefined,prepareAfterExecution=null}={}){
   const ctx=context(d,taskId,viewerId),fresh=scope==='future_only',authorized=authorizedTaskIds==null?null:new Set(authorizedTaskIds),templates=authorizedTemplateIds==null?null:new Set(authorizedTemplateIds),options={fresh,viewerId,authorizedTaskIds:authorized,authorizedTemplateIds:templates,includeUnits};
   const settlements=publicSettlements(d,ctx,viewerId,authorized,includeHistoricalSettlements,includeUnits),earned=aggregate(settlements.flatMap(row=>row.recipients));
   // Canonical template IDs are independent of current Task IDs. Only the
@@ -283,11 +285,14 @@ export function previewTaskScoring(d,taskId,proposed={}, {viewerId=null,scope='o
   const childNamespace=fresh&&beforeDefinition?'template':'task';
   const prepared=beforeExecutionContext!==undefined||afterExecutionContext!==undefined;
   if(prepared&&(!fresh||!Array.isArray(beforeDefinition?.subtasks)||beforeExecutionContext===undefined||afterExecutionContext===undefined))throw projectionUnavailable();
+  if(prepareAfterExecution!==null&&(fresh||prepared||typeof prepareAfterExecution!=='function'))throw projectionUnavailable();
   const base=fresh&&beforeDefinition?proposedContext(d,ctx,taskId,beforeDefinition,{fresh:true,allowLegacy:true,childNamespace}):ctx;
   const beforeFacts=prepared?phaseExecutionFacts(d,base,beforeExecutionContext):undefined,before=proposedPotential(d,base,{...options,executionFacts:beforeFacts});
   let next=base,warnings=[],valid=true;try{next=proposedContext(d,base,taskId,proposed,{fresh,childNamespace});validateMutation(d,ctx,next,proposed,scope);}catch(error){if(!(error instanceof TaskScoringError))throw error;warnings=[{reason:error.reason,message:error.message}];valid=false;}
-  const afterFacts=prepared?phaseExecutionFacts(d,next,afterExecutionContext):undefined,after=proposedPotential(d,next,{...options,executionFacts:afterFacts});
+  const currentExecution=valid&&prepareAfterExecution?prepareAfterExecution(next):null;
+  const afterFacts=prepared?phaseExecutionFacts(d,next,afterExecutionContext):currentExecution?phaseExecutionFacts(d,next,currentExecution,{current:true}):undefined,after=proposedPotential(d,next,{...options,executionFacts:afterFacts});
   if(prepared){const guidance=[...phaseWarnings(beforeExecutionContext),...phaseWarnings(afterExecutionContext)];if(guidance.length)warnings.push(guidance[0]);}
+  if(currentExecution)warnings.push(...phaseWarnings(currentExecution));
   return {mode:next.root.scoring_mode||'legacy',mode_locked:ctx.mode_locked,review_required:!!next.root.scoring_review_required,earned,before:before.totals,after:after.totals,warnings,valid,scope,current_preserved:fresh,
     ...(includeUnits?{settlements,before_units:before.units,after_units:after.units}:{})};
 }

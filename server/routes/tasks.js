@@ -323,10 +323,26 @@ function futureReviewRequired(definition) {
     &&[definition.task,...definition.subtasks.map(a=>a.task)].some(row=>row.points>0);
 }
 function scoringAssignmentIntent(task,body) {
-  const assigned=db.get().prepare('SELECT user_id FROM task_assignments WHERE task_id=?').all(task.id).map(row=>row.user_id);
-  const binding=parseTaskActivityBinding(body,getTaskActivityBinding(db.get(),task.id));
+  const d=db.get(),assigned=d.prepare('SELECT user_id FROM task_assignments WHERE task_id=?').all(task.id).map(row=>row.user_id);
+  const existing=getTaskActivityBinding(d,task.id),binding=parseTaskActivityBinding(body,existing);
   if(binding.error)throw new TaskStateError(binding.error,{},400);
-  if(binding.binding)return {assigned,changed:false};
+  const bindingChanged=!sameTaskActivityBinding(binding.binding,existing);
+  if(binding.binding){
+    if(!bindingChanged)return {assigned,changed:false,binding:binding.binding,bindingChanged:false};
+    const desired=binding.binding,activity=existing?.activity_template_id===desired.activityTemplateId
+      ?scoringActivitySnapshot(task,body,desired,existing)
+      :captureActivityTemplateDefinition(d,desired.activityTemplateId);
+    // Save may select a random person. A read-only preview cannot promise who
+    // that later draw will choose, and must never consume the assignment cursor.
+    if(!desired.assignmentOverrideUserId&&['eligible_random','random'].includes(activity.assignment_policy||activity.assignment_strategy))
+      throw new TaskStateError('The proposed assignment is random. A recipient cannot be forecast before saving.',{reason:'scoring_projection_unavailable',conditions:['random_assignment_unresolved']});
+    const planned={...task,...Object.fromEntries(['start_date','start_time','due_date','due_time'].filter(key=>body[key]!==undefined).map(key=>[key,body[key]]))};
+    const resolved=previewTaskActivityBinding(d,{...desired,activitySnapshot:activity,task:planned,dateKey:planned.due_date||todayInHouseholdZone()}).resolution;
+    const participants=(resolved.participants?.length?resolved.participants:resolved.primary?[resolved.primary]:[]).map(member=>member.id);
+    const childOwners=d.prepare("SELECT user_id FROM task_responsibilities WHERE task_id=? AND role='participant' AND source='subtasks' AND status='active' ORDER BY user_id").all(task.id).map(row=>row.user_id);
+    const next=[...new Set([...participants,...childOwners])],primary=resolved.primary?.id??null;
+    return {assigned:next,primary,changed:!sameIdOrder(next,assigned)||primary!==task.assigned_to,binding:desired,bindingChanged:true,activity,policyAssigned:participants};
+  }
   const mode=body.assignment_mode??task.assignment_mode??'fixed';
   let next=body.assigned_to===undefined?assigned:parseAssignedTo(body.assigned_to);
   if(mode==='round_robin') {
@@ -339,9 +355,62 @@ function scoringAssignmentIntent(task,body) {
     next=[rotation[(index+slot)%rotation.length]];
   }
   const primary=body.assigned_to===undefined&&mode==='fixed'?task.assigned_to:next[0]??null;
-  return {assigned:next,changed:!sameIdOrder(next,assigned)||primary!==task.assigned_to};
+  return {assigned:next,primary,changed:!sameIdOrder(next,assigned)||primary!==task.assigned_to,binding:null,bindingChanged};
 }
-function assertScoringProgressIntent(task,body,edited,{performersChanged=scoringAssignmentIntent(task,body).changed}={}) {
+
+function scoringActivitySnapshot(task,body,binding,existing=getTaskActivityBinding(db.get(),task.id)) {
+  const snapshot=existing?.definition_snapshot_json?readTaskActivityDefinition(db.get(),task.id):captureActivityTemplateDefinition(db.get(),binding.activityTemplateId);
+  return existing?.definition_snapshot_json?{...snapshot,required_skill_ids:taskSkillInput(body,task.id,binding.activityTemplateId)}:snapshot;
+}
+
+/** Re-assess the proposed occurrence's full helper scope before projecting its
+ * authorized reward units. Existing completions/history stay outside this plan. */
+function prepareCurrentScoringExecution(task,body,edited,assignment,ctx) {
+  const d=db.get(),root=ctx.root;
+  if(root.id!==task.id||ctx.rows.some(row=>row.id!==root.id&&row.parent_task_id!==root.id))
+    throw new TaskStateError('Review this assignment on its original executable Task.',{reason:'scoring_projection_unavailable'});
+  const assigned=row=>{
+    if(row._assigned!==undefined)return row._assigned;
+    const joins=d.prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(row.id).map(item=>item.user_id);
+    return joins.length?joins:row.assigned_to?[row.assigned_to]:[];
+  };
+  const ref=row=>row.id===root.id?{kind:'definition_root'}:row.id>0?{kind:'template',template_id:row.id}:{kind:'draft',draft_index:row._draft_index};
+  const fields={...root,...Object.fromEntries(['start_date','start_time','due_date','due_time'].filter(key=>body[key]!==undefined).map(key=>[key,body[key]]))};
+  const desired=assignment.binding,activity=desired?(assignment.activity??scoringActivitySnapshot(task,body,desired)):null;
+  // Attaching a template to an empty manual Task also creates its checklist.
+  // Its generated identities do not exist yet; do not show an incomplete plan.
+  if(desired&&!getTaskActivityBinding(d,task.id)&&ctx.rows.length===1&&activity.checklist?.length)
+    throw new TaskStateError('Save the Activity Template before reviewing its new checklist rewards.',{reason:'scoring_projection_unavailable'});
+  const binding=desired?{activity_template_id:desired.activityTemplateId,subject_user_id:desired.subjectUserId,
+    assignment_override_user_id:desired.assignmentOverrideUserId,snapshot:activity}:null;
+  const primary=assignment.primary===undefined?root.assigned_to:assignment.primary;
+  const rootPlanning=d.prepare('SELECT * FROM task_planning_context WHERE task_id=?').get(root.id)||{};
+  const planning=assignment.bindingChanged&&!binding&&rootPlanning.source==='activity_template'?{}:rootPlanning;
+  const children=new Map((edited?.next||[]).map((child,index)=>[child.id??`draft:${index}`,child]));
+  const rootRole=d.prepare('SELECT 1 FROM workflow_instances WHERE parent_task_id=?').get(root.id)?'container':'source_root';
+  const window=row=>Object.fromEntries(['start_date','start_time','due_date','due_time'].map(key=>[key,row.id===root.id?fields[key]:row[key]===task[key]?fields[key]:row[key]]));
+  const node=row=>{
+    const child=children.get(row.id>0?row.id:`draft:${row._draft_index}`),isRoot=row.id===root.id,own=assigned(row);
+    const pc=!isRoot&&row.id>0?d.prepare('SELECT * FROM task_planning_context WHERE task_id=?').get(row.id):null;
+    const boundParticipants=isRoot&&assignment.bindingChanged&&binding
+      ?[...new Set([...assignment.policyAssigned,...ctx.rows.filter(child=>child.id!==root.id&&!child.archived_at).flatMap(assigned)])]:own;
+    return {ref:ref(row),role:isRoot?rootRole:'source_action',task:executionTask(isRoot?fields:row),
+      primary_user_id:isRoot?primary??null:child?.assignedUsers!==undefined?child.assignedUsers[0]??null:row.assigned_to??null,
+      assigned_user_ids:boundParticipants,skill_ids:isRoot?taskSkillInput(body,task.id,desired?.activityTemplateId):child?.skillIds??(row.id>0?loadTaskSkillIds(d,row.id):[]),
+      window:window(row),is_optional:child?!!child.isOptional:!!row.is_optional,completed:!!row.archived_at||['done','expired','skipped'].includes(row.status),
+      ...(isRoot?{binding,planning}:pc?{planning:pc}:{})};
+  };
+  const refs=new Map(ctx.rows.filter(row=>row.id>0).map(row=>[row.id,ref(row)]));
+  const selection={
+    preferred_supervisor_user_ids:assignment.bindingChanged?[]:d.prepare("SELECT user_id FROM task_responsibilities WHERE task_id=? AND role='supervisor' AND status='active'").all(root.id).map(row=>row.user_id),
+    attempted_supervisor_user_ids:[...new Set(d.prepare("SELECT responsible_user_id FROM planning_obligations WHERE task_id=? AND role='supervisor' AND status IN ('declined','timed_out')").all(root.id).map(row=>row.responsible_user_id))],
+    prior_units:d.prepare('SELECT action_task_id,learner_user_id,supervisor_user_id FROM task_supervision_actions WHERE source_task_id=?').all(root.id)
+      .filter(prior=>refs.has(prior.action_task_id)).map(prior=>({ref:refs.get(prior.action_task_id),learner_user_id:prior.learner_user_id,supervisor_user_id:prior.supervisor_user_id}))};
+  return prepareProspectiveTaskExecution(d,{context:{kind:'current_occurrence',generation:null,as_of_date:todayInHouseholdZone(),assumed_completion_date:null,preparation:'existing_untouched',conditions:[]},
+    root:node(root),actions:ctx.rows.filter(row=>row.id!==root.id).map(node),selection});
+}
+function assertScoringProgressIntent(task,body,edited,{performersChanged=null}={}) {
+  if(performersChanged===null){const assignment=scoringAssignmentIntent(task,body);performersChanged=assignment.changed||assignment.bindingChanged;}
   const status=body.status===undefined||body.status===ARCHIVE_STATUS?task.status:body.status;
   const children=edited?ordinaryActivitySubtasks(db.get(),task.id).filter(row=>!row.archived_at):[];
   const changed=body.scoring_mode!==undefined&&body.scoring_mode!==task.scoring_mode
@@ -858,7 +927,7 @@ function independentlyAssignedTaskMembers(taskId, userIds, previousUserIds, prim
     || !previous.has(Number(id)) || !derived.has(Number(id)));
 }
 
-function initialSubtasksInput(body, {allowAssignments=false,preserveProvenance=false}={}) {
+function initialSubtasksInput(body, {preserveProvenance=false}={}) {
   if (body.subtasks === undefined) return undefined;
   if (body.parent_task_id || !Array.isArray(body.subtasks) || body.subtasks.length > 50) {
     throw new TaskSkillError('A new Task can contain at most 50 subtasks.');
@@ -883,7 +952,6 @@ function initialSubtasksInput(body, {allowAssignments=false,preserveProvenance=f
       templateItemId=Number(item.activity_template_checklist_item_id);
     }
     if(item.assigned_user_ids!==undefined) {
-      if(!allowAssignments)throw new TaskSkillError('Configure a shared Rotation on this Activity before assigning its participant subtasks in this editor.');
       if(!Array.isArray(item.assigned_user_ids)||item.assigned_user_ids.length>50
         ||item.assigned_user_ids.some(id=>!Number.isSafeInteger(id)||id<1)
         ||new Set(item.assigned_user_ids).size!==item.assigned_user_ids.length)throw new TaskSkillError('Choose valid household members for each subtask.');
@@ -905,7 +973,7 @@ function assertOptionalityEdit(task, value) {
 function editedSubtasksInput(task, body, actor, { definitionOnly = false } = {}) {
   if(body.subtasks===undefined)return undefined;
   if(task.parent_task_id)throw new TaskSkillError('Edit subtasks on the original Task.');
-  const normalized=initialSubtasksInput(body,{preserveProvenance:true,allowAssignments:parseRotationBindings(body.rotation_bindings).length>0 || parseRotationBindings(task.rotation_bindings_json).length>0});
+  const normalized=initialSubtasksInput(body,{preserveProvenance:true});
   const existing=ordinaryActivitySubtasks(db.get(),task.id).filter(child=>!child.archived_at);
   const seen=new Set();
   const next=normalized.map((item,index)=>{
@@ -2166,7 +2234,7 @@ export function createTaskDefinition(req, res) {
     const visibility = normalizeVisibility(req.body.visibility);
 
     const skillIds = taskSkillInput(req.body, null, activityBinding?.activityTemplateId);
-    const initialSubtasks = initialSubtasksInput(req.body,{allowAssignments:rotationBindings.length>0});
+    const initialSubtasks = initialSubtasksInput(req.body);
     for (const child of initialSubtasks || []) assertTaskMutation(db.get(), req, null, {points:child.points}, {operation:'create'});
     if (activityBinding && parent_task_id) {
       return res.status(400).json({ error: 'Activity templates can only be attached to top-level tasks.', code: 400 });
@@ -2414,11 +2482,15 @@ router.post('/:id/scoring-preview',(req,res)=>{
         if(!historical){
         const wire=scoringMutationWire(req.body,edited);
         const assignment=scoringAssignmentIntent(task,req.body);
-        if(assignment.changed)wire.assigned_to=assignment.assigned;
+        if(assignment.changed||assignment.bindingChanged)wire.assigned_to=assignment.assigned;
         // A full editor sends [] for policy-managed assignments. When Save
         // preserves current responsibility, that placeholder is not a removal.
         else if(!Object.hasOwn(req.body,'assigned_to')||!parseAssignedTo(req.body.assigned_to).length)delete wire.assigned_to;
-        preview=previewTaskScoring(db.get(),task.id,wire,{scope,viewerId,authorizedTaskIds,includeUnits:true});
+        const childAssignmentChanged=(edited?.next||[]).some(child=>child.assignedUsers!==undefined&&!sameIdOrder(child.assignedUsers,
+          child.id?db.get().prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(child.id).map(row=>row.user_id):[]));
+        const prepareAfterExecution=assignment.changed||assignment.bindingChanged||childAssignmentChanged
+          ?ctx=>prepareCurrentScoringExecution(task,req.body,edited,assignment,ctx):null;
+        preview=previewTaskScoring(db.get(),task.id,wire,{scope,viewerId,authorizedTaskIds,includeUnits:true,prepareAfterExecution});
         const rows=taskScoringRows(db.get(),taskScoringRoot(db.get(),task.id)).filter(row=>authorizedTaskIds.includes(row.id));
         const before=new Map(rows.map(row=>[row.id,row])),after=new Map(before);
         for(const child of edited?.next||[])if(child.id)after.set(child.id,{title:child.title,is_optional:child.isOptional});
@@ -2742,7 +2814,7 @@ export function updateTaskDefinition(req, res) {
     const syncChanged=syncTarget!==undefined&&(!sameFieldValue(syncTarget?.accountId,task.target_caldav_account_id)
       ||!sameFieldValue(syncTarget?.listUrl,task.target_caldav_list_url));
     const noOccurrenceChange=!definitionChanged&&status===task.status&&!(archiveRequested&&!task.archived_at)&&!syncChanged;
-    assertScoringProgressIntent(task,req.body,editedSubtasks,{performersChanged});
+    assertScoringProgressIntent(task,req.body,editedSubtasks,{performersChanged:performersChanged||bindingChanged});
     if(noOccurrenceChange&&editScope!=='future')
       return res.json({data:hydrateTask(task,req.authUserId||req.session.userId),unchanged:true});
     if(historical&&editScope!=='future'&&definitionChanged&&taskSeriesState(db.get(),task.id))
@@ -2855,7 +2927,8 @@ export function updateTaskDefinition(req, res) {
             commitRotation: true,
             dateKey: due_date || todayInHouseholdZone(),
             activitySnapshot:existingActivityBinding?.activity_template_id===desiredActivityBinding.activityTemplateId
-              ? readTaskActivityDefinition(db.get(),task.id):null,
+              ?existingActivityBinding.definition_snapshot_json?readTaskActivityDefinition(db.get(),task.id)
+                :captureActivityTemplateDefinition(db.get(),desiredActivityBinding.activityTemplateId):null,
           });
         } else {
           clearTaskActivityBinding(db.get(), task.id);

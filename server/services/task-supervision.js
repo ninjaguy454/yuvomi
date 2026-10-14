@@ -396,22 +396,24 @@ function projectionUnavailable() {
 }
 const positiveId = value => Number.isSafeInteger(value) && value > 0;
 const referenceKey = ref => ref?.kind === 'definition_root' && Object.keys(ref).length === 1 ? 'root'
-  : ref?.kind === 'template' && Object.keys(ref).length === 2 && positiveId(ref.template_id) ? `template:${ref.template_id}` : null;
+  : ref?.kind === 'template' && Object.keys(ref).length === 2 && positiveId(ref.template_id) ? `template:${ref.template_id}`
+  : ref?.kind === 'draft' && Object.keys(ref).length === 2 && Number.isSafeInteger(ref.draft_index) && ref.draft_index >= 0 ? `draft:${ref.draft_index}` : null;
 function preparedIds(values, allowed) {
   if (!Array.isArray(values) || values.some(id => !positiveId(id) || !allowed.has(id)) || new Set(values).size !== values.length) throw projectionUnavailable();
   return [...values];
 }
 function preparationContext(value) {
   const date = input => typeof input === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(input) && !Number.isNaN(Date.parse(input));
-  if (value?.kind !== 'next_occurrence' || !Number.isSafeInteger(value.generation) || value.generation < 1 || !date(value.as_of_date)
+  const current = value?.kind === 'current_occurrence';
+  if ((!current && value?.kind !== 'next_occurrence') || (current ? value.generation != null || value.assumed_completion_date != null || value.preparation !== 'existing_untouched' : !Number.isSafeInteger(value.generation) || value.generation < 1) || !date(value.as_of_date)
     || value.assumed_completion_date != null && !date(value.assumed_completion_date)
     || !['fresh','existing_untouched'].includes(value.preparation) || !Array.isArray(value.conditions)
     || value.conditions.some(condition => typeof condition !== 'string')) throw projectionUnavailable();
-  return { kind: value.kind, generation: value.generation, as_of_date: value.as_of_date,
+  return { kind: value.kind, generation: value.generation ?? null, as_of_date: value.as_of_date,
     assumed_completion_date: value.assumed_completion_date ?? null, preparation: value.preparation, conditions: [...value.conditions] };
 }
 
-/** Private, read-only execution facts for a complete canonical next occurrence.
+/** Private, read-only execution facts for a complete proposed occurrence.
  * Operational assignments here never replace the definition's read joins.
  * References are definition identities; no Task lookup or helper projection is
  * created. Callers authorize and project the resulting facts separately. */
@@ -423,6 +425,8 @@ export function prepareProspectiveTaskExecution(d, input) {
     const keys = new Set(), nodes = [input.root, ...input.actions].map((node, index) => {
       const key = referenceKey(node?.ref);
       if (!key || keys.has(key) || index > 0 && key === 'root' || !['source_root','source_action','helper_projection','container'].includes(node.role)
+        || ctx.kind !== 'current_occurrence' && node.ref.kind === 'draft'
+        || Object.hasOwn(node,'completed') && (ctx.kind !== 'current_occurrence' || typeof node.completed !== 'boolean')
         || index === 0 && node.role === 'source_action' || index > 0 && node.role === 'source_root'
         || !node.task || Object.hasOwn(node.task,'id') || Object.hasOwn(node.task,'parent_task_id') || node.task.status !== 'open' || node.task.archived_at != null
         || typeof node.is_optional !== 'boolean' || !node.window || typeof node.window !== 'object'
@@ -495,6 +499,7 @@ export function prepareProspectiveTaskExecution(d, input) {
     const { proficiencyFor, availabilityFor } = eligibilityReaders(d), actions = [], facts = [];
     for (const node of nodes) {
       const fact = { ref: node.ref, role: node.role, assigned_user_ids: [...node.assigned], supervision: null }; facts.push(fact);
+      if (node.completed) continue; // Settled/current history does not constrain the remaining helper choice.
       if (['container','helper_projection'].includes(root.role) || ['container','helper_projection'].includes(node.role)) continue;
       const learnerId = node.primary_user_id ?? root.primary_user_id ?? null, learner = byId.get(learnerId);
       const occurrence = { ...root.task, ...node.task };

@@ -3681,6 +3681,11 @@ p.field-hint--warn[hidden] {
     gap: var(--space-1);
   }
 
+  .nav-sidebar__footer-actions [data-personal-appearance] {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
   /* ── Hover: dezente Hintergrundfarbe ── */
   .nav-sidebar .nav-item:hover:not([aria-current="page"]) {
     color: var(--color-text-primary);

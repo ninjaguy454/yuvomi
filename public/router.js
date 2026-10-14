@@ -53,7 +53,7 @@ import {
 import { openModal, confirmModal } from '/components/modal.js';
 import '/components/datepicker.js';
 import { NAV_ICONS, MODULE_ICON, moduleIconEl } from '/nav-icons.js';
-import { RENAMED_SETTINGS_SOURCE_PATHS, SETTINGS_LEAVES } from '/settings/registry.js';
+import { RENAMED_SETTINGS_SOURCE_PATHS, SETTINGS_LEAVES, findSettingsLeaf } from '/settings/registry.js';
 import {
   NAV_SECTION,
   resolveMobileNavOrder,
@@ -1231,6 +1231,17 @@ function deviceThemeAction({mobile=false}={}){
   const options={labelKey:'appearanceOptions.appearance',icon:'palette',className:mobile?'more-action--device-theme':'nav-item--device-theme',onClick:()=>{if(mobile)window._closeMoreSheet?.({restoreFocus:false});void openDeviceTheme().catch(error=>window.yuvomi?.showToast(error.message,'error'));}};
   const button=mobile?moreActionEl(options):sidebarActionEl(options);button.dataset.deviceTheme='';button.disabled=!deviceThemeChangesAllowed();button.title=button.disabled?t('deviceTheme.locked'):t('appearanceOptions.appearance');button.setAttribute('aria-disabled',String(button.disabled));return button;
 }
+function appearanceAction({mobile=false}={}){
+  const deviceAction=deviceThemeAction({mobile});
+  if(deviceAction)return deviceAction;
+  const path='/settings/personal/appearance';
+  if(!currentUser?.id||currentUser.kind==='device'||currentUser.access_scope==='split_guest'||!findSettingsLeaf(path,currentUser))return null;
+  const options={labelKey:'appearanceOptions.appearance',icon:'palette',className:mobile?'more-action--appearance':'nav-item--appearance',onClick:()=>{
+    if(mobile)window._closeMoreSheet?.({restoreFocus:false});
+    void navigate(path);
+  }};
+  const button=mobile?moreActionEl(options):sidebarActionEl(options);button.dataset.personalAppearance='';return button;
+}
 function deviceSessionAction({ mobile = false } = {}) {
   const temporary = deviceBootstrap()?.temporary;
   if (!isDevicePrincipal() && !temporary) return null;
@@ -1615,7 +1626,7 @@ function buildMoreSheetBody() {
 
   // System-Reihe im selben Vierer-Raster (Icon-über-Label, monochrom).
   const sessionAction = deviceSessionAction({ mobile: true });
-  const themeAction=deviceThemeAction({mobile:true});
+  const themeAction=appearanceAction({mobile:true});
   if (sessionAction) nodes.push(sessionAction);
   const system = document.createElement('div');
   system.className = 'more-sheet__system';
@@ -2050,7 +2061,7 @@ function renderAppShell(container) {
   // sie ignorieren): Hilfe und Live-Changelog.
   const sidebarFooter = document.createElement('div');
   sidebarFooter.className = 'nav-sidebar__footer-actions';
-  const themeAction=deviceThemeAction();if(themeAction)sidebarFooter.appendChild(themeAction);
+  const themeAction=appearanceAction();if(themeAction)sidebarFooter.appendChild(themeAction);
   sidebarFooter.append(
     sidebarActionEl({
       labelKey: 'nav.help',
@@ -4540,8 +4551,8 @@ function rebuildNavigation({ updateLabels = true } = {}) {
         .filter((el) => el.classList?.contains('nav-item--pinned-end'))
         .forEach((el) => el.remove());
       const footer = navSidebar.querySelector(':scope > .nav-sidebar__footer-actions');
-      const previousThemeAction=navSidebar.querySelector('[data-device-theme]'),restoreThemeFocus=previousThemeAction?.contains(document.activeElement);
-      previousThemeAction?.remove();const themeAction=deviceThemeAction();if(themeAction&&footer){footer.prepend(themeAction);if(restoreThemeFocus)themeAction.focus({preventScroll:true});}
+      const previousThemeAction=navSidebar.querySelector('[data-device-theme],[data-personal-appearance]'),restoreThemeFocus=previousThemeAction?.contains(document.activeElement);
+      previousThemeAction?.remove();const themeAction=appearanceAction();if(themeAction&&footer){footer.prepend(themeAction);if(restoreThemeFocus)themeAction.focus({preventScroll:true});}
       pinnedSidebarEls.forEach((el) => navSidebar.insertBefore(el, footer || null));
       const previousSessionAction = navSidebar.querySelector(':scope > .nav-item--device-session');
       const restoreSessionFocus = previousSessionAction?.contains(document.activeElement);

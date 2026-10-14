@@ -76,6 +76,8 @@ const APP_SHELL = [
   '/utils/named-theme-chrome.js',
   '/utils/named-theme-palettes.js',
   '/utils/named-appearance-runtime.js',
+  '/utils/local-weather-runtime.js',
+  '/utils/weather-appearance.js',
   '/utils/offline-appearance.js',
   '/components/named-appearance-picker.js',
   '/utils/ui-sounds.js',

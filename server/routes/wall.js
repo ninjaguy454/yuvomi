@@ -12,7 +12,7 @@ import { actionableSubtasks, assertTaskRevision, changeTaskStatus } from '../ser
 import { claimTask } from '../services/assignment-responsibilities.js';
 import { createParentPrizeRedemption as createRedemption } from '../services/reward-fulfillment.js';
 import { flushOutbound } from '../services/caldav-todo-outbound.js';
-import weatherRouter from './weather.js';
+import {householdWeatherRouter as householdWeather} from './weather.js';
 import { WALL_EXIT_VERIFIED } from '../services/wall-session.js';
 import { WALL_DEFAULTS,WALL_ACTIONS,WALL_IDENTITY_SECONDS,wallConfig,saveWallConfig,wallDashboard,
   householdMember,wallPermissions,assertWallModule,wallTaskVisible,publicTaskProjection,publicMember,
@@ -85,13 +85,19 @@ router.get('/dashboard',guarded((req,res)=>res.json({data:withTaskReadSnapshot(d
   const data=wallDashboard(db.get(),host(req),hydrateTask);
   data.urgentTasks=data.urgentTasks.map(task=>sharedScoring(task,host(req)));return data;
 })})));
-router.get('/weather',guarded((req,res,next)=>{
-  assertWallModule(db.get(),host(req),'weather');
-  if(!wallConfig(db.get()).widgets.some(w=>w.id==='weather'&&w.visible))return res.json({data:null});
+const weatherRead=themeOnly=>guarded((req,res,next)=>{
+  const allowed=()=>{const d=db.get();assertWallModule(d,host(req),'dashboard');assertWallModule(d,host(req),'weather');if(wallPermissions(d,host(req)).widgets.weather!=='allow')throw wallError('Weather is not available on this Wall.',403);};
+  allowed();
+  if(!themeOnly&&!wallConfig(db.get()).widgets.some(w=>w.id==='weather'&&w.visible))return res.json({data:null});
   // Reuse provider/cache with household configuration, never host's personal location.
-  const forwarded=Object.create(req);forwarded.url='/';forwarded.authUserId=null;forwarded.session={};
-  weatherRouter.handle(forwarded,res,next);
-}));
+  const forwarded=Object.create(req);forwarded.url=themeOnly?'/theme':'/';forwarded.authUserId=null;forwarded.session={};
+  const lang=typeof req.query?.lang==='string'&&/^[a-z]{2,3}(?:[-_][a-z0-9]{2,8})?$/i.test(req.query.lang)?req.query.lang:undefined;
+  Object.defineProperty(forwarded,'query',{value:{lang}});
+  const response=Object.create(res);response.json=body=>{try{allowed();return res.status(response.statusCode).json(body);}catch(error){return res.status(error.status||403).json({error:error.message});}};
+  return householdWeather.handle(forwarded,response,next);
+});
+router.get('/weather',weatherRead(false));
+router.get('/weather/theme',weatherRead(true));
 function taskFor(req,userId=null) {
   assertWallModule(db.get(),host(req),'tasks',userId);
   const task=wallTaskVisible(db.get(),req.params.id,host(req),userId);

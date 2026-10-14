@@ -151,10 +151,24 @@ function publicSettlements(d,ctx,viewerId,authorizedTaskIds,includeHistoricalSet
     return snapshot.visibility==='all'||snapshot.created_by===viewerId||snapshot.visibility==='assignees'&&snapshot.assigned.includes(viewerId);
   }).map(row=>({...(includeIds?{settlement_id:row.id}:{}),task_id:row.task_id,points:row.points,recipients:recipients(row),mode:row.mode,outcome:row.outcome,settled_at:row.settled_at}));
 }
+function configuredTotal(d,ctx,taskId,viewerId,authorizedTaskIds){
+  taskId=Number(taskId);
+  if(!['whole_task','subtasks'].includes(ctx.root.scoring_mode)||taskScoringProjection(d,taskId)||workflowContainer(d,ctx.root.id))return null;
+  if(blockedWindow(d,taskId))return 0;
+  return ctx.rows.reduce((total,task)=>{
+    if(taskId!==ctx.root.id&&task.id!==taskId || authorizedTaskIds&&!authorizedTaskIds.has(task.id)
+      || task.archived_at || !visible(d,task,viewerId) || blockedWindow(d,task.id))return total;
+    // Worth describes the authorized definition before scheduling/progress
+    // projection. Enrollment, assignment and settlements do not multiply it.
+    const definition=taskRewardDefinition(d,task,{root:ctx.root,actingUserId:viewerId});
+    return total+(definition.outcome==='suppressed'?0:definition.points);
+  },0);
+}
 export function taskScoringSummary(d,taskId,{viewerId=null,authorizedTaskIds=null,includeHistoricalSettlements=false}={}){
   const authorized=authorizedTaskIds==null?null:new Set(authorizedTaskIds);
   const ctx=context(d,taskId,viewerId),settlements=publicSettlements(d,ctx,viewerId,authorized,includeHistoricalSettlements),earned=aggregate(settlements.flatMap(row=>row.recipients)),available=potential(d,ctx,{viewerId,authorizedTaskIds:authorized});
   return {mode:ctx.root.scoring_mode||'legacy',root_task_id:ctx.root.id,mode_locked:ctx.mode_locked,review_required:ctx.review_required,
+    configured_total:configuredTotal(d,ctx,taskId,viewerId,authorized),
     earned,potential:available,settled_task_ids:settlements.map(row=>row.task_id),personal_total:viewerId==null?null:[...earned,...available].filter(row=>row.user_id===viewerId).reduce((sum,row)=>sum+row.points,0),settlements};
 }
 function points(value){

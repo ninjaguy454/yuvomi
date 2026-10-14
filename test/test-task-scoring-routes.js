@@ -1,6 +1,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {scoringFixture} from './helpers/task-scoring-route-fixture.js';
+import {createDevice} from '../server/services/devices.js';
+import {deviceTaskDetail,deviceTaskList} from '../server/services/device-tasks.js';
+
+test('configured worth survives real device scheduling projection without including private child amounts',async t=>{
+ const f=await scoringFixture(t),created=await f.create({scoring_mode:'subtasks',assigned_to:[2],points:999,subtasks:[{title:'Now',points:3},{title:'Later',points:5},{title:'Optional later',points:7,is_optional:true},{title:'Private',points:900}]});
+ assert.equal(created.status,201);const root=created.data.id,[now,later,optional,hidden]=created.data.subtasks;
+ f.d.prepare("UPDATE tasks SET start_date='2026-11-02' WHERE id IN (?,?)").run(later.id,optional.id);
+ f.d.prepare("UPDATE tasks SET visibility='private' WHERE id=?").run(hidden.id);
+ const principal={kind:'device',...createDevice(f.d,{name:'Synthetic configured worth display'},1)},snapshot=f.snapshot(),changes=f.changes();
+ const list=deviceTaskList(f.d,principal).find(row=>row.id===root),detail=deviceTaskDetail(f.d,principal,root);
+ assert.deepEqual(list.subtasks.map(row=>row.id),[now.id]);
+ assert.equal(list.scoring.configured_total,15);assert.equal(detail.scoring.configured_total,15);
+ const personal=await f.call('GET','/tasks/'+root,undefined,2);assert.equal(personal.status,200);assert.equal(personal.data.scoring.configured_total,15);
+ const personalList=await f.call('GET','/tasks?status=open',undefined,2),listed=personalList.data.find(row=>row.id===root);
+ assert.equal(listed.scoring.configured_total,15);assert.deepEqual(listed.subtasks.map(row=>row.id),[now.id]);
+ assert.equal(JSON.stringify({list,detail,personal,listed}).includes('900'),false);
+ assert.equal(f.snapshot(),snapshot);assert.equal(f.changes(),changes);
+});
 
 test('creation selects exclusive public policy and rejects ambiguous omitted policy',async t=>{
  const f=await scoringFixture(t);for(const mode of ['whole_task','subtasks']){const r=await f.create({scoring_mode:mode,points:5,assigned_to:[2],subtasks:[{title:'Step',points:7}]});assert.equal(r.status,201);assert.equal(r.data.scoring_mode,mode);await f.finish(r.data.id);assert.deepEqual(f.d.prepare("SELECT user_id,delta FROM reward_ledger WHERE type='earn' AND task_id IN (?,?)").all(r.data.id,r.data.subtasks[0].id),[{user_id:2,delta:mode==='whole_task'?5:7}]);}

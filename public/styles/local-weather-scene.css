@@ -16,12 +16,13 @@
 .local-weather-credit{position:fixed;left:12px;bottom:12px;z-index:10;display:flex;align-items:center;max-width:min(440px,calc(100vw - 24px));min-height:44px;padding:7px 10px;border:1px solid #d5e4ed8c;border-radius:6px;background:#10212df5;color:#f7fcff;font:12px/17px system-ui,sans-serif;text-decoration:none;overflow-wrap:anywhere}
 .local-weather-credit:hover{text-decoration:underline}
 .local-weather-credit:focus-visible{outline:3px solid #f7fcff;outline-offset:3px}
-.local-weather-credit--flow{position:relative;inset:auto;z-index:auto;width:fit-content;max-width:calc(100% - 24px);margin:12px;flex:none}
+.local-weather-credit--flow{position:static;inset:auto;z-index:auto;width:fit-content;max-width:calc(100% - 24px);margin:12px;flex:none}
 @media(min-width:1024px){.local-weather-credit{left:calc(var(--sidebar-width,220px) + 12px)}html[data-wall-mode] .local-weather-credit{left:12px}}
 html[data-local-weather-scene] .app-shell{background:transparent}
 html[data-local-weather-scene] .app-content,html[data-local-weather-scene][data-named-theme] .app-content{position:relative;background-color:transparent;background-image:none}
 html[data-local-weather-scene] .lg-backdrop{display:none}
 html[data-local-weather-scene] :is(.page-header,.dashboard-overview,.wall-dashboard__header){background:var(--color-surface);border-radius:var(--radius-md)}
+html[data-local-weather-scene] :is(.wall-dashboard__connection,.wall-dashboard__footer){background:var(--color-surface);border-radius:var(--radius-md);padding:6px 10px}
 .local-weather-card-host{position:relative}
 .local-weather-card-rim{position:absolute;inset:0;z-index:2;border-radius:inherit;pointer-events:none;overflow:hidden;contain:layout paint;opacity:0;clip-path:polygon(evenodd,0 0,100% 0,100% 100%,0 100%,0 0,4px 4px,4px calc(100% - 4px),calc(100% - 4px) calc(100% - 4px),calc(100% - 4px) 4px,4px 4px);box-shadow:inset 0 1px 0 #ffffff4a,inset 0 -1px 0 #ffffff26}
 .local-weather-card-rim[data-active=true]{opacity:1}

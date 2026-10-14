@@ -23,5 +23,5 @@ The art stage retains a maximum aspect of2.1. In very wide or shallow windows,
 normal app scrolling reveals the lower artwork without moving card targets.
 Mobile shows the full painting. All grades and the original sky mask share the
 same camera, including the scroll offset used to select visible illumination.
-On small screens the readable linked credit sits in the existing app scrollport
-footer, keeping it clear of task controls and the fixed bottom navigation.
+The readable linked credit sits in the existing app scrollport footer at every
+screen size, keeping it clear of task controls and fixed navigation.

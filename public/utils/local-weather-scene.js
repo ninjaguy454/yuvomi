@@ -90,9 +90,9 @@ export function mountLocalWeatherScene({onFlash=()=>{}}={}) {
   doc.addEventListener('scroll',panScene,true);listeners.push(()=>doc.removeEventListener('scroll',panScene,true));
   function positionCredit(){
     if(disposed)return;
-    // On small screens a footer uses the existing scrollport rather than covering controls.
-    const flow=win.innerWidth<1024,host=flow?(doc.querySelector('.app-content')||doc.body):doc.body;
-    credit.classList.toggle('local-weather-credit--flow',flow);
+    // A scrollport footer cannot intercept any card or fixed navigation control.
+    const host=doc.querySelector('.app-content .page-scrollport')||doc.querySelector('.app-content')||doc.body;
+    credit.classList.add('local-weather-credit--flow');
     if(credit.parentNode!==host)host.append(credit);
   }
   function blockedRects(){
@@ -122,7 +122,7 @@ export function mountLocalWeatherScene({onFlash=()=>{}}={}) {
   function draw(t,still,dt){
     if(disposed)return;
     frame=dynamics.advance(dt,t,Date.now(),still);grades();
-    if(frame.clouds>.003&&!still&&geometry){const offset=wrap(frame.windTravel*.015)*geometry.width;strip.style.transform='translate3d('+(-offset).toFixed(2)+'px,0,0)';stats.skyUpdates++;}
+    if(frame.clouds>.003&&!still&&geometry){const offset=-(1-wrap(frame.windTravel*.015))*geometry.width;strip.style.transform='translate3d('+offset.toFixed(2)+'px,0,0)';stats.skyUpdates++;}
     materials?.update(frame,t,still,forced.matches||transparency.matches||!frame.rich);
     const now=performance.now();
     if(!still&&frame.lightning){if(!activeFlash&&nextFlashAt!==null&&now>=nextFlashAt)flash(now);if(activeFlash){const progress=(now-activeFlash.start)/activeFlash.duration;if(progress>=1){activeFlash=null;glow.style.opacity='0';}else glow.style.opacity=(Math.sin(Math.max(0,progress)*Math.PI)**2*(frame.daylight<.5?.44:.28)).toFixed(4);}}

@@ -42,7 +42,7 @@ Very wide/shallow viewports can reveal lower artwork through normal app scrollin
 Only decorative painting offset and a scroll tail are added; card positions,
 content, controls and stored colors are preserved. The sky mask and all grades use
 that same camera/visible window. Phones show the full painting. A readable linked
-NGA credit uses a safe desktop position or app scrollport footer on small screens.
+NGA credit uses an app scrollport footer so it cannot intercept card controls.
 Reduced motion, reduced transparency, forced colors, foreground/lifecycle changes
 and disposal stop or remove appropriate decoration.
 

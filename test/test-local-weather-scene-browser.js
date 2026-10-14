@@ -40,6 +40,20 @@ const mount=async(page,origin)=>{
 const cards=page=>page.$$eval('.activity-card,.note-card,.agenda-event',nodes=>nodes.map(node=>{const r=node.getBoundingClientRect(),s=getComputedStyle(node);return {x:r.x,y:r.y,width:r.width,height:r.height,transform:s.transform,background:s.backgroundColor,color:s.color,text:node.innerText};}));
 const capture=async(page,name)=>{if(process.env.LOCAL_WEATHER_SCENE_REVIEW_DIR){mkdirSync(process.env.LOCAL_WEATHER_SCENE_REVIEW_DIR,{recursive:true});await page.screenshot({path:join(process.env.LOCAL_WEATHER_SCENE_REVIEW_DIR,'integration-renderer-'+name+'.png')});}};
 
+test('clouds and precipitation follow the same reported west and east wind',async()=>{
+  const f=await fixture(),{page}=f;
+  try{
+    await page.setViewport({width:1920,height:1080});await mount(page,f.origin);
+    const sample=()=>page.evaluate(()=>({x:new DOMMatrixReadOnly(getComputedStyle(document.querySelector('.local-weather-cloud-strip')).transform).m41,travel:window.testScene.getStats().scene.windTravel}));
+    await page.waitForFunction(()=>window.testScene.getStats().scene.windX>.2);const west=await sample();await new Promise(resolve=>setTimeout(resolve,500));const afterWest=await sample();
+    assert.ok(afterWest.travel>west.travel&&afterWest.x>west.x,'west wind moves both precipitation travel and tiled clouds right');
+    await page.evaluate(scene=>window.testScene.update({theme:{condition:'storm',is_day:true},scene:{...scene,wind:{speed_mps:12,gust_mps:20,from_degrees:90}}}),facts());
+    await page.waitForFunction(()=>window.testScene.getStats().scene.windX<-.2);const east=await sample();await new Promise(resolve=>setTimeout(resolve,500));const afterEast=await sample();
+    assert.ok(afterEast.travel<east.travel&&afterEast.x<east.x,'east wind moves both precipitation travel and tiled clouds left');
+    assert.deepEqual(f.errors,[]);
+  }finally{await f.close();}
+});
+
 test('ending ownership inside a flash callback stops remaining frame work without errors',async()=>{
   const f=await fixture(),{page}=f;
   try{

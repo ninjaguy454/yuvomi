@@ -94,7 +94,7 @@
     "Production shell uses the approved 50% 52% cover camera and maximum stage aspect2.1; ordinary app scrolling reveals lower artwork in wide/shallow windows. Mobile retains full painting.",
     "Registered masked clouds and synthetic visible-sky illumination; no observed strike, chimney, lights or blizzard is asserted.",
     "Cards retain their existing fills, content, typography, transforms and controls; bounded artwork appears only on a narrow decorative rim.",
-    "Small-screen credit is an app-scrollport footer; desktop credit is offset past the sidebar. No control is covered by the small-screen credit."
+    "The readable linked credit is an app-scrollport footer at every screen size, keeping it clear of card controls and fixed navigation."
   ],
   "sourceEvidencePrototypeOnly": true
 }

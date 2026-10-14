@@ -20,6 +20,8 @@ for(let i=0;i<6;i++){
   db.prepare('INSERT INTO task_assignments(task_id,user_id) VALUES(?,1)').run(task);
 }
 db.prepare("INSERT INTO notes(title,content,created_by,pinned,color,card_color_slot) VALUES('Synthetic scene note','Readable household note',1,1,'#e3d69e','slot-04-v1')").run();
+const calendarNow=new Date(),calendarDay=[calendarNow.getFullYear(),String(calendarNow.getMonth()+1).padStart(2,'0'),String(calendarNow.getDate()).padStart(2,'0')].join('-');
+const calendarEventId=Number(db.prepare("INSERT INTO calendar_events(title,start_datetime,end_datetime,all_day,created_by) VALUES('Synthetic scene calendar event',?,?,1,1)").run(calendarDay+'T00:00',calendarDay+'T23:59').lastInsertRowid);
 saveWallConfig(db,{...structuredClone(WALL_DEFAULTS),widgets:WALL_DEFAULTS.widgets.map(widget=>({...widget,visible:['tasks','notes'].includes(widget.id)})),appearance:{...WALL_DEFAULTS.appearance,named_appearance:selected}});
 const snapshot=()=>db.prepare('SELECT id,card_color,card_color_choice FROM tasks ORDER BY id').all();
 let server,browser,origin;const errors=[],requests=[];
@@ -53,6 +55,7 @@ test('real personal app receives whitelisted household facts and mounts approved
     check('existing seven-field theme route remains unchanged',Object.keys(legacy).sort().join(',')==='condition,expires_at,fetched_at,is_day,observed_at,sunrise_at,sunset_at');
     check('appearance uses scene route',requests.includes('/api/v1/weather/scene'));
     check('readable artwork credit is present',await page.$eval('.local-weather-credit',node=>node.textContent.includes('Thomas Cole')));
+    check('artwork credit uses flow placement instead of covering task controls',await page.$eval('.local-weather-credit',node=>getComputedStyle(node).position==='static'));
     for(const viewport of [{width:1920,height:1080},{width:3440,height:1440},{width:2048,height:667},{width:390,height:844},{width:320,height:720}]){
       await page.setViewport({...viewport,deviceScaleFactor:1});await new Promise(resolve=>setTimeout(resolve,100));
       check(viewport.width+'px has no horizontal overflow',await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
@@ -67,7 +70,12 @@ test('real personal app receives whitelisted household facts and mounts approved
       }
     }
     check('weather never changes stored task color choices',JSON.stringify(snapshot())===JSON.stringify(before));
-    await page.goto(origin+'/calendar');await page.waitForSelector('.local-weather-scene');await capture(page,'integration-calendar');
+    await page.goto(origin+'/calendar');await page.waitForSelector('.local-weather-scene');
+    const eventSelector=`:is(.month-day__event,.agenda-event,.week-event,.day-event,.allday-event)[data-id="${calendarEventId}"]`;
+    await page.waitForSelector(eventSelector);await page.$eval(eventSelector,node=>node.scrollIntoView({block:'center'}));
+    await page.waitForFunction(selector=>{const node=document.querySelector(selector);if(!node)return false;const r=node.getBoundingClientRect(),hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);return r.width>0&&r.height>0&&(hit===node||node.contains(hit));},{},eventSelector);
+    check('settled Calendar event keeps its clickable hit target',await page.$eval(eventSelector,node=>node.textContent.includes('Synthetic scene calendar event')));await capture(page,'integration-calendar');
+    await page.click(eventSelector);await page.waitForSelector('.modal-panel');check('real Calendar event opens through the Weather overlay',await page.$eval('.modal-panel',node=>node.textContent.includes('Synthetic scene calendar event')));await page.keyboard.press('Escape');
     await page.goto(origin+'/notes');await page.waitForSelector('.note-card');await page.waitForSelector('.local-weather-scene');await capture(page,'integration-notes');
     await page.evaluate(async()=>{const runtime=await import('/utils/named-appearance-runtime.js');const {defaultNamedAppearance}=await import('/utils/named-appearance.js');runtime.applyNamedAppearance({...defaultNamedAppearance(),theme:'coffee'},{persist:false});});
     check('theme exit removes scene and all card rim decorations',await page.evaluate(()=>!document.querySelector('.local-weather-scene,.local-weather-card-rim')));
@@ -80,7 +88,11 @@ test('real Wall scene retains house permissions and device denial remains neutra
   try{
     await login(page);await page.evaluate(async()=>{await(await import('/api.js')).api.post('/wall/enter',{});(await import('/utils/wall-mode.js')).setWallModeEnabled(true);});await page.goto(origin+'/');await page.waitForSelector('[data-wall-grid]');await page.waitForSelector('.local-weather-scene');
     const envelope=await page.evaluate(async()=>{return(await(await import('/api.js')).api.get('/wall/weather/scene')).data;});
-    check('real Wall receives permitted household scene',envelope.scene?.condition_code===66);await capture(page,'integration-wall');
+    check('real Wall receives permitted household scene',envelope.scene?.condition_code===66);
+    check('Wall status labels retain opaque surfaces and readable contrast',await page.$$eval('.wall-dashboard__connection,.wall-dashboard__footer',nodes=>{
+      const rgb=value=>(value.match(/[\d.]+/g)||[]).map(Number),light=channels=>channels.slice(0,3).map(v=>v/255).map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4).reduce((sum,v,i)=>sum+v*[.2126,.7152,.0722][i],0);
+      return nodes.length===2&&nodes.every(node=>{const css=getComputedStyle(node),background=rgb(css.backgroundColor);if(background.length===4&&background[3]!==1)return false;const a=light(rgb(css.color)),b=light(background);return(Math.max(a,b)+.05)/(Math.min(a,b)+.05)>=4.5;});
+    }));await capture(page,'integration-wall');
   }finally{await personal.close();}
   const preferences=normalizeDevicePreferences(db,{});preferences.allow_theme_changes=true;preferences.appearance.named_appearance=selected;
   const device=createDevice(db,{name:'Synthetic weather-denied scene display',preferences},1),token='synthetic-scene-device-'+device.id;

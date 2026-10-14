@@ -41,7 +41,7 @@ export async function render(container) {
     if(!device.preferences.widgets.some(widget=>widget.id==='weather'))device={...device,preferences:{...device.preferences,widgets:[...device.preferences.widgets,{id:'weather',visible:false,size:'medium',order:device.preferences.widgets.length}]}};
     const prefs=structuredClone(device.preferences),permissions=structuredClone(device.permissions),scope=structuredClone(device.scope);
     openModal({title:`Configure ${device.name}`,size:'xl',content:deviceConfigContent(device,model,{modules,actions,definitions,noteActions}),onSave(panel){
-      mountNamedAppearancePicker(panel.querySelector('[data-device-named-appearance]'),{value:prefs.appearance.named_appearance,prefix:'device-theme',onChange:value=>{prefs.appearance.named_appearance=value;panel.querySelectorAll('[data-device-legacy]').forEach(n=>n.hidden=!!value);}});
+      mountNamedAppearancePicker(panel.querySelector('[data-device-named-appearance]'),{value:prefs.appearance.named_appearance,prefix:'device-theme',previewCurrentWeather:false,onChange:value=>{prefs.appearance.named_appearance=value;panel.querySelectorAll('[data-device-legacy]').forEach(n=>n.hidden=!!value);}});
       mountUiSoundSettings(panel.querySelector('[data-device-ui-sounds]'),{value:prefs.appearance.ui_sounds,prefix:'device-sounds',theme:()=>resolveNamedAppearance(prefs.appearance.named_appearance)?.theme.id,onChange:value=>{prefs.appearance.ui_sounds=value;}});
       window.lucide?.createIcons({el:panel});
       panel.querySelector('form').addEventListener('invalid',event=>{const details=event.target.closest('details');if(details)details.open=true;},true);

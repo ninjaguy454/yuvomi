@@ -9,7 +9,7 @@ test.before(async()=>{prefs={color_theme:'neutral',heading_font:'default',named_
 test.after(async()=>{await browser?.close();await new Promise(r=>server?.close(r));});
 test('real personal settings unifies all45 themes, persists choices and preserves Dynamic/filter/legacy behavior',async()=>{
   const page=await browser.newPage();page.on('pageerror',e=>{errors.push(String(e));console.log('Fixture page error: '+String(e));});await page.setRequestInterception(true);page.on('request',r=>{if(r.url().startsWith(origin)||r.url().startsWith('data:'))r.continue();else{external.push(r.url());r.abort();}});await page.setViewport({width:1280,height:1000});await page.goto(origin+'/fixture',{waitUntil:'domcontentloaded'});await page.waitForFunction(()=>window.fixtureReady||document.querySelector('#appearance-retry'),{timeout:5000});assert.deepEqual(errors,[]);
-  assert.equal(await page.$$eval('.named-theme-tile',nodes=>nodes.length),45,'one complete catalog');
+  assert.equal(await page.$$eval('.named-theme-tile',nodes=>nodes.length),46,'45 fixed themes plus Local Weather');
   for(const name of['Liquid Glass','Medieval Parchment','Coffee','Cozy Cafe','Christmas'])assert.ok(await page.$$eval('.named-theme-name',(nodes,name)=>nodes.some(n=>n.textContent===name),name));
   await page.type('[data-theme-search]','Ocean Glass');assert.equal(await page.$$eval('.named-theme-tile',n=>n.length),1);assert.equal(await page.$eval('.named-theme-name',n=>n.textContent),'Liquid Glass');assert.equal(writes.length,0,'browsing writes nothing');
   await page.$eval('[data-theme-search]',n=>{n.value='';n.dispatchEvent(new Event('input',{bubbles:true}));});

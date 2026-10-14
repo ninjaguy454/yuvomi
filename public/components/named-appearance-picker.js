@@ -1,6 +1,7 @@
 import {esc} from '/utils/html.js';
 import {t} from '/i18n.js';
 import {NAMED_THEMES,CARD_SLOTS,cardColor,defaultNamedAppearance,normalizeNamedAppearance,validateNamedAppearance,resolveNamedAppearance} from '/utils/named-appearance.js';
+import {currentNamedTheme} from '/utils/named-appearance-runtime.js';
 
 const groups=[...new Set(NAMED_THEMES.map(theme=>theme.group))],fixed=id=>NAMED_THEMES.find(theme=>theme.id===id);
 const label=key=>t('namedAppearance.'+key);
@@ -10,11 +11,18 @@ function tile(theme,selected){const p=cardColor(theme,'slot-01-v1'),style={'--ti
 
 /** The same picker edits personal, Wall and device-owned configurations.
  * It never writes or applies appearance itself; its owning form supplies authority. */
-export function mountNamedAppearancePicker(host,{value=null,onChange,prefix='named-theme',timeZone=Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC',signal}={}){
+export function mountNamedAppearancePicker(host,{value=null,onChange,prefix='named-theme',timeZone=Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC',previewCurrentWeather=true,signal}={}){
   let chosen=normalizeNamedAppearance(value),draft=chosen||defaultNamedAppearance(timeZone),filters=new Set(['light','dark']),query='',group='all',pending=false,disposed=false;
   const controller=new AbortController();signal?.addEventListener('abort',()=>controller.abort(),{once:true});
   const id=key=>prefix+'-'+key;
-  function shown(){return NAMED_THEMES.filter(theme=>filters.has(theme.kind)&&(group==='all'||theme.group===group)&&[theme.name,...theme.aliases].some(name=>name.toLowerCase().includes(query.toLowerCase())));}
+  function weatherTile(){
+    const current=previewCurrentWeather?currentNamedTheme():null,live=current?.id.startsWith('local-weather-')&&filters.has(current.kind),now=new Date(),instant=now.toISOString();
+    // Browsing never starts a weather read. Reuse the active owner's resolved
+    // weather when available; otherwise label the day/night illustration.
+    const preview=live?current:resolveNamedAppearance({...draft,theme:'local-weather'},now,{condition:'sunny',is_day:filters.has('light'),observed_at:instant,fetched_at:instant,expires_at:new Date(+now+60000).toISOString(),sunrise_at:null,sunset_at:null}).theme;
+    return{...preview,id:'local-weather',name:label('localWeather'),group:'dynamic',identity:label('localWeatherDescription')+' '+label(live?'localWeatherCurrentPreview':'localWeatherExamplePreview'),aliases:['Local Weather']};
+  }
+  function shown(){return [...NAMED_THEMES,weatherTile()].filter(theme=>filters.has(theme.kind)&&(group==='all'||theme.group===group)&&[theme.name,...theme.aliases].some(name=>name.toLowerCase().includes(query.toLowerCase())));}
   function render(focusKey=null){
     const seasonOpen=host.querySelector('.named-season-settings')?.open??false;
     const visible=shown(),selection=chosen?.theme||'',dynamic=selection==='seasons'||selection==='holidays',holidays=selection==='holidays',usesSeasons=selection==='seasons'||holidays&&draft.outside==='seasons';
@@ -26,7 +34,7 @@ export function mountNamedAppearancePicker(host,{value=null,onChange,prefix='nam
     <div class="form-group"${holidays?'':' hidden'}><label for="${id('outside')}">${esc(label('outside'))}</label><select class="form-input" id="${id('outside')}" data-named-field="outside" data-focus-key="outside">${fixedOptions(draft.outside,{seasons:true})}</select></div>
     <details class="named-season-settings"${seasonOpen?' open':''}${usesSeasons?'':' hidden'}><summary>${esc(label('seasonSettings'))}</summary><div class="named-season-grid">${Object.keys(draft.seasons).map(season=>`<label>${esc(label(season))}<select class="form-input" data-season="${season}" data-focus-key="${season}">${fixedOptions(draft.seasons[season])}</select></label>`).join('')}</div></details>
     <div class="named-holiday-settings"${holidays?'':' hidden'}>${draft.holidays.map((window,index)=>`<fieldset class="named-holiday-window"><legend>${esc(label('holidayWindow'))} ${index+1}</legend><label class="named-window-include"><input type="checkbox" data-window="${index}" data-window-field="enabled" data-focus-key="window-${index}-enabled"${window.enabled?' checked':''}>${esc(label('include'))}</label><label>${esc(label('theme'))}<select class="form-input" data-window="${index}" data-window-field="theme" data-focus-key="window-${index}-theme">${fixedOptions(window.theme)}</select></label><div class="named-window-dates"><label>${esc(label('firstDay'))}<input class="form-input" type="date" data-window="${index}" data-window-field="start" data-focus-key="window-${index}-start" value="${window.start}"></label><label>${esc(label('lastDay'))}<input class="form-input" type="date" data-window="${index}" data-window-field="end" data-focus-key="window-${index}-end" value="${window.end}"></label></div><button type="button" class="btn btn--secondary" data-remove-window="${index}" aria-label="${esc(label('removeWindow'))}">${esc(label('remove'))}</button></fieldset>`).join('')}<button type="button" class="btn btn--secondary" data-add-window${draft.holidays.length>=24?' disabled':''}>${esc(label('addWindow'))}</button></div>
-    <p class="form-error" role="alert" data-named-error hidden></p><div class="named-catalog-tools"><label class="sr-only" for="${id('search')}">${esc(label('search'))}</label><input class="form-input" id="${id('search')}" type="search" data-theme-search placeholder="${esc(label('search'))}" value="${esc(query)}"><label class="sr-only" for="${id('group')}">${esc(label('category'))}</label><select class="form-input" id="${id('group')}" data-theme-group>${option('all',label('all'),group)}${groups.map(g=>option(g,g,group)).join('')}</select></div><div class="named-theme-grid">${visible.map(theme=>tile(theme,selection)).join('')}</div><span class="sr-only" role="status" data-filter-status></span></div>`);
+    <p class="form-error" role="alert" data-named-error hidden></p><div class="named-catalog-tools"><label class="sr-only" for="${id('search')}">${esc(label('search'))}</label><input class="form-input" id="${id('search')}" type="search" data-theme-search placeholder="${esc(label('search'))}" value="${esc(query)}"><label class="sr-only" for="${id('group')}">${esc(label('category'))}</label><select class="form-input" id="${id('group')}" data-theme-group>${option('all',label('all'),group)}${option('dynamic',label('dynamic'),group)}${groups.map(g=>option(g,g,group)).join('')}</select></div><div class="named-theme-grid">${visible.map(theme=>tile(theme,selection)).join('')}</div><span class="sr-only" role="status" data-filter-status></span></div>`);
     if(pending)host.querySelectorAll('[data-named-field],[data-season],[data-window],[data-add-window],[data-remove-window],[data-theme-choice]').forEach(n=>n.disabled=true);
     if(focusKey)host.querySelector(`[data-focus-key="${focusKey}"]`)?.focus();
   }
@@ -56,5 +64,13 @@ export function mountNamedAppearancePicker(host,{value=null,onChange,prefix='nam
     if(button.hasAttribute('data-add-window')){const date=resolveNamedAppearance(next).date;next.holidays.push({enabled:false,theme:'christmas',start:date,end:date});void commit(next);}
     if(button.hasAttribute('data-remove-window')){next.holidays.splice(Number(button.dataset.removeWindow),1);void commit(next);}
   },{signal:controller.signal});
-  render();return()=>{disposed=true;controller.abort();};
+  const repaintWeather=()=>{
+    const button=host.querySelector('[data-theme-choice="local-weather"]');if(!button)return;
+    const focused=document.activeElement===button;button.outerHTML=tile(weatherTile(),chosen?.theme||'');
+    const next=host.querySelector('[data-theme-choice="local-weather"]');next.disabled=pending;if(focused)next.focus();
+  };
+  const dispose=()=>{disposed=true;controller.abort();};
+  const observer=new MutationObserver(()=>{if(!host.isConnected)dispose();});observer.observe(document.body,{childList:true,subtree:true});controller.signal.addEventListener('abort',()=>observer.disconnect(),{once:true});
+  window.addEventListener('named-appearance-changed',repaintWeather,{signal:controller.signal});
+  render();return dispose;
 }

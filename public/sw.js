@@ -53,6 +53,7 @@ const APP_SHELL = [
   '/components/point-adjustment.js',
   '/utils/emoji-catalog.js',
   '/utils/reward-request.js',
+  '/utils/reward-cart.js',
   '/utils/reward-live.js',
   '/styles/emoji-picker.css',
   '/components/wall-dashboard.js',

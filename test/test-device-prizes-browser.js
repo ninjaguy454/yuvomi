@@ -13,13 +13,16 @@ function reset() {
   state = {mode:'trusted_display',enabled:true,showPoints:true,fail:null,requests:[],receipts:new Map(),abandoned:new Set(),sequence:0,approval:null,loginCalls:[],twoFactor:false,
     members:[{id:3,display_name:'Scoped Child',avatar_color:'#123456',balance:50}],catalog:[{id:1,name:'Synthetic movie',cost:10,is_active:1,requires_delivery:1}]};
 }
-function device() { return {id:7,revision:4,name:'Synthetic display',idle_seconds:90,maximum_seconds:600,status:'active',scope:{member_ids:[3],show_points:state.showPoints},permissions:{modules:{tasks:'read',calendar:'read',meals:'read',shopping:'read',rewards:'read'},widgets:{weather:'none'},capabilities:{'device_rewards.redeem':state.enabled?'allow':'none','device_tasks.complete':'allow'},...(state.mode===null?{}:{prize_redemption_mode:state.mode})},preferences:{default_view:'wall',appearance:{theme:'system',palette:'neutral',font:'default',density:'comfortable'},widgets:[{id:'points',visible:true,size:'medium',order:0}]}}; }
+function device() { return {id:7,revision:4,name:'Synthetic display',idle_seconds:90,maximum_seconds:600,status:'active',scope:{member_ids:state.members.map(m=>m.id),show_points:state.showPoints},permissions:{modules:{tasks:'read',calendar:'read',meals:'read',shopping:'read',rewards:'read'},widgets:{weather:'none'},capabilities:{'device_rewards.redeem':state.enabled?'allow':'none','device_tasks.complete':'allow'},...(state.mode===null?{}:{prize_redemption_mode:state.mode})},preferences:{default_view:'wall',appearance:{theme:'system',palette:'neutral',font:'default',density:'comfortable'},widgets:[{id:'points',visible:true,size:'medium',order:0}]}}; }
 function receipt(body,key) {
-  if(state.receipts.has(key))return {...state.receipts.get(key),replayed:true};
-  const value={data:{id:++state.sequence,user_id:body.user_id,reward_name:'Synthetic movie',cost:body.expected_cost,status:'pending',requires_delivery:1},replayed:false};
-  state.members[0].balance-=body.expected_cost;
-  if(state.showPoints)value.balance=state.members[0].balance;
-  state.receipts.set(key,value);return value;
+ if(state.receipts.has(key))return {...state.receipts.get(key),replayed:true};
+ let value;
+ if(Array.isArray(body.items)){
+  const items=body.items.map(item=>({catalog_id:item.catalog_id,quantity:item.quantity,unit_cost:item.expected_cost,total_cost:item.quantity*item.expected_cost,reward_name:state.catalog.find(r=>r.id===item.catalog_id)?.name||'Previous prize',units:Array.from({length:item.quantity},()=>({id:++state.sequence,status:'pending',requires_delivery:true}))}));
+  value={data:{id:items[0].units[0].id,user_id:body.user_id,cost:body.expected_cost,unit_count:items.reduce((n,i)=>n+i.quantity,0),status:'pending',requires_delivery:true,items},replayed:false};
+ }else value={data:{id:++state.sequence,user_id:body.user_id,reward_name:'Synthetic movie',cost:body.expected_cost,status:'pending',requires_delivery:true},replayed:false};
+ const member=state.members.find(m=>m.id===body.user_id);member.balance-=body.expected_cost;if(state.showPoints)value.balance=member.balance;
+ state.receipts.set(key,value);return value;
 }
 async function handle(req,res) {
   const url=new URL(req.url,origin),path=url.pathname;
@@ -96,7 +99,7 @@ async function mount({personal=false,admin=false,dashboard=false,width=1280,deni
     window.dispose=await(await import(admin?'/settings/pages/admin-devices.js':dashboard?'/pages/dashboard.js':'/pages/rewards.js')).render(document.querySelector('main'),{user:personal?{id:1,role:'admin'}:{id:null,role:'device'}});
   },{personal,admin,dashboard,device:device(),deniedStorage});return page;
 }
-async function choose(page){await page.waitForSelector('[data-device-prize-member]');await page.select('[data-device-prize-member]','3');await page.click(await page.$('[data-device-prize-check]')?'[data-device-prize-check]':'[data-device-prize-buy="1"]');await page.waitForSelector('[data-device-prize-form]');}
+async function choose(page){await page.waitForSelector('[data-device-prize-profile]');await page.click('[data-device-prize-profile="3"]');if(await page.$('[data-device-prize-check]'))await page.click('[data-device-prize-check]');else{if(await page.$eval('[data-device-prize-card="1"] [data-device-prize-quantity]',n=>n.textContent==='0'))await page.click('[data-device-prize-buy="1"]');await page.click('[data-device-prize-checkout]');}await page.waitForSelector('[data-device-prize-form]');await page.waitForFunction(()=>document.querySelector('[data-device-prize-submit]').closest('.modal-panel').getAnimations().every(a=>a.playState==='finished'));}
 const purchases=()=>state.requests.filter(item=>['/rewards/redemptions','/device/rewards/approval/begin'].includes(item.path)&&item.method==='POST');
 async function backgroundSelector(page,selector) {
   const deadline=Date.now()+5000;
@@ -129,9 +132,9 @@ test('disabled device does not load personal history or expose purchasing, deliv
 test('trusted display discloses anonymous choice and spends only the scoped member with expected cost',async()=>{
   const page=await mount();try{
     await choose(page);assert.match(await page.$eval('[data-device-prize-form]',el=>el.textContent),/anyone|using.*display/i);
-    assert.deepEqual(await page.$$eval('[data-device-prize-member] option',nodes=>nodes.filter(node=>node.value).map(node=>node.textContent)),['Scoped Child']);
+    assert.deepEqual(await page.$$eval('[data-device-prize-profile]',nodes=>nodes.map(node=>node.querySelector('span:last-child').textContent)),['Scoped Child']);
     await page.click('[data-device-prize-submit]');await page.waitForSelector('[data-device-prize-receipt]');
-    assert.deepEqual(purchases()[0].body,{catalog_id:1,user_id:3,expected_cost:10});assert.ok(purchases()[0].key);assert.equal(state.members[0].balance,40);
+    assert.deepEqual(purchases()[0].body,{user_id:3,items:[{catalog_id:1,quantity:1,expected_cost:10}],expected_cost:10});assert.ok(purchases()[0].key);assert.equal(state.members[0].balance,40);
     assert.equal(state.loginCalls.length,0);assert.equal(await page.$('[data-decide], [data-rw-undo], [data-rw-history], [data-tab-id="ledger"]'),null);
     assert.equal(state.requests.some(item=>['/rewards/overview','/rewards/ledger'].includes(item.path)||item.path==='/rewards/redemptions'&&item.method==='GET'),false);
     assert.deepEqual(page.errors,[]);
@@ -197,7 +200,7 @@ test('a first definitive price rejection refreshes options and permits a new con
 test('a first definitive insufficient-points rejection refreshes balance and disables unaffordable prizes',async()=>{
   state.fail='funds';const page=await mount();try{
     await choose(page);await page.click('[data-device-prize-submit]');await page.waitForFunction(()=>!document.querySelector('[data-device-prize-form]')&&document.querySelector('[data-device-prizes] > [role="alert"]'));
-    assert.equal(state.sequence,0);assert.equal(await page.$('[data-device-prize-check]'),null);assert.equal(await page.$eval('[data-device-prize-buy="1"]',node=>node.disabled),true);
+    assert.equal(state.sequence,0);assert.equal(await page.$('[data-device-prize-check]'),null);assert.equal(await page.$eval('[data-device-prize-add="1"]',node=>node.disabled),true);assert.equal(await page.$eval('[data-device-prize-minus="1"]',node=>node.disabled),false);
     assert.match(await page.$eval('[data-device-prize-balance]',node=>node.textContent),/5 points/);
   }finally{await page.close();}
 });
@@ -242,7 +245,7 @@ test('an unknown request that never reached the server recovers after repricing 
 test('replay after parent Undo shows cancelled and refunded status without promising delivery',async()=>{
   state.fail='invalid';const page=await mount();try{
     await choose(page);await page.click('[data-device-prize-submit]');await page.waitForSelector('[data-device-prize-error]:not([hidden])');
-    const saved=state.receipts.get(purchases()[0].key);saved.data.status='cancelled';saved.balance=50;state.members[0].balance=50;
+    const saved=state.receipts.get(purchases()[0].key);saved.data.status='cancelled';for(const item of saved.data.items||[])for(const unit of item.units)unit.status='cancelled';saved.balance=50;state.members[0].balance=50;
     await page.click('[data-device-prize-submit]');await page.waitForSelector('[data-device-prize-receipt]');
     const text=await page.$eval('[data-device-prize-receipt]',node=>node.textContent);assert.match(text,/cancelled/i);assert.doesNotMatch(text,/redeemed|arrange delivery/i);assert.equal(state.sequence,1);assert.equal(state.members[0].balance,50);
   }finally{await page.close();}
@@ -250,9 +253,9 @@ test('replay after parent Undo shows cancelled and refunded status without promi
 test('an uncertain purchase followed by another prize click confirms only the original prize',async()=>{
   state.fail='invalid';state.catalog.push({id:2,name:'Different synthetic prize',cost:3,is_active:1});const page=await mount();try{
     await choose(page);await page.click('[data-device-prize-submit]');await page.waitForSelector('[data-device-prize-error]:not([hidden])');await page.click('[data-device-prize-cancel]');await page.waitForFunction(()=>!document.querySelector('[data-device-prize-form]'));
-    await page.evaluate(()=>{document.querySelector('[data-device-prize-buy="2"]').dispatchEvent(new MouseEvent('click',{bubbles:true}));});await page.waitForSelector('[data-device-prize-form]');
+    await page.evaluate(()=>{document.querySelector('[data-device-prize-buy="2"]').dispatchEvent(new MouseEvent('click',{bubbles:true}));});assert.equal(await page.$('[data-device-prize-form]'),null);assert.equal(await page.$eval('[data-device-prize-checkout]',n=>n.disabled),true);await page.click('[data-device-prize-check]');await page.waitForSelector('[data-device-prize-form]');
     const text=await page.$eval('[data-device-prize-form]',node=>node.textContent);assert.match(text,/Synthetic movie/);assert.doesNotMatch(text,/Different synthetic prize/);
-    await page.click('[data-device-prize-submit]');await page.waitForSelector('[data-device-prize-receipt]');assert.equal(purchases()[1].body.catalog_id,1);assert.equal(purchases()[0].key,purchases()[1].key);assert.equal(state.sequence,1);
+    await page.click('[data-device-prize-submit]');await page.waitForSelector('[data-device-prize-receipt]');assert.equal(purchases()[1].body.items[0].catalog_id,1);assert.equal(purchases()[0].key,purchases()[1].key);assert.equal(state.sequence,1);
   }finally{await page.close();}
 });
 test('Check previous keeps its captured key after the original in-flight purchase succeeds and removes the slot',async()=>{
@@ -268,7 +271,7 @@ test('Check previous keeps its captured key after the original in-flight purchas
 test('a delayed denial cannot discard another tab’s same-key purchase with a lost receipt',async()=>{
   const first=await mount(),second=await mount();try{
     for(const page of [first,second])await page.evaluate(()=>{Object.defineProperty(navigator,'locks',{configurable:true,value:undefined});});
-    state.fail='delayed-funds';await first.select('[data-device-prize-member]','3');await first.evaluate(()=>{document.querySelector('[data-device-prize-buy="1"]').click();});
+    state.fail='delayed-funds';await first.evaluate(()=>document.querySelector('[data-device-prize-profile="3"]').click());await first.evaluate(()=>{document.querySelector('[data-device-prize-buy="1"]').click();document.querySelector('[data-device-prize-checkout]').click();});
     await first.waitForSelector('[data-device-prize-form]');await first.evaluate(()=>{document.querySelector('[data-device-prize-form]').requestSubmit();});
     await new Promise((resolve,reject)=>{const deadline=Date.now()+5000;const check=()=>state.releaseDenial?resolve():Date.now()>deadline?reject(Error('Held denial was not reached; requests='+JSON.stringify(state.requests.filter(item=>!item.path.startsWith('/auth/'))))):setTimeout(check,5);check();});
     state.fail='invalid';await choose(second);await second.click('[data-device-prize-submit]');
@@ -282,7 +285,7 @@ test('a delayed denial cannot discard another tab’s same-key purchase with a l
       (await import('/utils/device-context.js')).acceptAuthentication({authContext:'synthetic-device-context',principal:{kind:'device'},device});
       await(await import('/pages/rewards.js')).render(document.querySelector('main'));
     },device());
-    await first.select('[data-device-prize-member]','3');await first.evaluate(()=>{document.querySelector('[data-device-prize-check]').click();});
+    await first.evaluate(()=>document.querySelector('[data-device-prize-profile="3"]').click());await first.evaluate(()=>{document.querySelector('[data-device-prize-check]').click();});
     await backgroundSelector(first,'[data-device-prize-form]');await first.evaluate(()=>{document.querySelector('[data-device-prize-form]').requestSubmit();});await backgroundSelector(first,'[data-device-prize-receipt]');assert.equal(purchases()[2].key,key);assert.equal(state.sequence,1);assert.equal(state.members[0].balance,40);
   }finally{await first.close();await second.close();}
 });
@@ -316,10 +319,10 @@ test('insufficient points during sign-in proof allow a cheaper fresh purchase af
   state.mode='member_signin';state.catalog.push({id:2,name:'Cheaper synthetic prize',cost:3,is_active:1});const page=await mount();try{
     await choose(page);await page.click('[data-device-prize-submit]');await page.waitForFunction(()=>document.querySelector('[data-approval-submit]')?.disabled===false);
     await page.type('#approval-username','Scoped Child');await page.type('#approval-password','synthetic-password');state.fail='proof-funds';await page.click('[data-approval-submit]');
-    await page.waitForFunction(()=>!document.querySelector('[data-device-prize-form],#device-prize-approval'));assert.equal(state.sequence,0);
-    assert.equal(await page.$('[data-device-prize-check]'),null);await page.click('[data-device-prize-buy="2"]');await page.waitForSelector('[data-device-prize-form]');await page.click('[data-device-prize-submit]');
+    await page.waitForFunction(()=>!document.querySelector('[data-device-prize-form],#device-prize-approval')&&document.querySelector('[data-device-prizes] > [role="alert"]'));assert.equal(state.sequence,0);
+    assert.equal(await page.$('[data-device-prize-check]'),null);await page.click('[data-device-prize-buy="1"]');await page.click('[data-device-prize-buy="2"]');await page.click('[data-device-prize-checkout]');await page.waitForSelector('[data-device-prize-form]');await page.click('[data-device-prize-submit]');
     await page.waitForFunction(()=>document.querySelector('[data-approval-submit]')?.disabled===false);await page.type('#approval-username','Scoped Child');await page.type('#approval-password','synthetic-password');await page.click('[data-approval-submit]');
-    await page.waitForSelector('[data-device-prize-receipt]');assert.equal(purchases()[1].body.catalog_id,2);assert.notEqual(purchases()[0].key,purchases()[1].key);assert.equal(state.members[0].balance,2);
+    await page.waitForSelector('[data-device-prize-receipt]');assert.equal(purchases()[1].body.items[0].catalog_id,2);assert.notEqual(purchases()[0].key,purchases()[1].key);assert.equal(state.members[0].balance,2);
   }finally{await page.close();}
 });
 test('member sign-in uses one-action credentials, exact member and second factor without a personal session',async()=>{

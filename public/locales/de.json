@@ -4854,6 +4854,17 @@
         "priorDelivery": "Die Ausgabe wurde am {{date}} erfasst.",
         "deviceRedeemLabel": "Prämien am Gerät einlösen",
         "deviceRedeemHint": "Am gemeinsam genutzten Display nicht verfügbar. Zum Einlösen persönlich anmelden.",
+        "deviceCart": {
+            "total": "Warenkorb gesamt",
+            "remaining": "Verbleibend",
+            "units": "{{count}} Belohnungen",
+            "quantity": "Anzahl",
+            "addOne": "Einmal {{reward}} hinzufügen",
+            "removeOne": "Einmal {{reward}} entfernen",
+            "redeem": "Warenkorb einlösen",
+            "refunded": "Storniert / erstattet",
+            "rejected": "Abgelehnt"
+        },
         "devicePrize": {
             "title": "Prämie einlösen",
             "enableHint": "Angemeldete Teilnehmende im Mitgliederbereich dieses Geräts dürfen Prämien einlösen. Standardmäßig ausgeschaltet.",

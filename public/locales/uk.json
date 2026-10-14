@@ -4854,6 +4854,17 @@
         "priorDelivery": "Delivery was recorded on {{date}}.",
         "deviceRedeemLabel": "Device prize redemption",
         "deviceRedeemHint": "Unavailable on shared displays. Sign in personally to redeem prizes.",
+        "deviceCart": {
+            "total": "Cart total",
+            "remaining": "Remaining",
+            "units": "{{count}} rewards",
+            "quantity": "Quantity",
+            "addOne": "Add one {{reward}}",
+            "removeOne": "Remove one {{reward}}",
+            "redeem": "Redeem cart",
+            "refunded": "Cancelled / refunded",
+            "rejected": "Rejected"
+        },
         "devicePrize": {
             "title": "Redeem a prize",
             "enableHint": "Allow enrolled members within this device’s member scope to redeem prizes. Off by default.",

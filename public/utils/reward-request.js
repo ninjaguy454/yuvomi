@@ -65,7 +65,7 @@ export function pendingPointAdjustment(userId,storage) {
 }
 
 export function rewardRequest(userId, body, storage) {
-  if(body.operation==='device-prize')return devicePrizeRequest(userId,body,storage);
+  if(['device-prize','device-prize-cart'].includes(body.operation))return devicePrizeRequest(userId,body,storage);
   const {cache,mergeStored,write}=requestStore(userId,storage);
   const intent = body.operation==='undo'
     ? JSON.stringify(['undo',body.redemption_id,body.expected_status,body.confirm_delivered,body.reason])
@@ -106,7 +106,7 @@ function devicePrizeStore(area,storage) {
 }
 function devicePrizeRequest(area,body,storage,requestKey=null) {
   const {cache,persist,remove}=devicePrizeStore(area,storage);
-  const intent=JSON.stringify(['device-prize',body.catalog_id,body.user_id,body.expected_cost,body.note||'']);
+  const intent=Array.isArray(body.items)?JSON.stringify(['device-prize-cart',body.user_id,body.items,body.expected_cost,body.note||'']):JSON.stringify(['device-prize',body.catalog_id,body.user_id,body.expected_cost,body.note||'']);
   let request=requestKey?cache.pending.get(requestKey):[...cache.pending.values()].find(item=>item.intent===intent);
   if(request&&request.intent!==intent)throw new Error('The previous purchase intent changed.');
   if(!request)request={intent,key:requestKey||newRewardRequestKey()};
@@ -136,7 +136,18 @@ export function pendingDevicePrize(area,storage) {
   const {cache}=devicePrizeStore(area,storage);
   for(const request of cache.pending.values()) {
     let value;try{value=JSON.parse(request.intent);}catch{continue;}
-    if(!Array.isArray(value)||value.length!==5||value[0]!=='device-prize')continue;
+    if(!Array.isArray(value)||value.length!==5)continue;
+    if(value[0]==='device-prize-cart') {
+      const [,user_id,items,expected_cost,note]=value;
+      if(!Number.isSafeInteger(user_id)||user_id<=0||!Array.isArray(items)||!items.length||typeof note!=='string'||!Number.isSafeInteger(expected_cost)||expected_cost<0)continue;
+      const ids=new Set();let units=0,total=0;
+      if(items.some(item=>{
+        if(!Number.isSafeInteger(item?.catalog_id)||item.catalog_id<=0||ids.has(item.catalog_id)||!Number.isSafeInteger(item.quantity)||item.quantity<=0||!Number.isSafeInteger(item.expected_cost)||item.expected_cost<0)return true;
+        ids.add(item.catalog_id);units+=item.quantity;total+=item.quantity*item.expected_cost;return units>100||!Number.isSafeInteger(total);
+      })||total!==expected_cost)continue;
+      return {key:request.key,body:{operation:'device-prize-cart',user_id,items,expected_cost,...(note?{note}:{})}};
+    }
+    if(value[0]!=='device-prize')continue;
     const [,catalog_id,user_id,expected_cost,note]=value;
     if(!Number.isSafeInteger(catalog_id)||catalog_id<=0||!Number.isSafeInteger(user_id)||user_id<=0
       ||!Number.isSafeInteger(expected_cost)||expected_cost<0||typeof note!=='string')continue;

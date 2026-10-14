@@ -4,6 +4,7 @@ import { esc } from '/utils/html.js';
 import { taskRevision } from '/utils/task-state.js';
 import { isDevicePrincipal, authenticationSnapshot, sameAuthentication } from '/utils/device-context.js';
 import { t } from '/i18n.js';
+import { validPrizeReceipt } from '/utils/reward-cart.js';
 
 export const canApproveDeviceTask = task => isDevicePrincipal() && task?.permissions?.supervisor_approval === true;
 let currentApproval = null;
@@ -23,7 +24,7 @@ export async function approveDevicePrize(body,{requestKey,member}={}) {
   return approveDeviceAction({key:`prize:${requestKey}`,kind:'prize',formId:'device-prize-approval',title:t('rewards.devicePrize.signinTitle'),
     intro:esc(t('rewards.devicePrize.signinPrompt',{member:member.display_name,points:body.expected_cost})),
     submitLabel:t('rewards.devicePrize.authenticateBuy'),factorLabel:t('rewards.devicePrize.verifyBuy'),ssoLabel:t('rewards.devicePrize.ssoBuy'),
-    validate:response=>response.data?.user_id===body.user_id && response.data?.cost===body.expected_cost && Number.isSafeInteger(response.data?.id),
+    validate:response=>validPrizeReceipt(body,response),
     begin:()=>api.post('/device/rewards/approval/begin',body,{headers:{'Idempotency-Key':requestKey}})});
 }
 
@@ -55,7 +56,7 @@ async function approveDeviceAction(action) {
     target.hidden = false; target.focus({preventScroll:true}); target.scrollIntoView({block:'nearest'});
   };
   const rejectPurchase = async error => {
-    if(action.kind!=='prize'||!['reward_price_changed','insufficient_points','device_prize_abandoned'].includes(error.data?.reason))return;
+    if(action.kind!=='prize'||!['reward_price_changed','insufficient_points','device_prize_abandoned','reward_unavailable'].includes(error.data?.reason))return;
     finalFailure=error;
     if(uncertain)finalFailure.devicePrizeUncertain=true;
     await modal.close({force:true});

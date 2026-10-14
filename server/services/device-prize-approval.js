@@ -9,6 +9,7 @@ const purchaseFailures=Object.freeze({
   reward_price_changed:{status:409,message:'This prize price changed. Review it before redeeming.'},
   insufficient_points:{status:400,message:'Insufficient points.'},
   device_prize_abandoned:{status:410,message:'This unpurchased request was cancelled. Choose the prize again.'},
+  reward_unavailable:{status:404,message:'A selected reward is no longer available. Review the cart.'},
 });
 export function devicePrizeApprovalFailureReason(req,error,expectedId=req.body?.approval_id){
   const intent=req.session?.deviceApprovalIntent;

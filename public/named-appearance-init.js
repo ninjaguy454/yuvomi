@@ -639,6 +639,46 @@ const THEME_PALETTES = {
  'eid':['8bb295,Jade;bea76c,Gold;879fbc,Blue tile;b58bad,Rose silk;9ca0c8,Violet night;77b1ad,Pool;bca08b,Sandstone;9aaf75,Olive;bb8595,Peony;8cabc0,Moon blue;b2a193,Silver;9d90b8,Plum cloth'],
 };
 
+// Coarse household conditions only. No location, credentials or provider HTML.
+const WEATHER_THEME_REFRESH_MS=30*60*1000;
+const WEATHER_THEME_MAX_AGE_MS=90*60*1000;
+const WEATHER_THEME_CONDITIONS=Object.freeze(['sunny','cloudy','rain','storm','snow']);
+const instant=value=>typeof value==='string'&&/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)&&Number.isFinite(Date.parse(value))&&new Date(value).toISOString()===value?Date.parse(value):NaN;
+function normalizeWeatherObservation(value,now=new Date()){
+  if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(key=>!['condition','is_day','observed_at','fetched_at','expires_at','sunrise_at','sunset_at'].includes(key)))return null;
+  const time=Number(now),observed=instant(value.observed_at),fetched=instant(value.fetched_at),expires=instant(value.expires_at);
+  if(!WEATHER_THEME_CONDITIONS.includes(value.condition)||typeof value.is_day!=='boolean'||![time,observed,fetched,expires].every(Number.isFinite)||observed>time+5*60000||fetched>time+5*60000||time-observed>=WEATHER_THEME_MAX_AGE_MS||time-fetched>=WEATHER_THEME_MAX_AGE_MS||expires<=time||expires>Math.min(observed,fetched)+WEATHER_THEME_MAX_AGE_MS)return null;
+  const rise=instant(value.sunrise_at),set=instant(value.sunset_at),solar=Number.isFinite(rise)&&Number.isFinite(set)&&set>rise&&set-rise<=24*3600000;
+  return{condition:value.condition,is_day:value.is_day,observed_at:value.observed_at,fetched_at:value.fetched_at,expires_at:value.expires_at,sunrise_at:solar?value.sunrise_at:null,sunset_at:solar?value.sunset_at:null};
+}
+function weatherIsDay(value,now=new Date()){
+  return value.sunrise_at&&value.sunset_at?Number(now)>=Date.parse(value.sunrise_at)&&Number(now)<Date.parse(value.sunset_at):value.is_day;
+}
+function wmoThemeCondition(code){
+  if(!Number.isInteger(code))return null;
+  if([0,1].includes(code))return'sunny';if([2,3,45,48].includes(code))return'cloudy';
+  if([51,53,55,56,57,61,63,65,66,67,80,81,82].includes(code))return'rain';
+  if([71,73,75,77,85,86].includes(code))return'snow';if([95,96,99].includes(code))return'storm';return null;
+}
+function owmThemeCondition(code,icon){
+  if(Number.isInteger(code)){if(code>=200&&code<300)return'storm';if(code>=300&&code<600)return'rain';if(code>=600&&code<700)return'snow';if(code===800||code===801)return'sunny';if(code>=700&&code<805)return'cloudy';}
+  return typeof icon==='string'?({'01':'sunny','02':'sunny','03':'cloudy','04':'cloudy','09':'rain','10':'rain','11':'storm','13':'snow','50':'cloudy'}[icon.slice(0,2)]||null):null;
+}
+function providerWeatherInstant(value,offsetSeconds){
+  if(typeof value!=='string')return null;
+  if(/(?:Z|[+-]\d\d:\d\d)$/.test(value)){const time=Date.parse(value);return Number.isFinite(time)?new Date(time).toISOString():null;}
+  if(!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/.test(value)||!Number.isInteger(offsetSeconds)||Math.abs(offsetSeconds)>14*3600)return null;
+  const time=Date.parse(value+'Z');if(!Number.isFinite(time)||new Date(time).toISOString().slice(0,value.length)!==value)return null;
+  return new Date(time-offsetSeconds*1000).toISOString();
+}
+function unixWeatherInstant(value){
+  if(typeof value!=='number'||!Number.isFinite(value)||value<0)return null;const time=value*1000;return Number.isFinite(new Date(time).getTime())?new Date(time).toISOString():null;
+}
+function makeWeatherObservation({condition,is_day,observed_at,sunrise_at=null,sunset_at=null},now=new Date()){
+  const observed=instant(observed_at),time=Number(now);if(!Number.isFinite(observed)||!Number.isFinite(time))return null;
+  return normalizeWeatherObservation({condition,is_day,observed_at,fetched_at:new Date(time).toISOString(),expires_at:new Date(Math.min(observed,time)+WEATHER_THEME_MAX_AGE_MS).toISOString(),sunrise_at,sunset_at},new Date(time));
+}
+
 
 const CARD_SLOTS=Object.freeze([...Array.from({length:12},(_,i)=>`slot-${String(i+1).padStart(2,'0')}-v1`),'neutral-v1']);
 const hex=values=>'#'+values.map(v=>Math.round(v).toString(16).padStart(2,'0')).join('');
@@ -685,6 +725,10 @@ function themePattern(t){
   const c=t.accent+'20',d=t.second+'20';
   if(svgPaths[t.motif])return `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" fill="none" stroke="${t.accent}" stroke-opacity=".13" stroke-width="1.2">${svgPaths[t.motif]}</svg>`)}")`;
   switch(t.motif){
+    case'weather-sun':case'weather-cloud':case'weather-storm':{
+      const paths=t.motif==='weather-sun'?'<circle cx="72" cy="64" r="22"/><path d="M72 26v-9M72 111v-9M34 64h-9M119 64h-9M45 37l-7-7M107 99l-7-7M45 91l-7 7M107 29l-7 7"/>':'<path d="M30 92c-24-3-20-35 1-36-1-27 40-38 51-14 24-11 48 14 33 32 31-2 32 28 7 28H44"/>'+(t.motif==='weather-storm'?'<path d="M73 110l-16 27h17l-11 21"/>':'');
+      return`url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="280" height="220" fill="none" stroke="${t.accent}" stroke-opacity=".12" stroke-width="1.5" stroke-linecap="round">${paths}</svg>`)}")`;
+    }
     case'cafe':return"url('/assets/themes/cozy-cafe.svg')";
     case'flat':return'none';
     case'weave':return`repeating-linear-gradient(90deg,transparent 0 3px,${c} 3px 4px),repeating-linear-gradient(0deg,transparent 0 7px,${d} 7px 8px)`;
@@ -711,6 +755,11 @@ const NAMED_THEMES=Object.freeze(THEME_CHROME.map(([name,group,kind,canvas,surfa
   return Object.freeze(t);
 }));
 const byId=new Map(NAMED_THEMES.map(t=>[t.id,t]));
+const weatherBases={sunny:['summer-coast','midnight'],cloudy:['porcelain','graphite'],rain:['riverstone','rainy-day'],storm:['porcelain','midnight'],snow:['winter-frost','graphite']};
+const weatherVariants=new Map(Object.entries(weatherBases).flatMap(([condition,ids])=>ids.map((id,index)=>{
+  const base=byId.get(id),motif=condition==='sunny'?(index?'stars':'weather-sun'):condition==='cloudy'?'weather-cloud':condition==='rain'?'rain':condition==='storm'?'weather-storm':'frost',variant={...base,id:`local-weather-${condition}-${index?'night':'day'}`,name:'Local Weather',motif,sound:'soft'};
+  variant.pattern=themePattern(variant);return[variant.id,Object.freeze(variant)];
+})));
 function cardColor(theme,slot){
   const t=typeof theme==='string'?byId.get(theme)||byId.get('neutral'):theme;
   const index=CARD_SLOTS.indexOf(slot),neutral=index<0||slot==='neutral-v1',raw=neutral?t.accent:t.slots[index];
@@ -735,7 +784,7 @@ function validAppearanceDate(s){return typeof s==='string'&&/^\d{4}-\d{2}-\d{2}$
 function validateNamedAppearance(value){
   if(value===null)return null;
   keys(value,['version','theme','timeZone','hemisphere','seasons','outside','holidays']);
-  if(value.version!==1||!byId.has(value.theme)&&!['seasons','holidays'].includes(value.theme))throw new TypeError('Invalid theme.');
+  if(value.version!==1||!byId.has(value.theme)&&!['seasons','holidays','local-weather'].includes(value.theme))throw new TypeError('Invalid theme.');
   const out={...defaultNamedAppearance(),...value};
   if(typeof out.timeZone!=='string')throw new TypeError('Invalid timezone.');try{new Intl.DateTimeFormat('en',{timeZone:out.timeZone});}catch{throw new TypeError('Invalid timezone.');}
   if(!['north','south'].includes(out.hemisphere))throw new TypeError('Invalid season location.');
@@ -746,10 +795,14 @@ function validateNamedAppearance(value){
   out.seasons={...out.seasons};return out;
 }
 function normalizeNamedAppearance(value){try{return value==null?null:validateNamedAppearance(value);}catch{return null;}}
-function resolveNamedAppearance(value,now=new Date()){
+function resolveNamedAppearance(value,now=new Date(),weather=null){
   const config=normalizeNamedAppearance(value);if(!config)return null;
   const parts=new Intl.DateTimeFormat('en',{timeZone:config.timeZone,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(now),part=k=>parts.find(p=>p.type===k).value,date=`${part('year')}-${part('month')}-${part('day')}`;
   if(byId.has(config.theme))return{theme:byId.get(config.theme),reason:'fixed',date};
+  if(config.theme==='local-weather'){
+    const current=normalizeWeatherObservation(weather,now);if(!current)return{theme:byId.get('neutral'),reason:'weather-unavailable',date};
+    const phase=weatherIsDay(current,now)?'day':'night';return{theme:weatherVariants.get(`local-weather-${current.condition}-${phase}`),reason:'weather',date,condition:current.condition,phase};
+  }
   if(config.theme==='holidays'){const window=config.holidays.find(w=>w.enabled&&date>=w.start&&date<=w.end);if(window)return{theme:byId.get(window.theme),reason:'holiday',date};if(config.outside!=='seasons')return{theme:byId.get(config.outside),reason:'holiday-fallback-fixed',date};}
   const month=Number(part('month'))-1,season=['winter','spring','summer','autumn'][Math.floor(((month+(config.hemisphere==='south'?7:1))%12)/3)];
   return{theme:byId.get(config.seasons[season]),reason:config.theme==='holidays'?'holiday-fallback-seasons':'season',date,season};

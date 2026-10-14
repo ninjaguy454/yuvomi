@@ -1,5 +1,6 @@
 import { THEME_CHROME } from './named-theme-chrome.js';
 import { THEME_PALETTES } from './named-theme-palettes.js';
+import {normalizeWeatherObservation,weatherIsDay} from './weather-appearance.js';
 
 export const CARD_SLOTS=Object.freeze([...Array.from({length:12},(_,i)=>`slot-${String(i+1).padStart(2,'0')}-v1`),'neutral-v1']);
 const hex=values=>'#'+values.map(v=>Math.round(v).toString(16).padStart(2,'0')).join('');
@@ -46,6 +47,10 @@ export function themePattern(t){
   const c=t.accent+'20',d=t.second+'20';
   if(svgPaths[t.motif])return `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" fill="none" stroke="${t.accent}" stroke-opacity=".13" stroke-width="1.2">${svgPaths[t.motif]}</svg>`)}")`;
   switch(t.motif){
+    case'weather-sun':case'weather-cloud':case'weather-storm':{
+      const paths=t.motif==='weather-sun'?'<circle cx="72" cy="64" r="22"/><path d="M72 26v-9M72 111v-9M34 64h-9M119 64h-9M45 37l-7-7M107 99l-7-7M45 91l-7 7M107 29l-7 7"/>':'<path d="M30 92c-24-3-20-35 1-36-1-27 40-38 51-14 24-11 48 14 33 32 31-2 32 28 7 28H44"/>'+(t.motif==='weather-storm'?'<path d="M73 110l-16 27h17l-11 21"/>':'');
+      return`url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="280" height="220" fill="none" stroke="${t.accent}" stroke-opacity=".12" stroke-width="1.5" stroke-linecap="round">${paths}</svg>`)}")`;
+    }
     case'cafe':return"url('/assets/themes/cozy-cafe.svg')";
     case'flat':return'none';
     case'weave':return`repeating-linear-gradient(90deg,transparent 0 3px,${c} 3px 4px),repeating-linear-gradient(0deg,transparent 0 7px,${d} 7px 8px)`;
@@ -72,6 +77,11 @@ export const NAMED_THEMES=Object.freeze(THEME_CHROME.map(([name,group,kind,canva
   return Object.freeze(t);
 }));
 const byId=new Map(NAMED_THEMES.map(t=>[t.id,t]));
+const weatherBases={sunny:['summer-coast','midnight'],cloudy:['porcelain','graphite'],rain:['riverstone','rainy-day'],storm:['porcelain','midnight'],snow:['winter-frost','graphite']};
+const weatherVariants=new Map(Object.entries(weatherBases).flatMap(([condition,ids])=>ids.map((id,index)=>{
+  const base=byId.get(id),motif=condition==='sunny'?(index?'stars':'weather-sun'):condition==='cloudy'?'weather-cloud':condition==='rain'?'rain':condition==='storm'?'weather-storm':'frost',variant={...base,id:`local-weather-${condition}-${index?'night':'day'}`,name:'Local Weather',motif,sound:'soft'};
+  variant.pattern=themePattern(variant);return[variant.id,Object.freeze(variant)];
+})));
 export function cardColor(theme,slot){
   const t=typeof theme==='string'?byId.get(theme)||byId.get('neutral'):theme;
   const index=CARD_SLOTS.indexOf(slot),neutral=index<0||slot==='neutral-v1',raw=neutral?t.accent:t.slots[index];
@@ -96,7 +106,7 @@ export function validAppearanceDate(s){return typeof s==='string'&&/^\d{4}-\d{2}
 export function validateNamedAppearance(value){
   if(value===null)return null;
   keys(value,['version','theme','timeZone','hemisphere','seasons','outside','holidays']);
-  if(value.version!==1||!byId.has(value.theme)&&!['seasons','holidays'].includes(value.theme))throw new TypeError('Invalid theme.');
+  if(value.version!==1||!byId.has(value.theme)&&!['seasons','holidays','local-weather'].includes(value.theme))throw new TypeError('Invalid theme.');
   const out={...defaultNamedAppearance(),...value};
   if(typeof out.timeZone!=='string')throw new TypeError('Invalid timezone.');try{new Intl.DateTimeFormat('en',{timeZone:out.timeZone});}catch{throw new TypeError('Invalid timezone.');}
   if(!['north','south'].includes(out.hemisphere))throw new TypeError('Invalid season location.');
@@ -107,10 +117,14 @@ export function validateNamedAppearance(value){
   out.seasons={...out.seasons};return out;
 }
 export function normalizeNamedAppearance(value){try{return value==null?null:validateNamedAppearance(value);}catch{return null;}}
-export function resolveNamedAppearance(value,now=new Date()){
+export function resolveNamedAppearance(value,now=new Date(),weather=null){
   const config=normalizeNamedAppearance(value);if(!config)return null;
   const parts=new Intl.DateTimeFormat('en',{timeZone:config.timeZone,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(now),part=k=>parts.find(p=>p.type===k).value,date=`${part('year')}-${part('month')}-${part('day')}`;
   if(byId.has(config.theme))return{theme:byId.get(config.theme),reason:'fixed',date};
+  if(config.theme==='local-weather'){
+    const current=normalizeWeatherObservation(weather,now);if(!current)return{theme:byId.get('neutral'),reason:'weather-unavailable',date};
+    const phase=weatherIsDay(current,now)?'day':'night';return{theme:weatherVariants.get(`local-weather-${current.condition}-${phase}`),reason:'weather',date,condition:current.condition,phase};
+  }
   if(config.theme==='holidays'){const window=config.holidays.find(w=>w.enabled&&date>=w.start&&date<=w.end);if(window)return{theme:byId.get(window.theme),reason:'holiday',date};if(config.outside!=='seasons')return{theme:byId.get(config.outside),reason:'holiday-fallback-fixed',date};}
   const month=Number(part('month'))-1,season=['winter','spring','summer','autumn'][Math.floor(((month+(config.hemisphere==='south'?7:1))%12)/3)];
   return{theme:byId.get(config.seasons[season]),reason:config.theme==='holidays'?'holiday-fallback-seasons':'season',date,season};

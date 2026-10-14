@@ -288,6 +288,7 @@ export function resolveActivityTemplate(d, activityId, { inputs = {}, subjectUse
   const resolved = resolveVariables(d, schema.definitions, inputs, { keys: schema.keys, subjectUserId, contextValues, rotationOccurrences, actor:actorId });
   return {
     data: { title: stepTitle(activity, subject, null, resolved.labels), description: stepDescription(activity, subject, null, resolved.labels),
+      points:activity.points,scoring_mode:activity.scoring_mode,
       expiration_policy: activity.expiration_policy ?? 'keep_overdue',
       due_date_offset_days: activity.due_date_offset_days ?? null,
       start_time: activity.start_time ?? null, due_time: activity.due_time ?? null,
@@ -532,6 +533,7 @@ function insertTask(d, {
   dueDateOffsetDays = null,
   priority = 'none',
   points = 0,
+  scoringMode = 'legacy',
   expirationPolicy = 'keep_overdue',
   tags = [],
 }) {
@@ -558,6 +560,7 @@ function insertTask(d, {
     dueDateOffsetDays,
   );
   const taskId = Number(result.lastInsertRowid);
+  if(scoringMode!=='legacy')d.prepare('UPDATE tasks SET scoring_mode=? WHERE id=?').run(scoringMode,taskId);
   assignNewTaskCardColor(d,taskId,parentTaskId?{inheritFrom:parentTaskId}:{});
   setTags(d, taskId, tags);
   if (assignedTo) {
@@ -650,6 +653,7 @@ function instantiateWorkflowTasks(d, workflowId, {
         category: activity.category,
         priority: activity.priority,
         points: activity.points,
+        scoringMode:activity.scoring_mode??'legacy',
         expirationPolicy: activity.expiration_policy ?? 'keep_overdue',
         tags: activity.tags,
         assignedTo: resolution.primary?.id ?? null,

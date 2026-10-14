@@ -169,8 +169,15 @@ function normalizeActivityInput(d, body, existing = null) {
   const skillIds = normalizeSkillIds(d, body.skill_ids, (existing?.skills ?? []).map((skill) => Number(skill.id)));
   const priority = body.priority ?? existing?.priority ?? 'none';
   if (!['none', 'low', 'medium', 'high', 'urgent'].includes(priority)) throw new Error('Choose a valid priority.');
-  const points = body.points ?? existing?.points ?? 0;
-  if (!Number.isSafeInteger(Number(points)) || Number(points) < 0 || Number(points) > 100000) throw new Error('Points must be a whole number from 0 to 100000.');
+  const scoringMode=body.scoring_mode===undefined?(existing?existing.scoring_mode??null:'whole_task'):body.scoring_mode;
+  if(!['whole_task','subtasks'].includes(scoringMode)&&!(existing&&existing.scoring_mode==null&&scoringMode===null))
+    throw new Error('Choose Whole task or Each subtask.');
+  const pointAmount=(value,maximum=10000)=>{
+    if(!['number','string'].includes(typeof value)||String(value).trim()===''||!Number.isSafeInteger(Number(value))||Number(value)<0||Number(value)>maximum)
+      throw new Error(`Points must be a whole number from 0 to ${maximum}.`);
+    return Number(value);
+  };
+  const points = pointAmount(body.points===undefined?existing?.points??0:body.points,scoringMode==null?100000:10000);
   const expirationPolicy = body.expiration_policy === undefined
     ? (existing?.expiration_policy ?? 'keep_overdue') : body.expiration_policy;
   if (!['keep_overdue', 'expire_incomplete'].includes(expirationPolicy)) throw new Error('Choose a valid expiration policy.');
@@ -215,6 +222,8 @@ function normalizeActivityInput(d, body, existing = null) {
     const titleTemplate = text(typeof item === 'string' ? item : item?.title_template, { required: true, max: 200 });
     const prior = existing?.checklist?.find((row) => item?.id != null
       ? Number(row.id) === Number(item.id) : row.title_template === titleTemplate);
+    if(item?.id==null&&item?.points===undefined&&(existing?.checklist?.filter(row=>row.title_template===titleTemplate).length??0)>1)
+      throw new Error('Reload the Activity Template editor to preserve its subtask points.');
     if (item?.skill_ids === undefined && !prior && existing?.checklist?.some((row) => row.skill_ids?.length)) {
       throw new Error('Reload the Activity Template editor to preserve its subtask skills.');
     }
@@ -222,14 +231,18 @@ function normalizeActivityInput(d, body, existing = null) {
       throw new Error('Reload the Activity Template editor to preserve which subtasks are optional.');
     }
     if (item?.is_optional !== undefined && ![true, false, 0, 1].includes(item.is_optional)) throw new Error('Subtask optional must be true or false.');
+    if(item?.points===undefined&&!prior&&existing?.checklist?.some(row=>row.points>0))
+      throw new Error('Reload the Activity Template editor to preserve its subtask points.');
     return {
       titleTemplate,
       sortOrder: index,
       isOptional: item?.is_optional === undefined ? prior?.is_optional ?? 0 : item.is_optional ? 1 : 0,
+      points: pointAmount(item?.points===undefined?prior?.points??0:item.points),
       skillIds: normalizeSkillIds(d, item?.skill_ids,
         prior?.skill_ids || (item?.skills || []).map((skill) => skill.id)),
     };
   });
+  if(scoringMode==null&&checklist.some(item=>item.points>0))throw new Error('Choose Whole task or Each subtask before configuring subtask points.');
 
   return {
     rotationBindings: normalizeRotationBindings(d, body.rotation_bindings ?? existing?.rotation_bindings ?? []),
@@ -239,6 +252,7 @@ function normalizeActivityInput(d, body, existing = null) {
     category,
     priority,
     points: Number(points),
+    scoringMode,
     expirationPolicy,
     dueDateOffsetDays, startTime, dueTime, recurrenceRule, recurrenceFromCompletion,
     tags: normalizeTags(tags),
@@ -392,12 +406,12 @@ function normalizeWorkflowConditionValue(d, question, value, actor) {
 function saveActivityChecklist(d, activityId, checklist) {
   d.prepare('DELETE FROM activity_template_checklist_items WHERE activity_template_id = ?').run(activityId);
   const insert = d.prepare(`
-    INSERT INTO activity_template_checklist_items (activity_template_id, title_template, sort_order, is_optional)
-    VALUES (?, ?, ?, ?)
+    INSERT INTO activity_template_checklist_items (activity_template_id, title_template, sort_order, is_optional, points)
+    VALUES (?, ?, ?, ?, ?)
   `);
   const insertSkill = d.prepare('INSERT INTO activity_template_checklist_skills(checklist_item_id,skill_id,sort_order) VALUES (?,?,?)');
   checklist.forEach((item) => {
-    const itemId = insert.run(activityId, item.titleTemplate, item.sortOrder, item.isOptional).lastInsertRowid;
+    const itemId = insert.run(activityId, item.titleTemplate, item.sortOrder, item.isOptional, item.points).lastInsertRowid;
     item.skillIds.forEach((skillId, order) => insertSkill.run(itemId, skillId, order));
   });
 }
@@ -944,6 +958,7 @@ router.get('/activity-options', (req, res) => {
       category: activity.category,
       priority: activity.priority,
       points: activity.points,
+      scoring_mode: activity.scoring_mode,
       expiration_policy: activity.expiration_policy,
       due_date_offset_days: activity.due_date_offset_days,
       start_time: activity.start_time, due_time: activity.due_time,
@@ -1462,7 +1477,7 @@ router.post('/admin/activity-templates', requireCapability('activities.create'),
         input.dueDateOffsetDays,
       );
       saveActivitySkills(d, result.lastInsertRowid, input.skillIds);
-      d.prepare('UPDATE activity_templates SET rotation_bindings_json=? WHERE id=?').run(JSON.stringify(input.rotationBindings), result.lastInsertRowid);
+      d.prepare('UPDATE activity_templates SET rotation_bindings_json=?,scoring_mode=? WHERE id=?').run(JSON.stringify(input.rotationBindings),input.scoringMode,result.lastInsertRowid);
       saveActivityChecklist(d, result.lastInsertRowid, input.checklist);
       return Number(result.lastInsertRowid);
     })();
@@ -1502,7 +1517,7 @@ router.put('/admin/activity-templates/:id', requireCapability('activities.edit')
         input.startTime, input.dueTime, input.recurrenceRule, input.recurrenceFromCompletion, input.dueDateOffsetDays, existing.id,
       );
       saveActivitySkills(d, existing.id, input.skillIds);
-      d.prepare('UPDATE activity_templates SET rotation_bindings_json=? WHERE id=?').run(JSON.stringify(input.rotationBindings), existing.id);
+      d.prepare('UPDATE activity_templates SET rotation_bindings_json=?,scoring_mode=? WHERE id=?').run(JSON.stringify(input.rotationBindings),input.scoringMode,existing.id);
       saveActivityChecklist(d, existing.id, input.checklist);
     })();
     res.json({ data: getActivityTemplate(d, existing.id) });

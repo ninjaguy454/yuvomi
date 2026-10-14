@@ -2323,9 +2323,10 @@ export function createTaskDefinition(req, res) {
         const source=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(result.lastInsertRowid);
         const children=ordinaryActivitySubtasks(db.get(),Number(result.lastInsertRowid));
         const childPositive=children.some(child=>child.points>0);
-        if(req.body.scoring_mode===undefined&&source.points>0&&childPositive)
+        const configuredMode=req.body.scoring_mode??templateDefaults?.scoring_mode;
+        if(configuredMode==null&&source.points>0&&childPositive)
           throw new TaskStateError('Choose a scoring mode when both task and subtask amounts are configured.',{reason:'scoring_mode_required'},400);
-        const mode=req.body.scoring_mode??(childPositive?'subtasks':'whole_task');
+        const mode=configuredMode??(childPositive?'subtasks':'whole_task');
         assertTaskMutation(db.get(),req,null,{...req.body,points:source.points},{operation:'create'});
         db.get().prepare('UPDATE tasks SET scoring_mode=?,scoring_review_required=0 WHERE id=?').run(mode,result.lastInsertRowid);
       }
@@ -2414,6 +2415,9 @@ router.post('/:id/scoring-preview',(req,res)=>{
         const wire=scoringMutationWire(req.body,edited);
         const assignment=scoringAssignmentIntent(task,req.body);
         if(assignment.changed)wire.assigned_to=assignment.assigned;
+        // A full editor sends [] for policy-managed assignments. When Save
+        // preserves current responsibility, that placeholder is not a removal.
+        else if(!Object.hasOwn(req.body,'assigned_to')||!parseAssignedTo(req.body.assigned_to).length)delete wire.assigned_to;
         preview=previewTaskScoring(db.get(),task.id,wire,{scope,viewerId,authorizedTaskIds,includeUnits:true});
         const rows=taskScoringRows(db.get(),taskScoringRoot(db.get(),task.id)).filter(row=>authorizedTaskIds.includes(row.id));
         const before=new Map(rows.map(row=>[row.id,row])),after=new Map(before);

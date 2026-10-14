@@ -118,9 +118,9 @@ function subtaskRow(subtask, skills, template, index, canCreateSkill = false, us
       <input class="input" data-task-subtask-title ${template ? 'data-variable-mentions="activity-title"' : ''}
         aria-label="Subtask ${index + 1}" maxlength="200" placeholder="Subtask name"
         value="${esc(subtask.title ?? subtask.title_template ?? '')}">
-      ${!template ? `<label class="task-subtask-editor__points">Points<input class="input" type="number" name="subtask_points" data-task-subtask-points
+      <label class="task-subtask-editor__points">Points<input class="input" type="number" name="subtask_points" data-task-subtask-points ${template ? 'required' : ''}
         aria-label="Subtask ${index + 1} points" inputmode="numeric" min="0" max="10000" step="1"
-        value="${esc(subtask.points ?? 0)}"></label>` : ''}
+        value="${esc(subtask.points ?? 0)}"></label>
       <label class="task-subtask-editor__optional"><input type="checkbox" data-task-subtask-optional ${subtask.is_optional === true || Number(subtask.is_optional) === 1 ? 'checked' : ''}> Optional</label>
       <details class="task-subtask-editor__actions">
         <summary aria-label="Subtask ${index + 1} actions" title="Subtask actions">⋯</summary>
@@ -167,7 +167,7 @@ export function bindSubtaskEditor(root, { skills = [], template = false, onChang
     ...(row.dataset.subtaskId ? { id: Number(row.dataset.subtaskId) } : {}),
     title: row.querySelector('[data-task-subtask-title]').value,
     ...(template ? { title_template: row.querySelector('[data-task-subtask-title]').value } : {}),
-    ...(!template ? { points: pointsValue } : {}),
+    points: pointsValue,
     skill_ids: pickers.get(row).getValue(),
     is_optional: row.querySelector('[data-task-subtask-optional]').checked ? 1 : 0,
     ...(assignmentsEnabled && row.querySelector('[data-task-subtask-assignee]') ? {assigned_user_ids: selected===Number(original.assigned_to||previous[0]||0) ? previous : selected?[selected]:[]} : {}),

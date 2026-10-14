@@ -1941,6 +1941,9 @@ function wireActivityTemplatePrefill(panel, { task = null, presetActivityTemplat
   let generatedTitle = title.value;
   let generatedDescription = description.value;
   let generatedSubtasks = controls.subtasks.getValue();
+  const points = form.querySelector('#task-points');
+  let generatedPoints = points.value;
+  let generatedScoringMode = form.querySelector('[name="scoring_mode"]:checked')?.value;
   let variableValues = null;
   const applySubject = () => {
     const activity = template();
@@ -1967,12 +1970,20 @@ function wireActivityTemplatePrefill(panel, { task = null, presetActivityTemplat
     onResolved: resolved => {
       if (title.value === generatedTitle) title.value = generatedTitle = resolved.title;
       if (description.value === generatedDescription) description.value = generatedDescription = resolved.description || '';
+      if (resolved.points != null && points.value === generatedPoints) points.value = generatedPoints = String(resolved.points);
+      if (['whole_task', 'subtasks'].includes(resolved.scoring_mode)
+          && form.querySelector('[name="scoring_mode"]:checked')?.value === generatedScoringMode) {
+        form.querySelectorAll('[name="scoring_mode"]').forEach(input => { input.checked = input.value === resolved.scoring_mode; });
+        generatedScoringMode = resolved.scoring_mode;
+        controls.updateScoring?.();
+      }
       const rows = controls.subtasks.getValue();
       rows.forEach((row, index) => {
-        if (row.title === generatedSubtasks[index]?.title && resolved.checklist?.[index]) {
-          row.title = resolved.checklist[index].title_template;
-          generatedSubtasks[index] = { ...row };
-        }
+        const step = resolved.checklist?.[index], previous = generatedSubtasks[index];
+        if (!step) return;
+        if (row.title === previous?.title) row.title = step.title_template;
+        if (step.points != null && Number(row.points ?? 0) === Number(previous?.points ?? 0)) row.points = Number(step.points);
+        generatedSubtasks[index] = { ...previous, title: step.title_template, ...(step.points != null ? { points: Number(step.points) } : {}) };
       });
       controls.subtasks.setValue(rows);
     },
@@ -2041,6 +2052,7 @@ async function saveTaskAsTemplate(form) {
     title, description: form.querySelector('#task-description').value.trim(),
     priority: form.querySelector('#task-priority').value, category: form.querySelector('#task-category').value,
     points: form.querySelector('#task-points').value,
+    scoring_mode: form.querySelector('[name="scoring_mode"]:checked')?.value,
     expiration_policy: form.querySelector('#task-expiration-policy').value,
     start_date: parseDateInput(form.querySelector('#task-start-date').value) || null,
     due_date: parseDateInput(form.querySelector('#task-due-date').value) || null,

@@ -1474,7 +1474,7 @@ function showActivityFormError(panel, message, field = null) {
   const summary = panel.querySelector('[data-activity-error]');
   summary.textContent = message;
   summary.hidden = false;
-  const target = field ? panel.querySelector(`[name="${field}"], #${field}`) : summary;
+  const target = typeof field === 'string' ? panel.querySelector(`[name="${field}"], #${field}`) : field || summary;
   if (field) target?.setAttribute('aria-invalid', 'true');
   target?.scrollIntoView?.({ block: 'nearest' });
   target?.focus?.();
@@ -1496,12 +1496,18 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
   const selectedSkills = activity?.skill_ids ?? activity?.skills ?? [];
   const strategy = activity?.assignment_policy || activity?.assignment_strategy || 'subject_skill';
   const locationMode = activity?.location_mode || 'none';
+  const scoringMode = activity?.scoring_mode ?? (editing ? null : 'whole_task');
   const content = `<form id="automation-activity-form" novalidate>
     <p class="task-template-error" data-activity-error role="alert" tabindex="-1" hidden></p>
     ${asChild && activity && !editing ? '<p class="form-hint automation-form-intro">Review the reusable details and relative schedule below. Calendar dates, reminders and attached documents stay with this Task.</p>' : ''}
     ${inputRow('Template name', `<input class="input" name="name" required value="${h(activity?.name || '')}">`, 'The reusable name shown in the Activity Template library.')}
     ${inputRow('Generated task title', `<input class="input" name="title_template" data-variable-mentions="activity-title" aria-autocomplete="list" aria-expanded="false" required value="${h(activity?.title_template || activity?.name || '')}"><small class="form-hint" data-activity-title-preview></small>`, 'This is the Task title, separate from the reusable Template name above. A person is included only when you explicitly insert the person variable with @.')}
     ${inputRow('Description / instructions', `<textarea class="input" name="description" rows="3" data-variable-mentions="activity-description" aria-autocomplete="list" aria-expanded="false">${h(activity?.description || '')}</textarea>`, 'Type @ to insert the person or Activity Template name.')}
+    <fieldset class="automation-fieldset task-scoring__modes">
+      <legend class="label">Award points for</legend>
+      ${['whole_task', 'subtasks'].map(mode => `<label><input type="radio" name="scoring_mode" value="${mode}" ${scoringMode === mode ? 'checked' : ''}><span>${mode === 'whole_task' ? 'Whole task' : 'Each subtask'}</span></label>`).join('')}
+    </fieldset>
+    ${scoringMode == null ? '<p class="form-hint" data-activity-scoring-legacy>This existing template keeps its original scoring behavior. Choose Whole task or Each subtask to change how future Tasks award points.</p>' : ''}
     <fieldset class="automation-fieldset">
       <legend class="label">Subtasks copied into each Task</legend>
       <p class="form-hint automation-manager__hint">Each generated Task gets its own editable subtask copies. Later changes to this template do not rewrite existing Tasks. Type @ to insert the person or Activity Template name; workflow variables are also resolved when a workflow runs.</p>
@@ -1510,7 +1516,7 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
     ${inputRow('Category', `<select class="input" name="category">${categoryOptions(context.categories, activity?.category || 'misc')}</select>`)}
     <div class="grid grid--2">
       ${inputRow('Priority', `<select class="input" name="priority">${PRIORITIES().map(({ value, label }) => `<option value="${value}" ${(activity?.priority || 'none') === value ? 'selected' : ''}>${h(label)}</option>`).join('')}</select>`)}
-      ${inputRow('Points', `<input class="input" type="number" name="points" min="0" step="1" inputmode="numeric" value="${Math.max(0, Math.trunc(Number(activity?.points) || 0))}">`)}
+      ${inputRow('Points', `<input class="input" type="number" name="points" min="0" max="${scoringMode == null ? 100000 : 10000}" step="1" inputmode="numeric" required value="${h(activity?.points ?? 0)}">`)}
     </div>
     ${activityTimingFields(activity)}
     ${inputRow('When incomplete at deadline', `<select class="input" name="expiration_policy"><option value="keep_overdue" ${(activity?.expiration_policy || 'keep_overdue') === 'keep_overdue' ? 'selected' : ''}>Keep overdue</option><option value="expire_incomplete" ${activity?.expiration_policy === 'expire_incomplete' ? 'selected' : ''}>Expire incomplete</option></select>`, 'Copied into new Tasks. Expire incomplete uses each Task’s Due Time, or the end of its due date in the household timezone, and awards 0 completion points. Choose a due date when creating the Task. Scheduled repeats continue; Repeat from completion pauses until the expired occurrence is reopened and completed.')}
@@ -1573,6 +1579,18 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
       };
       const subtasks = bindSubtaskEditor(panel, { skills: context.skills, template: true, onCreateSkill: canCapability('skills.manage') ? createSkill : null });
       disposeSubtasks = () => subtasks.dispose();
+      const pointsInput = panel.querySelector('[name="points"]');
+      const refreshScoring = () => {
+        const mode = panel.querySelector('[name="scoring_mode"]:checked')?.value;
+        pointsInput.disabled = mode === 'subtasks';
+        pointsInput.closest('.form-group').hidden = mode === 'subtasks';
+        pointsInput.max = mode ? '10000' : '100000';
+        subtasks.setPointsMode(mode || 'whole_task');
+        const legacyNotice = panel.querySelector('[data-activity-scoring-legacy]');
+        if (legacyNotice) legacyNotice.hidden = !!mode;
+      };
+      panel.querySelectorAll('[name="scoring_mode"]').forEach(input => input.addEventListener('change', refreshScoring));
+      refreshScoring();
       const requiredSkills = bindSkillPicker(panel.querySelector('[data-activity-skills]'), { onCreateSkill: canCapability('skills.manage') ? createSkill : null });
       const templateName = panel.querySelector('[name="name"]');
       const generatedTitle = panel.querySelector('[name="title_template"]');
@@ -1615,14 +1633,27 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
         panel.querySelectorAll('[aria-invalid="true"]').forEach(control => control.removeAttribute('aria-invalid'));
         if (!String(data.get('name') || '').trim()) { showActivityFormError(panel, 'Enter a template name.', 'name'); return; }
         if (!String(data.get('title_template') || '').trim()) { showActivityFormError(panel, 'Enter a generated task title.', 'title_template'); return; }
-        if (!form.checkValidity()) { const invalid = form.querySelector(':invalid'); showActivityFormError(panel, invalid?.validationMessage || 'Check the highlighted field.', invalid?.name); return; }
+        if (!form.checkValidity()) { const invalid = form.querySelector('input:invalid, select:invalid, textarea:invalid'); showActivityFormError(panel, invalid?.validationMessage || 'Check the highlighted field.', invalid); return; }
+        // Disabled fields still carry saved amounts for the other scoring mode.
+        // Validate those values too, instead of silently converting blanks to 0.
+        const invalidAmount = [...form.querySelectorAll('[name="points"], [data-task-subtask-points]')].find(input => (
+          input.value.trim() === '' || !Number.isInteger(Number(input.value)) || Number(input.value) < 0 || Number(input.value) > Number(input.max)
+        ));
+        if (invalidAmount) {
+          const modeLabel = invalidAmount === pointsInput ? 'Whole task' : 'Each subtask';
+          showActivityFormError(panel, `Enter a whole number from 0 to ${invalidAmount.max} for points.${invalidAmount.disabled ? ` Choose ${modeLabel} to edit this amount.` : ''}`, invalidAmount.disabled ? null : invalidAmount);
+          invalidAmount.setAttribute('aria-invalid', 'true');
+          return;
+        }
         if (data.get('assignment_strategy') === 'fixed' && !data.get('fixed_user_id')) { showActivityFormError(panel, 'Choose a fixed assignee.', 'fixed_user_id'); return; }
         const timing = activityTimingPayload(form);
         if (timing.error) { showActivityFormError(panel, timing.error, timing.field); return; }
         const payload = {
           name: data.get('name'), title_template: data.get('title_template'),
           description: data.get('description'), category: data.get('category'),
-          priority: data.get('priority'), points: Math.max(0, Math.trunc(Number(data.get('points')) || 0)),
+          priority: data.get('priority'), points: Number(pointsInput.value),
+          ...(data.has('scoring_mode') ? { scoring_mode: data.get('scoring_mode') }
+            : editing && Object.hasOwn(activity, 'scoring_mode') ? { scoring_mode: activity.scoring_mode } : {}),
           expiration_policy: data.get('expiration_policy') || 'keep_overdue',
           ...timing.values,
           tags: normalizeTagList(String(data.get('tags') || '').split(',')),

@@ -13,6 +13,7 @@ export function createManualTaskDraft({ template = null, places = [], defaultPoi
     title: template?.title_template || template?.name || '', description: template?.description || '',
     priority: template?.priority || 'none', category: template?.category || 'misc',
     points: template ? Number(template.points) || 0 : Number(defaultPoints) || 0,
+    ...(template?.scoring_mode != null ? { scoring_mode: template.scoring_mode } : {}),
     expiration_policy: template?.expiration_policy || 'keep_overdue',
     tags: [...(template?.tags || [])], location,
     start_date: startDate, due_date: dueDate,
@@ -24,6 +25,7 @@ export function createManualTaskDraft({ template = null, places = [], defaultPoi
     assigned_to: template?.assignment_strategy === 'fixed' ? Number(template.fixed_user_id) || null : null,
     skill_ids: [...(template?.skill_ids || [])],
     subtasks: (template?.checklist || []).map((step) => ({ title: step.title_template || step.title || '', skill_ids: [...(step.skill_ids || [])], is_optional: step.is_optional ? 1 : 0,
+      ...(step.points != null ? { points: Number(step.points) } : {}),
       ...(step.id?{activity_template_checklist_item_id:step.id}:{}) })),
   };
 }
@@ -41,17 +43,20 @@ export function taskDraftSnapshot(form, { tags = [], documents = [], pendingFile
 export function taskDraftToActivity(draft, template = null) {
   const location = draft.location || {};
   const { start_date: _startDate, due_date: _dueDate, ...reusableTemplate } = template || {};
+  const scoringMode = draft.scoring_mode || draft.scoring?.mode || template?.scoring_mode;
   return {
     ...reusableTemplate, id: undefined, name: draft.title, title_template: draft.title,
     description: draft.description || '', priority: draft.priority || 'none', category: draft.category,
     points: Number(draft.points) || 0, tags: [...(draft.tags || [])], skill_ids: [...(draft.skill_ids || [])],
+    scoring_mode: ['whole_task', 'subtasks'].includes(scoringMode) ? scoringMode : 'whole_task',
     expiration_policy: draft.expiration_policy || 'keep_overdue',
     due_date_offset_days: deriveActivityDueOffset(draft.start_date, draft.due_date),
     start_time: draft.start_time || null, due_time: draft.due_time || null,
     recurrence_rule: draft.recurrence_rule || null,
     recurrence_from_completion: draft.recurrence_from_completion ? 1 : 0,
     rotation_bindings: structuredClone(draft.rotation_bindings || []),
-    checklist: (draft.subtasks || []).map((step) => ({ title_template: step.title, skill_ids: [...(step.skill_ids || [])], is_optional: step.is_optional ? 1 : 0 })),
+    checklist: (draft.subtasks || []).map((step) => ({ title_template: step.title, skill_ids: [...(step.skill_ids || [])], is_optional: step.is_optional ? 1 : 0,
+      ...(step.points != null ? { points: Number(step.points) } : {}) })),
     location_mode: location.kind === 'saved_place' ? 'fixed' : 'none',
     place_id: location.kind === 'saved_place' ? location.place_id : null,
     assignment_strategy: template?.assignment_strategy || (draft.assigned_users?.length === 1 ? 'fixed' : 'open_claimable'),

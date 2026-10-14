@@ -390,7 +390,7 @@ test('nested Activity subtask Skill creation selects the saved Skill and returns
     await page.waitForFunction(() => !document.querySelector('#automation-activity-form'));
     assert.equal(await value(page, '#task-title'), 'Reusable preparation');
     const save = requests.find((request) => request.path === '/automation/admin/activity-templates' && request.method === 'POST');
-    assert.deepEqual(save.body.checklist, [{ title: 'Measure flour', title_template: 'Measure flour', skill_ids: [101], is_optional: 0 }]);
+    assert.deepEqual(save.body.checklist, [{ title: 'Measure flour', title_template: 'Measure flour', skill_ids: [101], is_optional: 0, points: 0 }]);
     assert.equal(await page.$eval('#task-form [data-task-subtask-row] [data-task-skill-id][value="101"]', (el) => el.checked), false,
       'saving a reusable template does not replace the current Task requirement selection');
     assert.deepEqual(page.fixtureErrors || [], []);

@@ -56,7 +56,7 @@ export function automationPaths() {
     '/api/v1/automation/activity-templates/{id}/resolve': {
       post: op({ summary: 'Resolve an editable Activity Template draft without creating Tasks', tag: 'Automation',
         params: [idParam()], requestBody: jsonBody(null), stateChanging: true,
-        description: 'Body: { inputs?, subject_user_id? }. Returns resolved title, description, checklist, inputs and input_schema. Variables use the same deterministic typed evaluator as Workflow execution. Missing sample/context inputs return 422; invalid expressions or values return 400. Task creation accepts activity_inputs and revalidates before writing, while preserving explicit edits.' }),
+        description: 'Body: { inputs?, subject_user_id? }. Returns resolved title, description, points, scoring_mode, checklist point amounts, inputs and input_schema. Variables use the same deterministic typed evaluator as Workflow execution. Missing sample/context inputs return 422; invalid expressions or values return 400. Task creation accepts activity_inputs and revalidates before writing, while preserving explicit edits.' }),
     },
     '/api/v1/automation/quick-add': {
       get: op({ summary: 'List Quick Add Activity and Workflow Templates', tag: 'Automation' }),
@@ -139,10 +139,10 @@ export function automationPaths() {
     },
     '/api/v1/automation/admin/activity-templates': {
       get: op({ summary: 'List Activity Templates', tag: 'Automation', admin: true }),
-      post: op({ summary: 'Create an Activity Template', tag: 'Automation', admin: true, stateChanging: true, requestBody: jsonBody(null), description: 'Defines Task title/description templates, required Skills, assignment and supervision policy, location/presence rules, and first-class Task subtasks.' }),
+      post: op({ summary: 'Create an Activity Template', tag: 'Automation', admin: true, stateChanging: true, requestBody: jsonBody(null), description: 'Defines Task title/description templates, required Skills, assignment and supervision policy, location/presence rules, and first-class Task subtasks. scoring_mode is whole_task (default) or subtasks. Overall points and each checklist item points are whole numbers from 0 to 10000; inactive source amounts are retained. These defaults copy into newly generated Tasks and Workflow Activities.' }),
     },
     '/api/v1/automation/admin/activity-templates/{id}': {
-      put: op({ summary: 'Update an Activity Template', tag: 'Automation', admin: true, params: [idParam()], stateChanging: true, requestBody: jsonBody(null) }),
+      put: op({ summary: 'Update an Activity Template', tag: 'Automation', admin: true, params: [idParam()], stateChanging: true, requestBody: jsonBody(null),description:'Accepts scoring_mode whole_task or subtasks and checklist item points. Omitted terms retain their values. Preexisting templates keep null scoring_mode until explicitly reviewed, preserving legacy Workflow behavior. Template edits do not rewrite existing Task/recurrence definitions or settled reward history.' }),
       delete: op({ summary: 'Delete an unused Activity Template', tag: 'Automation', admin: true, params: [idParam()], stateChanging: true, description: 'Returns 409 while a Workflow Template uses the Activity Template.' }),
     },
     '/api/v1/automation/admin/workflow-templates': {

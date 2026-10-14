@@ -11,7 +11,7 @@ import { substituteVariableTemplate } from './variable-resolution.js';
 
 export function loadActivityChecklist(d, activityTemplateId) {
   const items = d.prepare(`
-    SELECT id, title_template, sort_order, is_optional
+    SELECT id, title_template, sort_order, is_optional, points
       FROM activity_template_checklist_items
      WHERE activity_template_id = ?
      ORDER BY sort_order ASC, id ASC
@@ -55,7 +55,7 @@ export function materializeActivityChecklist(d, {
       assigned_to, created_by, parent_task_id, is_recurring, recurrence_rule,
       assignment_mode, rotation_index, points, visibility, countdown, locked,
       activity_template_checklist_item_id, is_optional
-    ) VALUES (?, NULL, ?, 'none', 'open', ?, ?, ?, ?, NULL, ?, ?, 0, NULL, 'fixed', 0, 0, ?, 0, 0, ?, ?)
+    ) VALUES (?, NULL, ?, 'none', 'open', ?, ?, ?, ?, NULL, ?, ?, 0, NULL, 'fixed', 0, ?, ?, 0, 0, ?, ?)
   `);
   const sourceDefinition = d.prepare('SELECT id FROM activity_template_checklist_items WHERE id=? AND activity_template_id=?');
   return items.map((item) => {
@@ -72,6 +72,7 @@ export function materializeActivityChecklist(d, {
       parent.due_time,
       createdBy || parent.created_by,
       parent.id,
+      item.points ?? 0,
       parent.visibility || 'all',
       sourceItemId,
       item.is_optional ? 1 : 0,

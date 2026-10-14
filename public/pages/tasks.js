@@ -13,7 +13,7 @@ import { isDevicePrincipal, deviceBootstrap } from '/utils/device-context.js';
  */
 
 import { api } from '/api.js';
-import { canTask, canCapability } from '/permissions.js';
+import { canTask, canCapability, isPermAdmin } from '/permissions.js';
 import { actionableSubtasks, changeTaskStatus, taskRevision, taskStatusConfirmation } from '/utils/task-state.js';
 import {captureCompletionSound,playUiSound} from '/utils/ui-sounds.js';
 import {mountCardColorPicker} from '/components/card-color-picker.js';
@@ -673,12 +673,14 @@ function renderTaskCard(task, opts = {}) {
   const blocked = !isClosedOccurrence(task) && ['needed', 'excluded'].includes(task.supervision?.state);
   const delegated = task.supervision?.actions?.some(action => action.execution_mode === 'delegated' && action.state !== 'not_required' && !action.completed);
   const waiting = helperWaitingLabel(task, state.currentUserId);
-  const points = taskCompletionPoints(task);
+  const pointsDisplay = isPermAdmin() ? { shared: true } : {};
+  const points = taskCompletionPoints(task, pointsDisplay);
+  const pointsLabel = taskScoringLabel(task, state.currentUserId, pointsDisplay);
   const statusLabel = ({ open: 'Not Started', in_progress: 'In Progress', done: 'Completed', expired: 'Expired', skipped:'Skipped' })[task.status] || task.status;
 
   return `<article class="task-card activity-card${hasDetails ? ' activity-card--has-details' : ''}${showCheckbox ? ' activity-card--selecting' : ''}${points !== null && String(points).length > 3 ? ' activity-card--large-points' : ''}${board ? ' kanban-card' : ''}${isDone ? ' task-card--done kanban-card--done' : ''}${archived ? ' task-card--archived' : ''}"
          data-task-id="${task.id}"${cardColorAttribute(task.card_color)}>
-    ${points===null?'':`<span class="activity-card__points" role="img" aria-label="${esc(taskScoringLabel(task,state.currentUserId))}" title="${esc(taskScoringLabel(task,state.currentUserId))}">${points}</span>`}
+    ${points===null?'':`<span class="activity-card__points" role="img" aria-label="${esc(pointsLabel)}" title="${esc(pointsLabel)}">${points}</span>`}
     <div class="activity-card__surface">
     <div class="activity-card__summary">
       <span class="activity-card__leading">
@@ -1591,8 +1593,9 @@ function patchCardSubtaskFeedback(list, task, pending, queue, recheck = () => {}
       drag.draggable = !drag.disabled;
     }
     const points = card.querySelector('.activity-card__points');
-    const count = taskCompletionPoints(task);
-    patchTaskPointsBadge(points, count,taskScoringLabel(task,state.currentUserId));
+    const pointsDisplay = isPermAdmin() ? { shared: true } : {};
+    const count = taskCompletionPoints(task, pointsDisplay);
+    patchTaskPointsBadge(points, count,taskScoringLabel(task,state.currentUserId,pointsDisplay));
     card.classList.toggle('activity-card--large-points', count!==null && String(count).length > 3);
   }
   if (!queue.busy) {

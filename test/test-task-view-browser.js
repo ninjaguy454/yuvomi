@@ -105,6 +105,146 @@ test.before(async () => {
 });
 test.after(async () => { await browser?.close(); await new Promise(resolve => server?.close(resolve) || resolve()); });
 
+function activityWorthRow(mode = 'whole_task', extra = {}) {
+  const amount = mode === 'whole_task' ? 2 : 8;
+  const child = (id, points) => ({ id, parent_task_id: 1, parent_revision: 1, revision: 1,
+    title: `Scored action ${id}`, status: 'open', points, permissions: { view: true, complete: true },
+    scoring: { mode, root_task_id: 1, configured_total: mode === 'whole_task' ? 0 : points,
+      personal_total: 0, earned: [], potential: [{ user_id: 2, points }], settlements: [] } });
+  return taskRow(1, { points: mode === 'whole_task' ? 2 : 999,
+    scoring: { mode, root_task_id: 1, configured_total: amount, personal_total: 0,
+      earned: [], potential: [{ user_id: 2, points: amount }], settlements: [] },
+    subtasks: [child(101, mode === 'whole_task' ? 77 : 3), { ...child(102, 5), is_optional: 1 }], ...extra });
+}
+const worthViewers = [
+  { name: 'admin', user: { id: 1, role: 'admin' }, admin: true, payload: { principal: { kind: 'member' } }, full: true },
+  { name: 'ordinary member', user: { id: 1, role: 'member' }, admin: false, payload: { principal: { kind: 'member' } }, full: false },
+  { name: 'paired device', user: { id: null, role: 'device', kind: 'device' }, admin: false,
+    payload: { principal: { kind: 'device' }, device: { id: 9 } }, full: true },
+  { name: 'temporary sign-in', user: { id: 1, role: 'member' }, admin: false,
+    payload: { principal: { kind: 'member' }, device: { id: 9 }, temporary: { expiresAt: '2030-01-01' } }, full: true },
+];
+async function activityWorthPage(viewer, mode = 'list') {
+  const page = await mounted(mode, { width: 1100, height: 850 }, { admin: viewer.admin });
+  fixture.tasks = [activityWorthRow()];
+  await page.evaluate(async viewer => {
+    window.stopTasks();
+    window.yuvomi.user = viewer.user;
+    (await import('/utils/device-context.js')).acceptAuthentication({
+      authContext: `activity-badge-${viewer.name}`, user: viewer.user, ...viewer.payload,
+    });
+    (await import('/permissions.js')).setPermissions({ admin: viewer.admin });
+    window.stopTasks = await (await import('/pages/tasks.js')).render(window.taskContainer, { user: viewer.user });
+  }, viewer);
+  return page;
+}
+async function activityBadge(page) {
+  return page.$eval('.task-card[data-task-id="1"] .activity-card__points', node => ({
+    text: node.textContent, label: node.getAttribute('aria-label'), title: node.title,
+  }));
+}
+
+for (const view of ['list', 'kanban']) for (const viewer of worthViewers) {
+  test(`${viewer.name} activity worth badge ${view} selects the right total across scoring modes`, async () => {
+    const page = await activityWorthPage(viewer, view);
+    try {
+      await page.evaluate(async () => (await import('/i18n.js')).setLocale('en'));
+      for (const [mode, fullAmount] of [['whole_task', 2], ['subtasks', 8]]) {
+        fixture.tasks = [activityWorthRow(mode)];
+        const saved = JSON.stringify(fixture.tasks);
+        await refresh(page);
+        const badge = await activityBadge(page), amount = viewer.full ? fullAmount : 0;
+        assert.equal(badge.text, String(amount));
+        assert.equal(badge.label, badge.title, 'tooltip and accessible badge agree');
+        if (viewer.full) {
+          assert.match(badge.label, new RegExp(`${amount} points`));
+          assert.doesNotMatch(badge.label, /Known earned|Potential/);
+        } else assert.match(badge.label, /Known earned 0.*Potential 0/);
+        assert.equal(JSON.stringify(fixture.tasks), saved, 'rendering does not change recipient or scoring data');
+        assert.equal(fixture.writes.length, 0);
+      }
+    } finally { await page.close(); }
+  });
+}
+
+test('admin activity worth badge stays full while subtask completion is pending and acknowledged', async () => {
+  const page = await activityWorthPage(worthViewers[0]);
+  try {
+    fixture.tasks = [activityWorthRow('subtasks')]; await refresh(page);
+    let resume;
+    const requestHeld = new Promise(resolve => { resume = resolve; });
+    await page.setRequestInterception(true);
+    page.on('request', request => {
+      if (request.url().endsWith('/tasks/101/status')) resume(request);
+      else void request.continue();
+    });
+    await page.$eval('[data-action="toggle-subtask"][data-id="101"]', node => node.click());
+    const request = await requestHeld;
+    await page.waitForFunction(() => document.querySelector('[data-action="toggle-subtask"][data-id="101"]').getAttribute('aria-busy') === 'true');
+    const pending = await activityBadge(page); assert.equal(pending.text, '8');
+    assert.equal(pending.label, pending.title);
+    await request.continue();
+    await page.waitForFunction(() => window.subject.state.tasks[0].subtasks[0].status === 'done');
+    assert.equal((await activityBadge(page)).text, '8');
+    assert.deepEqual(fixture.writes.map(write => write.id), [101], 'one explicit completion request only');
+    assert.equal(fixture.tasks[0].scoring.personal_total, 0, 'full badge is not a personal award');
+  } finally { await page.close(); }
+});
+
+test('admin activity worth badge keeps canonical unknown and closed semantics with personal accounting separate', async () => {
+  const page = await activityWorthPage(worthViewers[0]);
+  try {
+    const examples = [
+      [activityWorthRow('whole_task', { scoring: { mode: 'whole_task', root_task_id: 1, configured_total: 2,
+        personal_total: 7, earned: [{ user_id: 1, points: 7 }], potential: [], settlements: [] } }), '2'],
+      [activityWorthRow('subtasks', { subtasks: [], scoring: { mode: 'subtasks', root_task_id: 1,
+        configured_total: 15, personal_total: 0, earned: [], potential: [], settlements: [] } }), '15'],
+      [activityWorthRow('whole_task', { scoring: null }), null],
+      [activityWorthRow('whole_task', { scoring: { mode: 'legacy', root_task_id: 1, configured_total: null, personal_total: 7 } }), null],
+      [activityWorthRow('whole_task', { is_supervision_projection: true }), null],
+      [activityWorthRow('whole_task', { status: 'expired' }), '0'],
+      [activityWorthRow('whole_task', { status: 'skipped' }), '0'],
+      [activityWorthRow('whole_task', { status: 'done' }), '2'],
+    ];
+    const result = await page.evaluate(examples => examples.map(([row]) => {
+      const document = new DOMParser().parseFromString(window.subject.renderTaskCard(row), 'text/html');
+      const badge = document.querySelector('.activity-card__points');
+      return badge?.textContent ?? null;
+    }), examples);
+    assert.deepEqual(result, examples.map(([, expected]) => expected));
+    const accounting = await page.evaluate(async row => (await import('/utils/task-fields.js')).taskScoringAmounts(row, 1), examples[0][0]);
+    assert.equal(accounting.total, 7, 'admin personal award accounting remains authoritative');
+  } finally { await page.close(); }
+});
+
+for (const viewer of worthViewers.slice(0, 2)) test(`activity worth badge follows refreshed same-user role from ${viewer.name} without remounting Tasks`, async () => {
+  const page = await activityWorthPage(viewer);
+  try {
+    fixture.tasks = [activityWorthRow('whole_task', { scoring: { mode: 'whole_task', root_task_id: 1,
+      configured_total: 2, personal_total: 7, earned: [{ user_id: 1, points: 7 }], potential: [], settlements: [] } })];
+    await refresh(page);
+    assert.equal((await activityBadge(page)).text, viewer.admin ? '2' : '7');
+    let role = 'member';
+    await page.setRequestInterception(true);
+    page.on('request', request => {
+      if (request.url().endsWith('/api/v1/auth/me')) void request.respond({ status: 200, contentType: 'application/json',
+        body: JSON.stringify({ user: { id: 1, role }, permissions: { admin: role === 'admin' }, householdSize: 2 }) });
+      else void request.continue();
+    });
+    for (const [nextRole, expected] of [['member', '7'], ['admin', '2']]) {
+      role = nextRole;
+      await page.evaluate(async () => {
+        await (await import('/api.js')).auth.me();
+        await window.subject.loadTasks(window.taskContainer);
+      });
+      const badge = await activityBadge(page);
+      assert.equal(badge.text, expected);
+      assert.equal(badge.label, badge.title);
+    }
+    assert.equal(fixture.writes.length, 0);
+  } finally { await page.close(); }
+});
+
 async function mounted(mode = 'list', viewport = { width: 1100, height: 800 }, permissions = { admin: true }) {
   fixture = { tasks: Array.from({ length: 60 }, (_, index) => taskRow(index + 1)), reads: 0, writes: [], approvals: [], held: [], holdNext: false,
     categories: Array.from({ length: 6 }, (_, index) => ({ key: `group-${index}`, name: `Group ${index + 1}`, sort_order: index })),

@@ -14,7 +14,12 @@ const app=express();app.use(express.json());
 const fixturePermissions=allowed=>({admin:allowed,capabilities:Object.fromEntries(['tasks.create','tasks.change_priority','tasks.change_points','tasks.change_category_tags','tasks.change_dates','tasks.change_assignment','tasks.change_required_skills','activities.view','workflows.view','workflows.run'].map(key=>[key,key==='tasks.change_points'&&!allowed?'deny':'allow']))});
 app.use('/api/v1',(req,res)=>{
   requests.push({method:req.method,path:req.path,body:structuredClone(req.body)});
-  if(req.path==='/auth/me')return res.json({user:members[0],permissions:fixturePermissions(!req.headers.cookie?.includes('scoring-points=deny'))});
+  if(req.path==='/auth/me'){
+    const role=req.headers.cookie?.includes('scoring-role=member')?'member':'admin';
+    const permissions=fixturePermissions(!req.headers.cookie?.includes('scoring-points=deny'));
+    permissions.admin=permissions.admin&&role==='admin';
+    return res.json({user:{...members[0],role},permissions});
+  }
   if(req.path==='/tasks/70/scoring-preview') { const value=structuredClone(preview),error=structuredClone(previewError);return setTimeout(()=>error?res.status(error.status).json(error):res.json({data:value}),previewDelay); }
   if(req.path==='/tasks/70')return res.json({data:req.method==='PUT'?{...editing,revision:editing.revision+1}:editing,series_edit:req.method==='PUT'?{scope:req.body.edit_scope,current_preserved:req.body.edit_scope==='future_only',revision:9,created_actions:[]}:undefined});
   if(req.path==='/tasks'&&req.method==='POST')return res.json({data:{id:99,...req.body}});
@@ -36,19 +41,20 @@ test.before(async()=>{
   const processHandle=browser.process();ownedBrowser={pid:processHandle.pid,profile:processHandle.spawnargs.find(arg=>arg.startsWith('--user-data-dir='))?.slice('--user-data-dir='.length),processHandle};
 });
 test.after(async()=>{await browser?.close();await new Promise(resolve=>server?.close(resolve)||resolve());if(ownedBrowser)console.log('SCORING_UI_OWNED_CLEANUP',JSON.stringify({node_pid:process.pid,chrome_pid:ownedBrowser.pid,chrome_exit:ownedBrowser.processHandle.exitCode,server_listening:server.listening,profile:ownedBrowser.profile,profile_removed:ownedBrowser.profile?!existsSync(ownedBrowser.profile):null}));});
-async function mounted({task=null,width=390,pointsAllowed=true}={}){
+async function mounted({task=null,width=390,pointsAllowed=true,user={id:1,role:'admin'}}={}){
   editing=task?structuredClone(task):null;requests.length=0;
   const context=await browser.createBrowserContext(),page=await context.newPage();await page.setViewport({width,height:900});await page.emulateMediaFeatures([{name:'prefers-reduced-motion',value:'reduce'}]);page.setDefaultTimeout(6000);
   const pageErrors=[];page.on('pageerror',error=>{pageErrors.push(error.message);console.error('SCORING_FIXTURE_PAGE_ERROR',error.stack);});
   await page.goto(`${base}/scoring-test`);
-  await page.evaluate(async pointsAllowed=>{
+  await page.evaluate(async ({pointsAllowed,user})=>{
     document.cookie=`scoring-points=${pointsAllowed?'allow':'deny'};path=/`;
-    localStorage.setItem('yuvomi-lang','en');window.toasts=[];window.yuvomi={user:{id:1,role:'admin'},showToast:message=>window.toasts.push(message)};
+    document.cookie=`scoring-role=${user.role};path=/`;
+    localStorage.setItem('yuvomi-lang','en');window.toasts=[];window.yuvomi={user,showToast:message=>window.toasts.push(message)};
     const i18n=await import('/i18n.js');await i18n.initI18n();await i18n.setLocale('en');await import('/components/datepicker.js');
-    const {setPermissions}=await import('/permissions.js');setPermissions({admin:pointsAllowed,capabilities:Object.fromEntries(['tasks.create','tasks.change_priority','tasks.change_points','tasks.change_category_tags','tasks.change_dates','tasks.change_assignment','tasks.change_required_skills','activities.view','workflows.view','workflows.run'].map(key=>[key,key==='tasks.change_points'&&!pointsAllowed?'deny':'allow']))});
-    const {render}=await import('/pages/tasks.js');window.disposeScoringPage=await render(document.querySelector('#fixture'),{user:{id:1,role:'admin'}});
-  },pointsAllowed);
-  if(task){await page.evaluate(async()=>{const {openTaskById}=await import('/pages/tasks.js');await openTaskById(70,{user:{id:1,role:'admin'}});});await page.click('#detail-view-edit');}
+    const {setPermissions}=await import('/permissions.js');setPermissions({admin:pointsAllowed&&user.role==='admin',capabilities:Object.fromEntries(['tasks.create','tasks.change_priority','tasks.change_points','tasks.change_category_tags','tasks.change_dates','tasks.change_assignment','tasks.change_required_skills','activities.view','workflows.view','workflows.run'].map(key=>[key,key==='tasks.change_points'&&!pointsAllowed?'deny':'allow']))});
+    const {render}=await import('/pages/tasks.js');window.disposeScoringPage=await render(document.querySelector('#fixture'),{user});
+  },{pointsAllowed,user});
+  if(task){await page.evaluate(async user=>{const {openTaskById}=await import('/pages/tasks.js');await openTaskById(70,{user});},user);await page.click('#detail-view-edit');}
   else await page.$eval(width<1024?'#fab-new-task':'#btn-new-task',el=>el.click());
   await page.waitForSelector('#task-form');page.dispose=async()=>{await page.evaluate(()=>window.disposeScoringPage?.());await context.close();assert.deepEqual(pageErrors,[],'fixture has no unhandled page errors');};return page;
 }
@@ -87,7 +93,7 @@ for(const [name,bootstrap,expected] of [
   ['temporary device member',{principal:{kind:'member'},user:{id:1},device:{id:9},temporary:{}},2],
   ['personal member',{principal:{kind:'member'},user:{id:1}},0],
 ])test(`${name} uses the same score on real cards, accessible badges and Task Details`,async()=>{
-  const page=await mounted();editing={...task,points:2,assigned_to:2,scoring:{...scoring,configured_total:2,personal_total:0,earned:[],potential:[{user_id:2,points:2}]}};
+    const page=await mounted({user:{id:1,role:'member'}});editing={...task,points:2,assigned_to:2,scoring:{...scoring,configured_total:2,personal_total:0,earned:[],potential:[{user_id:2,points:2}]}};
   try{
     const card=await page.evaluate(async({task,bootstrap})=>{
       const {closeModal}=await import('/components/modal.js');await closeModal({force:true});
@@ -203,8 +209,8 @@ test('future-only loads canonical fields and absent-current actions then preview
   }finally{await page.dispose();}
 });
 
-test('cards label authoritative earned and potential while keeping circles numeric',async()=>{
-  const page=await mounted();try{const values=await page.evaluate(async task=>{const {__test}=await import('/pages/tasks.js');return [__test.renderTaskCard(task),__test.renderTaskCard({...task,scoring:null})];},task);
+test('personal member cards label authoritative earned and potential while keeping circles numeric',async()=>{
+  const page=await mounted({user:{id:1,role:'member'}});try{const values=await page.evaluate(async task=>{const {__test}=await import('/pages/tasks.js');return [__test.renderTaskCard(task),__test.renderTaskCard({...task,scoring:null})];},task);
     assert.match(values[0],/Known earned.*4.*Potential.*3/);assert.doesNotMatch(values[1],/>null</);assert.doesNotMatch(values[1],/>999</);
   }finally{await page.dispose();}
 });
@@ -320,7 +326,7 @@ test('cancelled preview keeps the original future draft and its stable addition 
 });
 test('Trip presentation deadlines and escaped Next survive scoring while raw editor deadlines stay canonical',async()=>{
   const trip={...task,trip_group:{id:12},due_date:'2026-11-02',due_time:'09:00',display_due_date:'2026-11-07',display_due_time:'10:00',next_trip_step:{title:'<Pack safely>'}};
-  const page=await mounted();try{const result=await page.evaluate(async task=>{const {__test}=await import('/pages/tasks.js');const {parseDateInput}=await import('/i18n.js');const editor=new DOMParser().parseFromString(__test.renderModalContent({task,users:[]}),'text/html');return {card:__test.renderTaskCard(task),date:__test.taskCalendarDate(task),chip:__test.renderTaskCalendarChip(task),agenda:__test.renderTaskCalendarAgendaRow(task),editorDue:parseDateInput(editor.querySelector('#task-due-date').getAttribute('value')),raw:task.due_date};},trip);assert.equal(result.date,'2026-11-07');assert.equal(result.raw,'2026-11-02');assert.match(result.card,/Next: &lt;Pack safely&gt;/);assert.equal(result.editorDue,'2026-11-02');assert.doesNotMatch(result.card,/>999</);assert.match(result.chip,/10:00/);assert.match(result.agenda,/10:00/);}
+  const page=await mounted({user:{id:1,role:'member'}});try{const result=await page.evaluate(async task=>{const {__test}=await import('/pages/tasks.js');const {parseDateInput}=await import('/i18n.js');const editor=new DOMParser().parseFromString(__test.renderModalContent({task,users:[]}),'text/html');return {card:__test.renderTaskCard(task),date:__test.taskCalendarDate(task),chip:__test.renderTaskCalendarChip(task),agenda:__test.renderTaskCalendarAgendaRow(task),editorDue:parseDateInput(editor.querySelector('#task-due-date').getAttribute('value')),raw:task.due_date};},trip);assert.equal(result.date,'2026-11-07');assert.equal(result.raw,'2026-11-02');assert.match(result.card,/Next: &lt;Pack safely&gt;/);assert.equal(result.editorDue,'2026-11-02');assert.doesNotMatch(result.card,/>999</);assert.match(result.chip,/10:00/);assert.match(result.agenda,/10:00/);}
   finally{await page.dispose();}
 });
 for(const width of [320,390])test(`named editable targets fit ${width}px and retain at least44px height`,async()=>{

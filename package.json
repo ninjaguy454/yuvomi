@@ -79,7 +79,7 @@
     "test:prize-fulfillment": "node --test test/test-reward-fulfillment.js test/test-prize-request.js test/test-prize-device-setting.js test/test-prize-member-delete.js",
     "test:device-prizes": "node --test test/test-device-prizes.js test/test-device-prize-auth.js test/test-device-prize-auth-oidc.js test/test-device-prize-requests.js && npm run test:device-prize-cart",
     "test:device-prize-cart": "node --test --test-concurrency=1 test/test-device-prize-cart.js test/test-device-prize-cart-auth.js test/test-device-prize-cart-oidc.js test/test-reward-cart-state.js test/test-reward-cart-request.js",
-    "test:device-prize-cart-browser": "node --test --test-concurrency=1 test/test-device-prize-cart-browser.js test/test-device-prize-cart-real-browser.js",
+    "test:device-prize-cart-browser": "node --test --test-concurrency=1 test/test-device-prize-cart-browser.js test/test-device-prize-cart-real-browser.js test/test-device-prize-locale-full-app-browser.js",
     "test:device-prizes-browser": "node --test --test-force-exit test/test-device-prizes-browser.js && npm run test:device-prize-cart-browser",
     "test:prize-fulfillment-browser": "node --test --test-force-exit test/test-prize-fulfillment-browser.js",
     "test:reward-icon-null-migration": "node --experimental-sqlite --test test/test-reward-icon-null-migration.js",

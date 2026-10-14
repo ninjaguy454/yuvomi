@@ -4855,13 +4855,13 @@
         "deviceRedeemLabel": "Prämien am Gerät einlösen",
         "deviceRedeemHint": "Am gemeinsam genutzten Display nicht verfügbar. Zum Einlösen persönlich anmelden.",
         "deviceCart": {
-            "total": "Warenkorb gesamt",
-            "remaining": "Verbleibend",
-            "units": "{{count}} Belohnungen",
+            "total": "Gesamtkosten",
+            "remaining": "Übrige Punkte",
+            "units": "Artikel: {{count}}",
             "quantity": "Anzahl",
             "addOne": "Einmal {{reward}} hinzufügen",
             "removeOne": "Einmal {{reward}} entfernen",
-            "redeem": "Warenkorb einlösen",
+            "redeem": "Prämien einlösen",
             "refunded": "Storniert / erstattet",
             "rejected": "Abgelehnt"
         },

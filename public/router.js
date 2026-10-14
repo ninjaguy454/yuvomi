@@ -8,7 +8,7 @@ import { api, auth } from '/api.js';
 import { deviceBootstrap, pairedDeviceHint, concealPersonalContext, isDevicePrincipal, deviceLandingPath, authenticationSnapshot, sameAuthentication } from '/utils/device-context.js';
 import { prepareDeviceBoot, installDeviceSession, temporaryLoginPending, beginTemporarySignIn, returnToDevice } from '/utils/device-session.js';
 import { displayAppName } from '/utils/branding.js';
-import { canAccessNavModule, navModuleAccess } from '/permissions.js';
+import { canAccessNavModule, navModuleAccess, canCapability } from '/permissions.js';
 import { clearApiCache } from '/sw-register.js';
 import { forgetLayoutHint } from '/utils/dashboard-layout-hint.js';
 import { initI18n, getLocale, t, formatDate, formatTime } from '/i18n.js';
@@ -3399,7 +3399,10 @@ function renderSearchResults(container, data, onClose) {
 function applyModuleReadonly(moduleName, pageWrapper) {
   const readOnly = navModuleAccess(moduleName) === 'read' && !(isDevicePrincipal() && ['tasks', 'notes'].includes(moduleName));
   document.documentElement.toggleAttribute('data-module-readonly', readOnly);
-  if (!readOnly || !pageWrapper || pageWrapper.querySelector('.module-readonly-banner')) return;
+  // The catalog stays read-only while the independent, server-resolved device
+  // capability permits prize redemption. Do not claim all changes are impossible.
+  const deviceRedemption = isDevicePrincipal() && moduleName === 'rewards' && canCapability('device_rewards.redeem');
+  if (!readOnly || deviceRedemption || !pageWrapper || pageWrapper.querySelector('.module-readonly-banner')) return;
   const banner = document.createElement('div');
   banner.className = 'module-readonly-banner';
   banner.setAttribute('role', 'status');

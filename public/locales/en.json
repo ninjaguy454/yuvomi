@@ -4857,13 +4857,13 @@
         "deviceRedeemLabel": "Device prize redemption",
         "deviceRedeemHint": "Unavailable on shared displays. Sign in personally to redeem prizes.",
         "deviceCart": {
-            "total": "Cart total",
-            "remaining": "Remaining",
-            "units": "{{count}} rewards",
+            "total": "Total cost",
+            "remaining": "Points left",
+            "units": "Items: {{count}}",
             "quantity": "Quantity",
             "addOne": "Add one {{reward}}",
             "removeOne": "Remove one {{reward}}",
-            "redeem": "Redeem cart",
+            "redeem": "Redeem prizes",
             "refunded": "Cancelled / refunded",
             "rejected": "Rejected"
         },

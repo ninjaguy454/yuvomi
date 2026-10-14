@@ -1,5 +1,5 @@
 import { api } from '/api.js';
-import { t, getNumberFormat } from '/i18n.js';
+import { t, getNumberFormat, initI18n } from '/i18n.js';
 import { esc } from '/utils/html.js';
 import { openChildModal } from '/components/modal.js';
 import { approveDevicePrize } from '/components/device-approval.js';
@@ -23,6 +23,11 @@ const initials=name=>name.trim().split(/\s+/).slice(0,2).map(part=>[...part][0]|
 
 /** Scoped profiles and local drafts; every purchase still requires server validation. */
 export async function renderDevicePrizes(container) {
+  // A tab opened before the cart release can load this lazy module while its
+  // i18n singleton still holds the previous locale. Reload the real dictionaries
+  // before drawing the new namespace, including the default-locale fallback.
+  if (canRedeemDevicePrize() && ['total', 'remaining', 'units', 'quantity', 'addOne', 'removeOne', 'redeem', 'refunded', 'rejected']
+    .some(key => t(`rewards.deviceCart.${key}`) === `rewards.deviceCart.${key}`)) await initI18n();
   const context=authenticationSnapshot(),drafts=new Map();
   let disposed=false,options,selected=null,purchaseModal=null,opening=false;
   const active=()=>!disposed&&container.isConnected&&sameAuthentication(context);

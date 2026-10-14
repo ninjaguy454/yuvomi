@@ -31,7 +31,10 @@ export function mountNamedAppearancePicker(host,{value=null,onChange,prefix='nam
     if(!pending&&focusKey)host.querySelector(`[data-focus-key="${focusKey}"]`)?.focus();
   }
   function paintSelection(focusKey){
-    host.querySelector('[data-named-field="theme"]').value=chosen.theme;
+    const select=host.querySelector('[data-named-field="theme"]');
+    select.querySelector('[data-named-outside-filter]')?.remove();
+    if(fixed(chosen.theme)&&!select.querySelector(`option[value="${chosen.theme}"]`))select.insertAdjacentHTML('beforeend',`<optgroup data-named-outside-filter label="${esc(label('outsideFilter'))}">${option(chosen.theme,fixed(chosen.theme).name,chosen.theme)}</optgroup>`);
+    select.value=chosen.theme;
     host.querySelectorAll('[data-theme-choice]').forEach(node=>node.setAttribute('aria-pressed',String(node.dataset.themeChoice===chosen.theme)));
     host.querySelector('[data-named-error]').hidden=true;
     paintPending(focusKey);
@@ -41,7 +44,7 @@ export function mountNamedAppearancePicker(host,{value=null,onChange,prefix='nam
     const visible=shown(),selection=chosen?.theme||'',dynamic=selection==='seasons'||selection==='holidays',holidays=selection==='holidays',usesSeasons=selection==='seasons'||holidays&&draft.outside==='seasons';
     const dynamicOptions=`<optgroup label="${esc(label('dynamic'))}">${option('seasons',label('seasons'),selection)}${option('holidays',label('holidays'),selection)}${option('local-weather',label('localWeather'),selection)}</optgroup>`;
     let options=option('',label('legacy'),selection)+dynamicOptions+groups.map(g=>`<optgroup label="${esc(g)}">${visible.filter(theme=>theme.group===g).map(theme=>option(theme.id,theme.name,selection)).join('')}</optgroup>`).join('');
-    if(selection&&fixed(selection)&&!visible.some(theme=>theme.id===selection))options+=`<optgroup label="${esc(label('outsideFilter'))}">${option(selection,fixed(selection).name,selection)}</optgroup>`;
+    if(selection&&fixed(selection)&&!visible.some(theme=>theme.id===selection))options+=`<optgroup data-named-outside-filter label="${esc(label('outsideFilter'))}">${option(selection,fixed(selection).name,selection)}</optgroup>`;
     host.replaceChildren();host.insertAdjacentHTML('beforeend',`<div class="named-appearance-picker"${pending?' aria-busy="true"':''}><div class="named-theme-choice"><label class="form-label" for="${id('choice')}">${esc(label('theme'))}</label><div class="named-theme-select"><select class="form-input" id="${id('choice')}" data-named-field="theme" data-focus-key="theme"${pending?' disabled':''}>${options}</select><div role="group" class="named-theme-filters" aria-label="${esc(label('filter'))}">${['light','dark'].map(kind=>`<button type="button" class="named-theme-filter named-theme-filter--${kind}" data-theme-filter="${kind}" aria-label="${esc(label(kind))}" aria-pressed="${filters.has(kind)}"><span aria-hidden="true"></span></button>`).join('')}</div></div></div>
     <div class="named-date-context"${dynamic?'':' hidden'}><label>${esc(label('timezone'))}<input class="form-input" data-named-field="timeZone" data-focus-key="timeZone" value="${esc(draft.timeZone)}" list="${id('zones')}"></label><datalist id="${id('zones')}">${['UTC',...(Intl.supportedValuesOf?.('timeZone')||[])].map(zone=>option(zone,zone,'')).join('')}</datalist><label${usesSeasons?'':' hidden'}>${esc(label('hemisphere'))}<select class="form-input" data-named-field="hemisphere" data-focus-key="hemisphere">${option('north',label('north'),draft.hemisphere)}${option('south',label('south'),draft.hemisphere)}</select></label></div>
     <div class="form-group"${holidays?'':' hidden'}><label for="${id('outside')}">${esc(label('outside'))}</label><select class="form-input" id="${id('outside')}" data-named-field="outside" data-focus-key="outside">${fixedOptions(draft.outside,{seasons:true})}</select></div>
@@ -60,7 +63,7 @@ export function mountNamedAppearancePicker(host,{value=null,onChange,prefix='nam
     chosen=next;if(next)draft=next;pending=true;
     if(selectionOnly)paintSelection(focusKey);else render(focusKey);
     try{await onChange?.(next);}catch(error){chosen=old;draft=oldDraft;pending=false;if(!disposed){render(focusKey);const el=host.querySelector('[data-named-error]');el.textContent=error.message;el.hidden=false;}return;}
-    pending=false;if(!disposed)paintPending(focusKey);
+    pending=false;if(!disposed){if(!next)repaintWeather();paintPending(focusKey);}
   }
   host.addEventListener('change',event=>{
     const node=event.target;if(node.matches('[data-theme-group]')){group=node.value;render();return;}

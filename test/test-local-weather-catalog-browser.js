@@ -58,6 +58,8 @@ for(const [locale,name,query,example,current]of[['en','Local Weather','weather',
   assert.equal(await page.$$eval('[data-named-field="theme"] option[value="local-weather"]',nodes=>nodes.length),1);
   assert.equal(await page.$$eval('[data-season] option[value="local-weather"],[data-window-field="theme"] option[value="local-weather"]',nodes=>nodes.length),0);
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));await capture(page,'catalog-personal-'+locale);
+  await page.select('[data-named-field="theme"]','');await page.waitForFunction(()=>!document.documentElement.hasAttribute('data-named-theme')&&!document.querySelector('.named-appearance-picker').hasAttribute('aria-busy'));
+  assert.match(await page.$eval('[data-theme-choice="local-weather"] small',node=>node.textContent),new RegExp(example),'leaving live weather refreshes its illustrative preview label');
  }finally{await context.close();d.prepare("DELETE FROM sync_config WHERE key='named_appearance:user:1'").run();}
 });
 

@@ -2380,7 +2380,8 @@ function bindTaskScoringForm(form, controls) {
     form.querySelector('#task-points-field').hidden = owner && mode === 'subtasks';
     root.disabled = controls.scoringLoading || !allowed || task?.scoring === null || owner && mode === 'subtasks' || !owner && mode === 'whole_task' || !future && !!task?.scoring?.settled_task_ids?.includes(Number(task.id));
     controls.subtasks?.setPointsMode(mode, { settledTaskIds: future ? [] : task?.scoring?.settled_task_ids || [], allowed });
-    controls.subtasks?.setAssignmentsEnabled(true, {allowed:future ? controls.futureDefinition?.permissions.change_assignment === true : task ? canTask(task,'change_assignment') : canCapability('tasks.change_assignment')});
+    const currentClosed = !future && ['done','expired','skipped'].includes(task?.status);
+    controls.subtasks?.setAssignmentsEnabled(true, {preserveHistory: !future, allowed:!currentClosed && (future ? controls.futureDefinition?.permissions.change_assignment === true : task ? canTask(task,'change_assignment') : canCapability('tasks.change_assignment'))});
     if (locked) form.querySelector('#task-scoring-message').textContent = t('tasks.scoringLocked');
   };
   const intent = event => {

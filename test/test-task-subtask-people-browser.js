@@ -186,9 +186,26 @@ test('an unavailable saved assignee is retained without exposing a richer cached
     assert.equal(await page.$eval('[data-task-subtask-editor]', node => node.textContent.includes('Hidden member')), false);
     await open(page, 25);
     assert.equal(await page.$('[data-acceptance-choice="99"]'), null);
+    assert.equal(await page.$eval('[data-acceptance-picker]', node => node.contains(document.activeElement)), true, 'focus enters the chooser even when the saved identity is unavailable');
+    await page.keyboard.press('Tab');
+    assert.equal(await page.$eval('[data-acceptance-picker]', node => node.contains(document.activeElement)), true);
+    await page.keyboard.down('Shift');await page.keyboard.press('Tab');await page.keyboard.up('Shift');
+    assert.equal(await page.$eval('[data-acceptance-picker]', node => node.contains(document.activeElement)), true);
     await page.keyboard.press('Escape');
     assert.deepEqual(await values(page), [[25, [99]]]);
   } finally { await page.close(); }
+});
+
+test('closed current subtasks preserve responsibility while future definitions remain assignable', async () => {
+  const {page}=await fixture();
+  try {
+    await page.evaluate(() => editor.setValue(['done','expired','skipped'].map((status,index)=>({id:31+index,title:status,status,assigned_user_ids:[2],permissions:{edit:true,change_assignment:true}}))));
+    assert.deepEqual(await page.$$eval('[data-task-subtask-target]',nodes=>nodes.map(node=>node.disabled)),[true,true,true]);
+    await page.evaluate(() => editor.setAssignmentsEnabled(true,{preserveHistory:false}));
+    assert.deepEqual(await page.$$eval('[data-task-subtask-target]',nodes=>nodes.map(node=>node.disabled)),[false,false,false]);
+    await page.evaluate(() => editor.setAssignmentsEnabled(true));
+    assert.deepEqual(await values(page),[[31,[2]],[32,[2]],[33,[2]]]);
+  }finally{await page.close();}
 });
 
 test('disposing or ending authentication closes chooser layers and preserves the local child values', async () => {

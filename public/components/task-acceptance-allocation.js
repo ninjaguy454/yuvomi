@@ -101,7 +101,7 @@ export function openAllocationPicker({ host, anchor, child, draft, onAssign, sig
     overlayToken = attachOverlay(layer, ({ force }) => close(!force));
     position();
     const selected = choices.querySelector('[aria-pressed="true"]');
-    selected?.focus({ preventScroll: true });
+    (selected || choices.querySelector('button') || panel).focus({ preventScroll: true });
     if (selected && !closed) {
       // Reveal the selected person only within this scroll container. Native
       // scrollIntoView can also move the acceptance dialog behind the chooser.

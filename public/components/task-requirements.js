@@ -158,6 +158,7 @@ export function bindSubtaskEditor(root, { skills = [], template = false, onChang
   const pickers = new Map();
   const originals = new WeakMap();
   let readOnly = false;
+  let preserveAssignmentHistory = true;
   let pointsMode = null, settledIds = new Set();
   const assignments = !template ? bindSubtaskPeople(editor, { users }) : null;
   const getValue = ({ withKeys = false } = {}) => [...rows.children].map((row) => {
@@ -199,7 +200,8 @@ export function bindSubtaskEditor(root, { skills = [], template = false, onChang
         points.setAttribute('aria-label', `Subtask ${index + 1} points`);
       }
       const assignee=row.querySelector('[data-task-subtask-assignee]');
-      if(assignee){assignee.closest('[data-task-subtask-assignment]').hidden=!assignmentsEnabled;assignee.disabled=rowReadOnly||!canAssign||permissions?.change_assignment===false;}
+      const closedAssignment = preserveAssignmentHistory && (!!originals.get(row)?.archived_at || ['done','expired','skipped'].includes(originals.get(row)?.status));
+      if(assignee){assignee.closest('[data-task-subtask-assignment]').hidden=!assignmentsEnabled;assignee.disabled=rowReadOnly||closedAssignment||!canAssign||permissions?.change_assignment===false;}
       const menu = row.querySelector('.task-subtask-editor__actions');
       menu.querySelector('summary').setAttribute('aria-label', `Subtask ${index + 1} actions`);
       menu.querySelector('summary').setAttribute('aria-disabled', String(readOnly));
@@ -290,7 +292,7 @@ export function bindSubtaskEditor(root, { skills = [], template = false, onChang
       refresh();
     },
     setReadOnly(value) { readOnly = Boolean(value); refresh(); },
-    setAssignmentsEnabled(value, {allowed=canAssign}={}) { assignmentsEnabled=Boolean(value);canAssign=allowed;refresh(); },
+    setAssignmentsEnabled(value, {allowed=canAssign,preserveHistory=true}={}) { assignmentsEnabled=Boolean(value);canAssign=allowed;preserveAssignmentHistory=preserveHistory;refresh(); },
     setPointsMode(value, { settledTaskIds = [], allowed = canChangePoints } = {}) { pointsMode = value; settledIds = new Set(settledTaskIds.map(Number)); canChangePoints = allowed; refresh(); },
     dispose() {
       editor.removeEventListener('click', click);

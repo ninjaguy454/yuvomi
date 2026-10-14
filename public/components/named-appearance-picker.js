@@ -23,6 +23,19 @@ export function mountNamedAppearancePicker(host,{value=null,onChange,prefix='nam
     return{...preview,id:'local-weather',name:label('localWeather'),group:'dynamic',identity:label('localWeatherDescription')+' '+label(live?'localWeatherCurrentPreview':'localWeatherExamplePreview'),aliases:['Local Weather']};
   }
   function shown(){return [...NAMED_THEMES,weatherTile()].filter(theme=>filters.has(theme.kind)&&(group==='all'||theme.group===group)&&[theme.name,...theme.aliases].some(name=>name.toLowerCase().includes(query.toLowerCase())));}
+  function paintPending(focusKey=null){
+    const picker=host.querySelector('.named-appearance-picker');
+    if(pending)picker.setAttribute('aria-busy','true');else picker.removeAttribute('aria-busy');
+    host.querySelectorAll('[data-named-field],[data-season],[data-window],[data-remove-window],[data-theme-choice]').forEach(node=>node.disabled=pending);
+    const add=host.querySelector('[data-add-window]');if(add)add.disabled=pending||draft.holidays.length>=24;
+    if(!pending&&focusKey)host.querySelector(`[data-focus-key="${focusKey}"]`)?.focus();
+  }
+  function paintSelection(focusKey){
+    host.querySelector('[data-named-field="theme"]').value=chosen.theme;
+    host.querySelectorAll('[data-theme-choice]').forEach(node=>node.setAttribute('aria-pressed',String(node.dataset.themeChoice===chosen.theme)));
+    host.querySelector('[data-named-error]').hidden=true;
+    paintPending(focusKey);
+  }
   function render(focusKey=null){
     const seasonOpen=host.querySelector('.named-season-settings')?.open??false;
     const visible=shown(),selection=chosen?.theme||'',dynamic=selection==='seasons'||selection==='holidays',holidays=selection==='holidays',usesSeasons=selection==='seasons'||holidays&&draft.outside==='seasons';
@@ -35,15 +48,19 @@ export function mountNamedAppearancePicker(host,{value=null,onChange,prefix='nam
     <details class="named-season-settings"${seasonOpen?' open':''}${usesSeasons?'':' hidden'}><summary>${esc(label('seasonSettings'))}</summary><div class="named-season-grid">${Object.keys(draft.seasons).map(season=>`<label>${esc(label(season))}<select class="form-input" data-season="${season}" data-focus-key="${season}">${fixedOptions(draft.seasons[season])}</select></label>`).join('')}</div></details>
     <div class="named-holiday-settings"${holidays?'':' hidden'}>${draft.holidays.map((window,index)=>`<fieldset class="named-holiday-window"><legend>${esc(label('holidayWindow'))} ${index+1}</legend><label class="named-window-include"><input type="checkbox" data-window="${index}" data-window-field="enabled" data-focus-key="window-${index}-enabled"${window.enabled?' checked':''}>${esc(label('include'))}</label><label>${esc(label('theme'))}<select class="form-input" data-window="${index}" data-window-field="theme" data-focus-key="window-${index}-theme">${fixedOptions(window.theme)}</select></label><div class="named-window-dates"><label>${esc(label('firstDay'))}<input class="form-input" type="date" data-window="${index}" data-window-field="start" data-focus-key="window-${index}-start" value="${window.start}"></label><label>${esc(label('lastDay'))}<input class="form-input" type="date" data-window="${index}" data-window-field="end" data-focus-key="window-${index}-end" value="${window.end}"></label></div><button type="button" class="btn btn--secondary" data-remove-window="${index}" aria-label="${esc(label('removeWindow'))}">${esc(label('remove'))}</button></fieldset>`).join('')}<button type="button" class="btn btn--secondary" data-add-window${draft.holidays.length>=24?' disabled':''}>${esc(label('addWindow'))}</button></div>
     <p class="form-error" role="alert" data-named-error hidden></p><div class="named-catalog-tools"><label class="sr-only" for="${id('search')}">${esc(label('search'))}</label><input class="form-input" id="${id('search')}" type="search" data-theme-search placeholder="${esc(label('search'))}" value="${esc(query)}"><label class="sr-only" for="${id('group')}">${esc(label('category'))}</label><select class="form-input" id="${id('group')}" data-theme-group>${option('all',label('all'),group)}${option('dynamic',label('dynamic'),group)}${groups.map(g=>option(g,g,group)).join('')}</select></div><div class="named-theme-grid">${visible.map(theme=>tile(theme,selection)).join('')}</div><span class="sr-only" role="status" data-filter-status></span></div>`);
-    if(pending)host.querySelectorAll('[data-named-field],[data-season],[data-window],[data-add-window],[data-remove-window],[data-theme-choice]').forEach(n=>n.disabled=true);
-    if(focusKey)host.querySelector(`[data-focus-key="${focusKey}"]`)?.focus();
+    paintPending(focusKey);
   }
   async function commit(next,focusKey=null){
     if(pending||disposed)return;const old=chosen,oldDraft=draft;
     try{next=validateNamedAppearance(next);}catch(error){const el=host.querySelector('[data-named-error]');el.textContent=error.message;el.hidden=false;return;}
-    chosen=next;if(next)draft=next;pending=true;render(focusKey);
+    // Fixed choices share the same controls and catalog. Retain their DOM rather
+    // than recomputing every tile's contrast colors twice for a single preview.
+    const simple=value=>value&&!['seasons','holidays'].includes(value.theme);
+    const selectionOnly=simple(old)&&simple(next);
+    chosen=next;if(next)draft=next;pending=true;
+    if(selectionOnly)paintSelection(focusKey);else render(focusKey);
     try{await onChange?.(next);}catch(error){chosen=old;draft=oldDraft;pending=false;if(!disposed){render(focusKey);const el=host.querySelector('[data-named-error]');el.textContent=error.message;el.hidden=false;}return;}
-    pending=false;if(!disposed)render(focusKey);
+    pending=false;if(!disposed)paintPending(focusKey);
   }
   host.addEventListener('change',event=>{
     const node=event.target;if(node.matches('[data-theme-group]')){group=node.value;render();return;}

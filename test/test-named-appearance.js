@@ -5,16 +5,24 @@ let model;
 try { model = await import('../public/utils/named-appearance.js'); }
 catch (e) { if (e.code !== 'ERR_MODULE_NOT_FOUND') throw e; }
 const need = () => { assert.ok(model, 'approved named appearance model must exist'); return model; };
-test('one coherent catalog exposes exactly44 complete identities including the four reviewed concepts', () => {
+test('one coherent catalog exposes exactly45 complete identities including Cozy Cafe and the four reviewed concepts', () => {
   const { NAMED_THEMES } = need();
-  assert.equal(NAMED_THEMES.length,44);
-  assert.equal(new Set(NAMED_THEMES.map(t=>t.id)).size,44);
-  assert.equal(NAMED_THEMES.filter(t=>t.kind==='light').length,22);
-  for (const name of ['Liquid Glass','Coffee','Christmas','Medieval Parchment']) assert.ok(NAMED_THEMES.some(t=>t.name===name));
+  assert.equal(NAMED_THEMES.length,45);
+  assert.equal(new Set(NAMED_THEMES.map(t=>t.id)).size,45);
+  assert.equal(NAMED_THEMES.filter(t=>t.kind==='light').length,23);
+  for (const name of ['Liquid Glass','Coffee','Cozy Cafe','Christmas','Medieval Parchment']) assert.ok(NAMED_THEMES.some(t=>t.name===name));
   assert.equal(NAMED_THEMES.find(t=>t.id==='ocean-glass').name,'Liquid Glass');
   assert.ok(NAMED_THEMES.find(t=>t.id==='ocean-glass').aliases.includes('Ocean Glass'));
   for(const t of NAMED_THEMES){assert.equal(t.slots.length,12);assert.equal(t.slotNames.length,12);assert.equal(new Set(t.slots).size,12);assert.ok(t.identity);}
-  assert.equal(new Set(NAMED_THEMES.map(t=>JSON.stringify(t.slots))).size,44);
+  assert.equal(new Set(NAMED_THEMES.map(t=>JSON.stringify(t.slots))).size,45);
+});
+
+test('Cozy Cafe is a distinct fixed theme and its decorative mugs/plants are local, static and lightweight',()=>{
+  const {NAMED_THEMES,defaultNamedAppearance,validateNamedAppearance,resolveNamedAppearance}=need();
+  const cozy=NAMED_THEMES.find(theme=>theme.id==='cozy-cafe');assert.ok(cozy);assert.equal(cozy.name,'Cozy Cafe');assert.equal(cozy.kind,'light');assert.notDeepEqual(cozy.slots,NAMED_THEMES.find(theme=>theme.id==='coffee').slots);
+  const selected=validateNamedAppearance({...defaultNamedAppearance(),theme:'cozy-cafe'});assert.equal(resolveNamedAppearance(selected).theme.id,'cozy-cafe');
+  const art=readFileSync(new URL('../public/assets/themes/cozy-cafe.svg',import.meta.url),'utf8');assert.ok(Buffer.byteLength(art)<6000);assert.match(art,/data-motif="mug"/);assert.match(art,/data-motif="potted-plant"/);assert.match(art,/data-motif="leaves"/);assert.doesNotMatch(art,/<(?:script|image|animate|filter|foreignObject)\b|(?:href|onload)=/i);
+  assert.match(readFileSync(new URL('../public/sw.js',import.meta.url),'utf8'),/\/assets\/themes\/cozy-cafe\.svg/);
 });
 test('reviewed indexed palettes preserve their exact identity independently of global hue names',()=>{
   const { NAMED_THEMES }=need(),by=id=>NAMED_THEMES.find(t=>t.id===id);

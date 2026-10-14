@@ -94,6 +94,19 @@ const THEME_CHROME = [
     "serif"
   ],
   [
+    "Cozy Cafe",
+    "Cafe",
+    "light",
+    "#e9dfd0",
+    "#fbf7ef",
+    "#836648",
+    "#6f7f60",
+    "#43372c",
+    "cafe",
+    12,
+    "serif"
+  ],
+  [
     "Espresso",
     "Cafe",
     "dark",
@@ -586,6 +599,7 @@ const THEME_PALETTES = {
  'graphite':['7fadaf,Oxide;ad8b68,Brass;8892aa,Steel;ab7381,Burgundy;8aab7d,Patina;aa8bab,Carbon violet;be9f6d,Ochre;739db5,Blueprint;a39e8a,Dust;9c8580,Titanium;87998c,Nickel;ae8799,Graphite rose'],
  'midnight':['967cd1,Orion;5e9eb9,Star blue;af78ad,Nebula;bcaa62,Moon gold;63a892,Aurora;8391c5,Comet;b87582,Red giant;8fa65e,Starlit leaf;bf976d,Horizon;8b7cac,Twilight;7fa8a8,Glacier;9c8899,Cosmic dust'],
  'coffee':['955631,Caramel;548064,Coffee leaf;8163a1,Berry cream;a26f24,Honey roast;427a8a,Ceramic teal;ae5268,Raspberry;656871,Stoneware;80833a,Olive leaf;a46345,Terracotta;536599,Denim;886377,Cocoa plum;637e70,Sage cup'],
+ 'cozy-cafe':['a58265,Latte;7e8c68,Sage pot;b29e73,Cream linen;aa836e,Clay cup;90946e,Olive leaf;a78386,Rosewood;8a8b81,Stone saucer;7e9094,Blue glaze;b79d63,Oat biscuit;96765b,Coffee bean;77917f,Plant leaf;968796,Lilac steam'],
  'espresso':['bc8c5e,Crema;8b9c71,Bean leaf;bd7e8e,Rose cream;73989a,Ceramic;9a81af,Plum foam;b7a467,Toffee;758cab,Blue saucer;b88872,Cinnamon;91a47f,Pistachio;9f8c84,Cocoa dust;a89aaf,Steam;ba9a7b,Biscuit'],
  'cocoa':['c08093,Cherry cream;a69369,Hazelnut;788fac,Blue cup;86a084,Mint leaf;ad82b2,Plum truffle;bd8f64,Praline;6fa7a7,Ceramic glaze;a29884,Cocoa powder;b08f9b,Rose ganache;92a265,Pistachio;968fae,Lilac cream;bf9e85,Biscuit'],
  'matcha':['688846,Tea leaf;8b73a1,Orchid;a38946,Bamboo;4f9290,Tea bowl;b17684,Azalea;717fb0,Ink;99845f,Roasted rice;78a06a,New leaf;aa754f,Clay cup;857991,Soft violet;59937b,Sencha;aa965d,Flax'],
@@ -639,6 +653,7 @@ function readableColor(color,surfaces,min=4.5){
   return target;
 }
 const identity={
+ 'cozy-cafe':['Cream linen, coffee mugs and a quiet plant corner','cafe','soft'],
  neutral:['Calm, clean botanical neutrals','flat','soft'],linen:['Woven flax, soft sage and faded ink','weave','soft'],porcelain:['Cool glazed white with cobalt details','ceramic','glass'],slate:['Crisp angled blue-grey planes','slant','soft'],graphite:['Quiet drafting grid and metal accents','grid','soft'],midnight:['Deep indigo and scattered starlight','stars','glass'],
  coffee:['Warm latte surfaces and ceramic colors','flat','soft'],espresso:['Dark roast, crema and warm brass','flat','soft'],cocoa:['Soft cocoa and berry-cream highlights','dots','soft'],matcha:['Fresh tea greens and botanical curves','leaves','soft'],'tea-garden':['Pale jade, petals and tea-rose ink','petals','soft'],honeycomb:['Honey gold and a delicate hexagonal lattice','honey','playful'],
  'forest-day':['Light woodland foliage and creek blues','leaves','soft'],'forest-night':['Deep canopy with moonlit fern accents','canopy','soft'],moss:['Earthy greens over quiet paper grain','paper','wood'],fern:['Airy fronds and fresh meadow greens','fronds','soft'],riverstone:['Smooth pebbles and cool rippling water','ripples','glass'],'desert-clay':['Warm clay and broad sand-dune contours','dunes','wood'],
@@ -670,6 +685,7 @@ function themePattern(t){
   const c=t.accent+'20',d=t.second+'20';
   if(svgPaths[t.motif])return `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" fill="none" stroke="${t.accent}" stroke-opacity=".13" stroke-width="1.2">${svgPaths[t.motif]}</svg>`)}")`;
   switch(t.motif){
+    case'cafe':return"url('/assets/themes/cozy-cafe.svg')";
     case'flat':return'none';
     case'weave':return`repeating-linear-gradient(90deg,transparent 0 3px,${c} 3px 4px),repeating-linear-gradient(0deg,transparent 0 7px,${d} 7px 8px)`;
     case'wood':return`linear-gradient(${t.canvas}b8,${t.canvas}b8),url('/assets/themes/wood.webp')`;

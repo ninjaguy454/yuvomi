@@ -87,6 +87,7 @@ const APP_SHELL = [
   '/named-appearance-init.js',
   '/assets/themes/wood.webp',
   '/assets/themes/parchment.webp',
+  '/assets/themes/cozy-cafe.svg',
   '/utils/availability-calendar.js',
   '/utils/task-live.js',
   '/utils/task-state.js',

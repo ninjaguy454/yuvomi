@@ -14,3 +14,6 @@
   min-height: var(--target-base);
   padding: var(--space-3);
 }
+[data-shared-theme-confirm], [data-shared-theme-cancel] { min-height: 44px; }
+.modal-panel__footer > [data-shared-theme-error] { flex-basis: 100%; margin: 0; }
+.nav-sidebar__footer-actions [data-device-theme] { min-width: 44px; min-height: 44px; }

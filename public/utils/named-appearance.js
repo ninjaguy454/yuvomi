@@ -14,6 +14,7 @@ export function readableColor(color,surfaces,min=4.5){
   return target;
 }
 const identity={
+ 'cozy-cafe':['Cream linen, coffee mugs and a quiet plant corner','cafe','soft'],
  neutral:['Calm, clean botanical neutrals','flat','soft'],linen:['Woven flax, soft sage and faded ink','weave','soft'],porcelain:['Cool glazed white with cobalt details','ceramic','glass'],slate:['Crisp angled blue-grey planes','slant','soft'],graphite:['Quiet drafting grid and metal accents','grid','soft'],midnight:['Deep indigo and scattered starlight','stars','glass'],
  coffee:['Warm latte surfaces and ceramic colors','flat','soft'],espresso:['Dark roast, crema and warm brass','flat','soft'],cocoa:['Soft cocoa and berry-cream highlights','dots','soft'],matcha:['Fresh tea greens and botanical curves','leaves','soft'],'tea-garden':['Pale jade, petals and tea-rose ink','petals','soft'],honeycomb:['Honey gold and a delicate hexagonal lattice','honey','playful'],
  'forest-day':['Light woodland foliage and creek blues','leaves','soft'],'forest-night':['Deep canopy with moonlit fern accents','canopy','soft'],moss:['Earthy greens over quiet paper grain','paper','wood'],fern:['Airy fronds and fresh meadow greens','fronds','soft'],riverstone:['Smooth pebbles and cool rippling water','ripples','glass'],'desert-clay':['Warm clay and broad sand-dune contours','dunes','wood'],
@@ -45,6 +46,7 @@ export function themePattern(t){
   const c=t.accent+'20',d=t.second+'20';
   if(svgPaths[t.motif])return `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" fill="none" stroke="${t.accent}" stroke-opacity=".13" stroke-width="1.2">${svgPaths[t.motif]}</svg>`)}")`;
   switch(t.motif){
+    case'cafe':return"url('/assets/themes/cozy-cafe.svg')";
     case'flat':return'none';
     case'weave':return`repeating-linear-gradient(90deg,transparent 0 3px,${c} 3px 4px),repeating-linear-gradient(0deg,transparent 0 7px,${d} 7px 8px)`;
     case'wood':return`linear-gradient(${t.canvas}b8,${t.canvas}b8),url('/assets/themes/wood.webp')`;

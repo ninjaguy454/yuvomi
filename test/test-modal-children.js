@@ -26,6 +26,7 @@ function harness({ mobile = false } = {}) {
     const title = { id: 'shared-modal-title', removeAttribute(name) { this[name] = ''; } };
     const overlay = { id: 'shared-modal-overlay', isConnected: true, inert: false,
       _onCloseCallback: options.onClose,
+      _canClose: options.canClose,
       querySelector: (selector) => selector === '.modal-panel' ? panel : selector === '#shared-modal-title' ? title : null,
       contains: (target) => target === field,
       removeAttribute(name) { this[name] = ''; },
@@ -164,5 +165,15 @@ test('confirmation checkbox is optional, reports its value, and keeps the boolea
     assert.equal(context.refreshed, true, 'checkbox input is not an unsaved form requiring another confirmation');
     controls.get(accepted ? '#confirm-modal-ok' : '#confirm-modal-cancel').listeners.click();
     assert.equal(await pending, accepted);
+  }
+});
+
+test('a dismissal guard retains a pending child, then allows normal or forced cleanup',async()=>{
+  for(const force of[false,true]){
+    const {modal,parent}=harness();let pending=true;
+    const child=modal.child({value:'saved choice',canClose:()=>!pending});
+    assert.equal(await modal.close(),false);assert.equal(modal.active().querySelector('.modal-panel'),child.panel);assert.equal(parent.inert,true);
+    if(!force)pending=false;
+    assert.equal(await child.close({force}),true);assert.equal(modal.active(),parent);
   }
 });

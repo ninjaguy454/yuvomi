@@ -84,6 +84,7 @@ import { assertTaskMutation, attachTaskCapabilities, taskCapabilities, taskVisib
 import { assertTaskRevision, changeTaskStatus, reopenExpiredTask, assertTaskWindowAction, configureTaskRecurrence, recordTaskActivity, taskActivity, TaskStateError } from '../services/task-lifecycle.js';
 import { attachTaskSupervision, reconcileTaskSupervision, assertTaskSupervisionAssignee, deleteTaskSupervisionProjections, taskSupervisionRootId, prepareProspectiveTaskExecution } from '../services/task-supervision.js';
 import { EXPIRATION_POLICIES, taskDeadlineMs, taskStartMs, taskWindowAncestors } from '../services/task-window.js';
+import { createTaskOptionalContextReader } from '../services/task-optional.js';
 import { taskChangesStream } from '../services/task-changes.js';
 import { assertCapability } from '../permissions.js';
 
@@ -363,6 +364,30 @@ function scoringActivitySnapshot(task,body,binding,existing=getTaskActivityBindi
   return existing?.definition_snapshot_json?{...snapshot,required_skill_ids:taskSkillInput(body,task.id,binding.activityTemplateId)}:snapshot;
 }
 
+/** Save reconciles the whole helper scope after authored execution changes.
+ * Compare effective inputs so ordinary labels, amounts and editor echoes do
+ * not force unrelated legacy/nested scopes through prospective preparation. */
+function currentScoringExecutionChanged(task,body,edited,assignment) {
+  if(assignment.changed||assignment.bindingChanged)return true;
+  const sameSkills=(left,right)=>sameIdOrder([...left].sort((a,b)=>a-b),[...right].sort((a,b)=>a-b));
+  if(body.skill_ids!==undefined){
+    const before=taskSkillInput({},task.id,assignment.binding?.activityTemplateId);
+    const after=taskSkillInput(body,task.id,assignment.binding?.activityTemplateId);
+    if(!sameSkills(before,after))return true;
+  }
+  if(['start_date','start_time','due_date','due_time'].some(key=>body[key]!==undefined&&(body[key]??null)!==(task[key]??null))
+    ||body.is_optional!==undefined&&!!body.is_optional!==!!task.is_optional)return true;
+  if(!edited)return false;
+  if(edited.remove.length)return true;
+  return edited.next.some(child=>{
+    if(!child.id)return true;
+    const old=db.get().prepare('SELECT is_optional FROM tasks WHERE id=?').get(child.id);
+    return !!child.isOptional!==!!old.is_optional||!sameSkills(child.skillIds,loadTaskSkillIds(db.get(),child.id))
+      ||child.assignedUsers!==undefined&&!sameIdOrder(child.assignedUsers,
+        db.get().prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(child.id).map(row=>row.user_id));
+  });
+}
+
 /** Re-assess the proposed occurrence's full helper scope before projecting its
  * authorized reward units. Existing completions/history stay outside this plan. */
 function prepareCurrentScoringExecution(task,body,edited,assignment,ctx) {
@@ -387,6 +412,10 @@ function prepareCurrentScoringExecution(task,body,edited,assignment,ctx) {
   const rootPlanning=d.prepare('SELECT * FROM task_planning_context WHERE task_id=?').get(root.id)||{};
   const planning=assignment.bindingChanged&&!binding&&rootPlanning.source==='activity_template'?{}:rootPlanning;
   const children=new Map((edited?.next||[]).map((child,index)=>[child.id??`draft:${index}`,child]));
+  const optionalFor=createTaskOptionalContextReader(d,ctx.rows.map(row=>{
+    const child=children.get(row.id>0?row.id:`draft:${row._draft_index}`);
+    return {...row,is_optional:child?child.isOptional:row.id===root.id&&body.is_optional!==undefined?Number(!!body.is_optional):row.is_optional};
+  }));
   const rootRole=d.prepare('SELECT 1 FROM workflow_instances WHERE parent_task_id=?').get(root.id)?'container':'source_root';
   const window=row=>Object.fromEntries(['start_date','start_time','due_date','due_time'].map(key=>[key,row.id===root.id?fields[key]:row[key]===task[key]?fields[key]:row[key]]));
   const node=row=>{
@@ -397,7 +426,7 @@ function prepareCurrentScoringExecution(task,body,edited,assignment,ctx) {
     return {ref:ref(row),role:isRoot?rootRole:'source_action',task:executionTask(isRoot?fields:row),
       primary_user_id:isRoot?primary??null:child?.assignedUsers!==undefined?child.assignedUsers[0]??null:row.assigned_to??null,
       assigned_user_ids:boundParticipants,skill_ids:isRoot?taskSkillInput(body,task.id,desired?.activityTemplateId):child?.skillIds??(row.id>0?loadTaskSkillIds(d,row.id):[]),
-      window:window(row),is_optional:child?!!child.isOptional:!!row.is_optional,completed:!!row.archived_at||['done','expired','skipped'].includes(row.status),
+      window:window(row),is_optional:optionalFor(row.id).is_optional,completed:!!row.archived_at||['done','expired','skipped'].includes(row.status),
       ...(isRoot?{binding,planning}:pc?{planning:pc}:{})};
   };
   const refs=new Map(ctx.rows.filter(row=>row.id>0).map(row=>[row.id,ref(row)]));
@@ -2486,9 +2515,7 @@ router.post('/:id/scoring-preview',(req,res)=>{
         // A full editor sends [] for policy-managed assignments. When Save
         // preserves current responsibility, that placeholder is not a removal.
         else if(!Object.hasOwn(req.body,'assigned_to')||!parseAssignedTo(req.body.assigned_to).length)delete wire.assigned_to;
-        const childAssignmentChanged=(edited?.next||[]).some(child=>child.assignedUsers!==undefined&&!sameIdOrder(child.assignedUsers,
-          child.id?db.get().prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(child.id).map(row=>row.user_id):[]));
-        const prepareAfterExecution=assignment.changed||assignment.bindingChanged||childAssignmentChanged
+        const prepareAfterExecution=currentScoringExecutionChanged(task,req.body,edited,assignment)
           ?ctx=>prepareCurrentScoringExecution(task,req.body,edited,assignment,ctx):null;
         preview=previewTaskScoring(db.get(),task.id,wire,{scope,viewerId,authorizedTaskIds,includeUnits:true,prepareAfterExecution});
         const rows=taskScoringRows(db.get(),taskScoringRoot(db.get(),task.id)).filter(row=>authorizedTaskIds.includes(row.id));

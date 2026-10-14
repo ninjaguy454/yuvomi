@@ -767,7 +767,7 @@ test('unchanged recurring Edit Save closes without any mutation or scope dialog'
 for(const width of [1366,390])test(`one shared Rotation purpose enables participant assignment and survives scope Cancel at ${width}px`,async()=>{
   const page=await mounted({width,editTask:seriesEditFixture()});requests.length=0;
   try {
-    assert.equal(await page.$eval('[data-task-subtask-assignment]',node=>node.hidden),true);
+    assert.equal(await page.$eval('[data-task-subtask-assignment]',node=>node.hidden),false);
     await page.click('[data-rotation-add]');
     await set(page,'[data-rotation-label]','Shower Order');
     await page.waitForSelector('[data-rotation-group] option[value="31"]');
@@ -899,5 +899,29 @@ test('expired historical series offers future-only editing and explains preserva
     assert.equal(requests.find(request => request.path === '/tasks/70' && request.method === 'PUT').body.status, undefined);
     assert.equal(mutations().some(request => /^\/(?:reminders|documents)(?:\/|$)/.test(request.path) || request.path.endsWith('/documents')), false);
     assert.match(await page.evaluate(() => window.toasts.join(' ')), /This historical occurrence was preserved/);
+  } finally { await page.dispose(); }
+});
+
+for (const width of [1366, 390]) test(`Task People and subtask avatars submit concrete assignments without a Rotation (${width}px)`, async () => {
+  const page = await mounted({ width }); requests.length = 0;
+  try {
+    assert.ok(await page.$('#task-fixed-assignment .user-ms--people'), 'the real Task form opts into the avatar choices');
+    await set(page, '#task-title', 'Assigned homework');
+    await page.click('label:has([data-ms-input="task_assigned"][value="1"])');
+    await page.click('label:has([data-ms-input="task_assigned"][value="2"])');
+    await page.click('[data-task-subtask-add]');
+    await set(page, '[data-task-subtask-title]', 'Read a story');
+    assert.equal(await page.$eval('[data-task-subtask-assignment]', node => node.hidden), false);
+    await page.click('[data-task-subtask-target]');
+    await page.waitForSelector('[data-acceptance-picker]');
+    await page.click('[data-acceptance-picker] [data-acceptance-choice="2"]');
+    await page.click('[data-task-subtask-add]');
+    await page.$$eval('[data-task-subtask-title]', nodes => { nodes[1].value='Use parent responsibility';nodes[1].dispatchEvent(new Event('input',{bubbles:true})); });
+    await page.focus('#task-submit-btn'); await page.keyboard.press('Enter');
+    await page.waitForFunction(() => !document.querySelector('#task-form'));
+    const body = requests.find(request => request.path === '/tasks' && request.method === 'POST').body;
+    assert.deepEqual(body.assigned_to, [1, 2]);
+    assert.deepEqual(body.subtasks.map(row => row.assigned_user_ids), [[2], []]);
+    assert.deepEqual(body.rotation_bindings, []);
   } finally { await page.dispose(); }
 });

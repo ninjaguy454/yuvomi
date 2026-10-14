@@ -38,6 +38,37 @@
 .task-acceptance__summary-members { display: grid; gap: var(--space-2); margin: var(--space-2) 0 0; padding: 0; list-style: none; }
 .task-acceptance__summary-members .task-acceptance__identity { margin: 0; }
 
+/* Task People retains the shared multi-select inputs and bounty photo choices. */
+.user-ms--people .user-ms__options { display: grid; gap: var(--space-3); }
+.user-ms--people .user-ms__option {
+  display: grid;
+  padding: var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+}
+.user-ms--people .user-ms__option:has(.user-ms__checkbox:checked) { background: transparent; }
+.user-ms--people .user-ms__checkbox { pointer-events: auto; }
+
+.task-subtask-editor:has(> .task-allocation-picker-layer) { position: relative; }
+.task-subtask-editor__people[hidden], .task-subtask-editor__assignment[hidden] { display: none; }
+.task-subtask-editor__main:has(> .task-subtask-editor__assignment:not([hidden])) {
+  grid-template-columns: 28px minmax(0, 1fr) 48px auto var(--target-base);
+}
+.task-subtask-editor__main:has(> .task-subtask-editor__assignment:not([hidden])):has(> .task-subtask-editor__points:not([hidden])) {
+  grid-template-columns: 28px minmax(0, 1fr) 48px auto auto var(--target-base);
+}
+@media (max-width: 639px) {
+  .task-subtask-editor__main:has(> .task-subtask-editor__assignment:not([hidden])),
+  .task-subtask-editor__main:has(> .task-subtask-editor__assignment:not([hidden])):has(> .task-subtask-editor__points:not([hidden])) {
+    grid-template-columns: 28px minmax(0, 1fr) 48px var(--target-base);
+  }
+  .task-subtask-editor__main:has(> .task-subtask-editor__assignment:not([hidden])) > [data-task-subtask-title] { grid-column: 2; grid-row: 1; }
+  .task-subtask-editor__assignment { grid-column: 3; grid-row: 1; }
+  .task-subtask-editor__main:has(> .task-subtask-editor__assignment:not([hidden])) > .task-subtask-editor__points { grid-column: 2; grid-row: 2; }
+  .task-subtask-editor__main:has(> .task-subtask-editor__assignment:not([hidden])) > .task-subtask-editor__optional { grid-column: 3 / 5; grid-row: 2; }
+}
+
 .modal-panel__body--tasks-fit {
   flex: 0 1 auto;
 }

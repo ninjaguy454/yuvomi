@@ -79,7 +79,8 @@ test('rendered requirements escape titles and names and preserve template mentio
   assert.match(subtasks, /data-variable-mentions="activity-title"/);
   assert.match(subtasks, /maxlength="200"/);
   assert.match(subtasks, /&quot;door&quot; &lt;secure&gt;/);
-  assert.doesNotMatch(subtasks, /data-task-subtask-points/);
+  assert.match(subtasks, /data-task-subtask-points/);
+  assert.doesNotMatch(subtasks, /data-task-subtask-assignee|data-task-subtask-target/);
 });
 
 test('skill selection returns stable IDs, supports rename-independent presets and read-only state', async () => {

@@ -189,6 +189,7 @@ const APP_SHELL = [
   '/components/quick-links-manager.js',
   '/components/task-detail.js',
   '/components/task-requirements.js',
+  '/components/task-subtask-people.js',
   '/utils/task-draft.js',
   '/utils/branding.js',
   '/components/month-year-picker.js',

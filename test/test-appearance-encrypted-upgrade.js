@@ -11,6 +11,7 @@ const filename=join(directory,'appearance.db'),baselineBackup=join(directory,'ba
 const key='synthetic-appearance-encryption-10059';
 process.env.DB_PATH=':memory:';delete process.env.DB_ENCRYPTION_KEY;process.env.LOG_LEVEL='error';
 const {ALL_MIGRATIONS}=await import('../server/db.js');
+const candidateVersion=Math.max(...ALL_MIGRATIONS.map(migration=>migration.version));
 function open(file){const d=new Database(file);d.pragma("cipher='sqlcipher'");d.pragma(`key="x'${Buffer.from(key,'utf8').toString('hex')}'"`);d.pragma('foreign_keys=ON');return d;}
 function snapshot(d){
   const tables=d.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all();
@@ -43,16 +44,16 @@ test('encrypted10058 upgrade, reopen and old/new backup restore conserve every e
   seed.pragma('wal_checkpoint(TRUNCATE)');seed.close();copyFileSync(filename,baselineBackup);encrypted(filename);
   process.env.DB_PATH=filename;process.env.DB_ENCRYPTION_KEY=key;
   const db=await import('../server/db.js?synthetic-appearance-upgrade=1');let current=db.get();
-  assert.equal(db.currentVersion(),10059);assert.equal(current.prepare('SELECT count(*) n FROM schema_migrations').get().n,229);
+  assert.equal(db.currentVersion(),candidateVersion);assert.equal(current.prepare('SELECT count(*) n FROM schema_migrations').get().n,ALL_MIGRATIONS.length);
   assert.deepEqual(snapshot(current),before,'upgrade neither recolors nor rewrites existing rows');
   assert.deepEqual(current.prepare('SELECT card_color,card_color_choice FROM tasks ORDER BY id').all(),[{card_color:null,card_color_choice:null},{card_color:null,card_color_choice:null}]);
   assert.deepEqual(current.prepare('SELECT color,card_color_slot FROM notes WHERE id=1').get(),{color:'#123456',card_color_slot:null});
   await db.backupToFile(newBackup);encrypted(newBackup);
   const reopened=open(filename);assert.deepEqual(snapshot(reopened),before);assert.equal(reopened.pragma('integrity_check',{simple:true}),'ok');reopened.close();
   current.prepare("UPDATE tasks SET title='Transient synthetic edit',card_color='slot-01-v1' WHERE id=1").run();
-  const restoredOld=await db.restoreFromFile(baselineBackup);assert.equal(restoredOld.schemaVersion,10059);current=db.get();
+  const restoredOld=await db.restoreFromFile(baselineBackup);assert.equal(restoredOld.schemaVersion,candidateVersion);current=db.get();
   assert.deepEqual(snapshot(current),before,'restoring10058 applies nullable schema only, even with Random household default');
   assert.equal(current.prepare('SELECT card_color FROM tasks WHERE id=1').get().card_color,null);
   await db.restoreFromFile(newBackup);current=db.get();assert.deepEqual(snapshot(current),before);assert.deepEqual(current.pragma('foreign_key_check'),[]);assert.equal(current.pragma('integrity_check',{simple:true}),'ok');
-  assert.equal(current.prepare('SELECT count(*) n FROM schema_migrations').get().n,229);current.pragma('wal_checkpoint(TRUNCATE)');encrypted(filename);current.close();
+  assert.equal(current.prepare('SELECT count(*) n FROM schema_migrations').get().n,ALL_MIGRATIONS.length);current.pragma('wal_checkpoint(TRUNCATE)');encrypted(filename);current.close();
 });

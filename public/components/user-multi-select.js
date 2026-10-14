@@ -8,6 +8,7 @@ import { esc } from '/utils/html.js';
 import { t } from '/i18n.js';
 import { memberLabel } from '/utils/member-label.js';
 import { getReadableTextColor, AVATAR_FALLBACK_COLOR } from '/utils/color.js';
+import { safeTaskPersonPhoto, taskPersonInitials } from '/components/task-person-card.js';
 
 /**
  * Rendert einen Avatar-Stack für mehrere zugewiesene Benutzer.
@@ -62,9 +63,12 @@ export function renderAvatarStack(users, { size = 28, maxVisible = 3, members = 
  * @param {number[]} selectedIds                               Bereits ausgewählte IDs
  * @param {string}   inputName                                 Name-Attribut des Widgets
  * @param {string}   labelKey                                  i18n-Schlüssel für das Label
+ * @param {object}   [options]
+ * @param {string}   [options.variant]                         'people' uses the bounty photo grid
  * @returns {string} HTML-String
  */
-export function renderUserMultiSelect(allUsers, selectedIds, inputName, labelKey) {
+export function renderUserMultiSelect(allUsers, selectedIds, inputName, labelKey, { variant } = {}) {
+  if (variant === 'people') return renderPeopleMultiSelect(allUsers, selectedIds, inputName, labelKey);
   const selectedSet = new Set(selectedIds ?? []);
   const items = allUsers.map((u) => {
     const name = memberLabel(u, allUsers);
@@ -105,6 +109,34 @@ export function renderUserMultiSelect(allUsers, selectedIds, inputName, labelKey
     </div>`;
 }
 
+// Keep the same native inputs and selection contract; Task permission and
+// template gates continue to own which roster is supplied and which inputs disable.
+function renderPeopleMultiSelect(allUsers, selectedIds, inputName, labelKey) {
+  const selectedSet = new Set(selectedIds ?? []);
+  const choice = (person) => {
+    const name = person ? memberLabel(person, allUsers) : t('userMultiSelect.nobody');
+    const initials = person ? taskPersonInitials(person.display_name) : '-';
+    const photo = safeTaskPersonPhoto(person?.avatar_data);
+    const color = person?.avatar_color ?? AVATAR_FALLBACK_COLOR;
+    const checked = person ? selectedSet.has(person.id) : selectedSet.size === 0;
+    return `<label class="user-ms__option task-acceptance__member">
+      <input type="checkbox" class="user-ms__checkbox${person ? '' : ' user-ms__none'}"
+        value="${person ? esc(person.id) : ''}" data-ms-input="${esc(inputName)}" ${checked ? 'checked' : ''}>
+      <span class="task-acceptance__avatar-wrap" aria-hidden="true">
+        <span class="task-acceptance__avatar${person ? '' : ' user-ms__avatar--none'}"${person ? ` style="background-color:${esc(color)};color:${getReadableTextColor(color)}"` : ''}>
+          ${photo ? `<img src="${esc(photo)}" alt="" loading="lazy" data-avatar-initials="${esc(initials)}">` : esc(initials)}
+        </span>
+        <span class="task-acceptance__check"><svg viewBox="0 0 16 16" focusable="false"><path d="m3 8 3 3 7-7" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+      </span>
+      <span class="task-acceptance__member-name">${esc(name)}</span>
+    </label>`;
+  };
+  return `<div class="user-ms user-ms--people" data-ms-name="${esc(inputName)}" role="group" aria-label="${esc(t(labelKey))}">
+    <span class="label user-ms__label"><i data-lucide="user-plus" class="icon-sm" aria-hidden="true"></i> ${esc(t(labelKey))}</span>
+    <div class="user-ms__options task-acceptance__choices">${choice(null)}${allUsers.map(choice).join('')}</div>
+  </div>`;
+}
+
 /**
  * Liest die ausgewählten User-IDs aus einem gerenderten Multi-Select-Widget.
  * @param {Element} container  DOM-Element, das das Widget enthält
@@ -128,6 +160,12 @@ export function getSelectedUserIds(container, inputName) {
 export function bindUserMultiSelect(container, inputName) {
   const widget = container.querySelector(`.user-ms[data-ms-name="${CSS.escape(inputName)}"]`);
   if (!widget) return;
+
+  if (widget.classList.contains('user-ms--people')) {
+    widget.querySelectorAll('[data-avatar-initials]').forEach(img => {
+      img.onerror = () => img.replaceWith(document.createTextNode(img.dataset.avatarInitials));
+    });
+  }
 
   widget.addEventListener('change', (e) => {
     const cb = e.target;

@@ -1245,7 +1245,7 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
       </div>
 
       <div id="task-fixed-assignment" class="form-group" style="margin-top:var(--space-4)"${isSoloHousehold() ? ' hidden' : ''}>
-        ${renderUserMultiSelect(users, selectedIds, 'task_assigned', 'tasks.assignedLabel')}
+        ${renderUserMultiSelect(users, selectedIds, 'task_assigned', 'tasks.assignedLabel', { variant: 'people' })}
         <p id="task-template-assignment-hint" class="task-field-hint" hidden></p>
       </div>
 
@@ -2314,9 +2314,6 @@ function wireTaskForm(panel, {
     canChangePoints: task ? canTask(task, 'change_points') : canCapability('tasks.change_points'),
     canAssign:task?canTask(task,'change_assignment'):canCapability('tasks.change_assignment'), onCreateSkill: canCapability('skills.manage') ? createSkill : null }) : null;
   const rotations = bindRotationBindings(form, {skills:state.skills,places:state.places,readOnly:!canCapability('rotations.configure') || !!task && !canTask(task,'edit')});
-  const updateParticipantAssignments=()=>subtasks?.setAssignmentsEnabled(rotations.getValue().length>0);
-  updateParticipantAssignments();
-  form.querySelector('[data-rotation-bindings]')?.addEventListener('input',updateParticipantAssignments);
   // A template draft has canonical action provenance, so its Rotation text can
   // be resolved atomically when the server materializes those actions.
   let disposeMentions;
@@ -2383,7 +2380,7 @@ function bindTaskScoringForm(form, controls) {
     form.querySelector('#task-points-field').hidden = owner && mode === 'subtasks';
     root.disabled = controls.scoringLoading || !allowed || task?.scoring === null || owner && mode === 'subtasks' || !owner && mode === 'whole_task' || !future && !!task?.scoring?.settled_task_ids?.includes(Number(task.id));
     controls.subtasks?.setPointsMode(mode, { settledTaskIds: future ? [] : task?.scoring?.settled_task_ids || [], allowed });
-    controls.subtasks?.setAssignmentsEnabled(future || controls.rotations.getValue().length > 0, {allowed:future ? controls.futureDefinition?.permissions.change_assignment === true : task ? canTask(task,'change_assignment') : canCapability('tasks.change_assignment')});
+    controls.subtasks?.setAssignmentsEnabled(true, {allowed:future ? controls.futureDefinition?.permissions.change_assignment === true : task ? canTask(task,'change_assignment') : canCapability('tasks.change_assignment')});
     if (locked) form.querySelector('#task-scoring-message').textContent = t('tasks.scoringLocked');
   };
   const intent = event => {

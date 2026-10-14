@@ -1,6 +1,7 @@
 import { memberLabel } from '/utils/member-label.js';
 import { esc } from '../utils/html-escape.js';
 import { bindSubtaskReorder } from '../utils/subtask-reorder.js';
+import { bindSubtaskPeople } from './task-subtask-people.js';
 
 function skillIds(values = []) {
   return [...new Set((Array.isArray(values) ? values : [])
@@ -112,12 +113,18 @@ export function bindSkillPicker(root, { onChange = null, onCreateSkill = null } 
 }
 
 function subtaskRow(subtask, skills, template, index, canCreateSkill = false, users = []) {
-  return `<div class="task-subtask-editor__row" data-task-subtask-row data-action-key="${esc(subtask.action_key || '')}" data-subtask-value="${esc(JSON.stringify(subtask))}"${subtask.id ? ` data-subtask-id="${Number(subtask.id)}"` : ''}>
+  const assigned = Number(subtask.assigned_to || subtask.assigned_user_ids?.[0] || subtask.assigned_users?.[0]?.id) || null;
+  const assignment = !template && users.length ? `<span class="task-subtask-editor__assignment" data-task-subtask-assignment hidden>
+    <button type="button" class="task-allocation__target task-allocation__target--empty" data-task-subtask-target aria-haspopup="dialog" aria-expanded="false"><span aria-hidden="true">?</span></button>
+    <select data-task-subtask-assignee hidden aria-label="Subtask ${index + 1} assignee"><option value="">Use the parent Activity's responsibility</option>${assigned && !users.some(user => Number(user.id) === assigned) ? `<option value="${assigned}" selected>Unavailable member</option>` : ''}${users.map(user => `<option value="${Number(user.id)}" ${assigned === Number(user.id) ? 'selected' : ''}>${esc(memberLabel(user, users))}</option>`).join('')}</select>
+  </span>` : '';
+  return `<div class="task-subtask-editor__row" data-task-subtask-row data-action-key="${esc(subtask.action_key || '')}" data-subtask-value="${esc(JSON.stringify(subtask))}"${Array.isArray(subtask.eligible_assignee_ids) ? ` data-eligible-assignee-ids="${esc(JSON.stringify(subtask.eligible_assignee_ids))}"` : ''}${subtask.id ? ` data-subtask-id="${Number(subtask.id)}"` : ''}>
     <div class="task-subtask-editor__main">
       <span class="task-subtask-editor__handle" data-task-subtask-handle role="img" aria-label="Drag to reorder subtask" title="Drag to reorder; use Subtask actions for keyboard controls"><svg width="16" height="20" viewBox="0 0 16 20" fill="currentColor" aria-hidden="true"><circle cx="5" cy="4" r="1.5"/><circle cx="11" cy="4" r="1.5"/><circle cx="5" cy="10" r="1.5"/><circle cx="11" cy="10" r="1.5"/><circle cx="5" cy="16" r="1.5"/><circle cx="11" cy="16" r="1.5"/></svg></span>
       <input class="input" data-task-subtask-title ${template ? 'data-variable-mentions="activity-title"' : ''}
         aria-label="Subtask ${index + 1}" maxlength="200" placeholder="Subtask name"
         value="${esc(subtask.title ?? subtask.title_template ?? '')}">
+      ${assignment}
       <label class="task-subtask-editor__points">Points<input class="input" type="number" name="subtask_points" data-task-subtask-points ${template ? 'required' : ''}
         aria-label="Subtask ${index + 1} points" inputmode="numeric" min="0" max="10000" step="1"
         value="${esc(subtask.points ?? 0)}"></label>
@@ -131,13 +138,13 @@ function subtaskRow(subtask, skills, template, index, canCreateSkill = false, us
         </div>
       </details>
     </div>
-    ${!template && users.length ? `<label class="label" data-task-subtask-assignment hidden>For<select class="input" data-task-subtask-assignee><option value="">Use the parent Activity's responsibility</option>${users.map(user=>`<option value="${Number(user.id)}" ${Number(subtask.assigned_to||subtask.assigned_user_ids?.[0])===Number(user.id)?'selected':''}>${esc(memberLabel(user))}</option>`).join('')}</select></label>` : ''}
     ${renderSkillPicker({ skills, selectedIds: subtask.skill_ids ?? subtask.skills ?? [], name: 'subtask_skill_ids', canCreateSkill })}
   </div>`;
 }
 
 export function renderSubtaskEditor({ subtasks = [], skills = [], template = false, canCreateSkill = false, users = [] } = {}) {
   return `<div class="task-subtask-editor" data-task-subtask-editor>
+    ${!template && users.length ? '<div class="task-subtask-editor__people" data-task-subtask-people hidden><div class="task-allocation__strip" role="group" aria-label="Subtask assignees"></div></div>' : ''}
     <div class="task-subtask-editor__rows" data-task-subtask-rows>${subtasks.map((subtask, index) => subtaskRow(subtask, skills, template, index, canCreateSkill, users)).join('')}</div>
     <button type="button" class="btn btn--ghost btn--sm" data-task-subtask-add>+ Add subtask</button>
     <span class="sr-only" role="status" aria-live="polite" data-task-subtask-announcement></span>
@@ -152,6 +159,7 @@ export function bindSubtaskEditor(root, { skills = [], template = false, onChang
   const originals = new WeakMap();
   let readOnly = false;
   let pointsMode = null, settledIds = new Set();
+  const assignments = !template ? bindSubtaskPeople(editor, { users }) : null;
   const getValue = ({ withKeys = false } = {}) => [...rows.children].map((row) => {
     const {assigned_user_ids: oldIds,...original}=originals.get(row)||{};
     if (withKeys && !template && !original.id && !original.action_key) {
@@ -162,6 +170,8 @@ export function bindSubtaskEditor(root, { skills = [], template = false, onChang
     const pointsValue = rawPoints !== undefined && rawPoints.trim() !== '' && Number.isInteger(Number(rawPoints)) && Number(rawPoints) >= 0 && Number(rawPoints) <= 10000 ? Number(rawPoints) : rawPoints;
     const previous=oldIds||original.assigned_users?.map(user=>user.id)||(original.assigned_to?[original.assigned_to]:[]);
     const selected=Number(row.querySelector('[data-task-subtask-assignee]')?.value)||null;
+    const assignmentChanged = selected !== (Number(original.assigned_to || previous[0]) || null);
+    const includeAssignment = oldIds !== undefined || !original.id || assignmentChanged;
     return ({
     ...original,
     ...(row.dataset.subtaskId ? { id: Number(row.dataset.subtaskId) } : {}),
@@ -170,10 +180,12 @@ export function bindSubtaskEditor(root, { skills = [], template = false, onChang
     points: pointsValue,
     skill_ids: pickers.get(row).getValue(),
     is_optional: row.querySelector('[data-task-subtask-optional]').checked ? 1 : 0,
-    ...(assignmentsEnabled && row.querySelector('[data-task-subtask-assignee]') ? {assigned_user_ids: selected===Number(original.assigned_to||previous[0]||0) ? previous : selected?[selected]:[]} : {}),
+    ...(assignmentsEnabled && includeAssignment && row.querySelector('[data-task-subtask-assignee]') ? {assigned_user_ids: assignmentChanged ? selected ? [selected] : [] : previous} : {}),
   });});
   const changed = () => onChange?.(getValue());
   const refresh = () => {
+    const pool = editor.querySelector('[data-task-subtask-people]');
+    if (pool) pool.hidden = !assignmentsEnabled;
     [...rows.children].forEach((row, index) => {
       const permissions=originals.get(row)?.permissions;
       const rowReadOnly=readOnly || permissions?.edit === false;
@@ -201,6 +213,7 @@ export function bindSubtaskEditor(root, { skills = [], template = false, onChang
     });
     editor.querySelector('[data-task-subtask-add]').disabled = readOnly;
     reorder.refresh();
+    assignments?.refresh();
   };
   const reorder = bindSubtaskReorder(rows, { isReadOnly: () => readOnly,
     onChange: () => { refresh(); changed(); },
@@ -285,6 +298,7 @@ export function bindSubtaskEditor(root, { skills = [], template = false, onChang
       editor.removeEventListener('change', change);
       editor.removeEventListener('keydown', keydown);
       reorder.dispose();
+      assignments?.dispose();
       pickers.forEach((picker) => picker.dispose());
     },
   };

@@ -1,6 +1,7 @@
 // Each row is curated for this theme. Indices carry identity, not global hues.
 // Hex colors and current-theme names are deliberately explicit.
 export const THEME_PALETTES = {
+ 'night-shift':['d7a562,Fazbear amber;b1a0d2,Backstage violet;dbbe6d,Pizza gold;d88f77,Pirate copper;aac298,Party sage;85b6ab,Monitor teal;8faec6,Night blue;d29db4,Cupcake rose;b2bc82,Arcade olive;9aa5c8,Twilight lilac;c4ac93,Worn brass;afaaa1,Desk silver'],
  'neutral':['567969,Moss;637c92,River;9d756a,Clay;81728e,Iris;8c8d51,Meadow;598d88,Pool;ae8063,Copper;aa738a,Rose;728d57,Leaf;6776a6,Dusk;8e8067,Pebble;907966,Cedar'],
  'linen':['a18451,Flax;7a8970,Sage;ad7c86,Faded rose;71819b,Indigo;997057,Umber;ad994c,Cornsilk;90829b,Heather;af826c,Clay;728c9b,Larkspur;938973,Twine;63795c,Moss;917b80,Thistle'],
  'porcelain':['4268a7,Cobalt;6390aa,Glaze;a85864,Carmine;777fab,Blue smoke;567f74,Jade;b59750,Gold leaf;9169a6,Iris;629792,Pool;997563,Clay body;7b8892,Ash;ab8190,Peony;60769c,Ink blue'],

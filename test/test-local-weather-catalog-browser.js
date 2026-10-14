@@ -42,7 +42,7 @@ const capture=async(page,name)=>{if(process.env.LOCAL_WEATHER_REVIEW_DIR){mkdirS
 for(const [locale,name,query,example,current]of[['en','Local Weather','weather','Example preview','Current conditions preview'],['de','Lokales Wetter','Wetter','Beispielvorschau','Vorschau der aktuellen Bedingungen']])test(`real mobile personal ${locale} catalog discovers Local Weather and follows filter and live preview context`,async()=>{
  const {context,page}=await pageFor(locale);
  try{
-  assert.equal(await page.$$eval('.named-theme-tile',nodes=>nodes.length),46);
+  assert.equal(await page.$$eval('.named-theme-tile',nodes=>nodes.length),47);
   await search(page,query);assert.equal(await page.$$eval('.named-theme-tile',nodes=>nodes.length),1);
   assert.equal(await page.$eval('[data-theme-choice="local-weather"] .named-theme-name',node=>node.textContent),name);
   assert.match(await page.$eval('[data-theme-choice="local-weather"] small',node=>node.textContent),new RegExp(example));

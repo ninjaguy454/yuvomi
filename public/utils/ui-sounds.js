@@ -4,7 +4,7 @@ export function createUiSoundEngine({clock=()=>performance.now(),isForeground=()
   let config=normalizeUiSounds(null),theme=null,last=-Infinity,voice=null,epoch=0;const tickets=new WeakSet();
   function stop(){try{voice?.();}catch{}voice=null;}
   function configure(value,id){stop();epoch++;config=normalizeUiSounds(value);theme=typeof id==='object'?id?.id:id;}
-  function eligible(event){return event?.isTrusted===true&&isForeground()&&config.mode!=='off'&&config.volume>0;}
+  function eligible(event){return event?.isTrusted===true&&isForeground()&&config.mode!=='off'&&config.volume>0&&(config.mode!=='theme'||NAMED_THEMES.find(t=>t.id===theme)?.sound!=='off');}
   function play(kind,event){if(!['select','open','close','complete'].includes(kind)||!eligible(event)||clock()-last<75)return false;last=clock();stop();const pack=config.mode==='theme'?(NAMED_THEMES.find(t=>t.id===theme)?.sound||'soft'):config.pack;try{unlock();voice=emit?.({...RECIPES[pack],frequency:RECIPES[pack].frequency*(kind==='complete'?1.2:kind==='close'?.9:1)},Math.min(.075,config.volume/100*.45));return true;}catch{return false;}}
   function capture(event){if(!eligible(event))return null;try{unlock();}catch{}const ticket={epoch};tickets.add(ticket);return ticket;}
   function confirm(ticket,success){if(!ticket||!tickets.has(ticket))return false;tickets.delete(ticket);return success===true&&ticket.epoch===epoch&&play('complete',{isTrusted:true});}

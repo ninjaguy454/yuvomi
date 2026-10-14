@@ -15,6 +15,7 @@ export function readableColor(color,surfaces,min=4.5){
   return target;
 }
 const identity={
+ 'night-shift':['An unofficial FNAF fan theme: worn metal, amber light and a quiet pizzeria crew','night-shift','off'],
  'cozy-cafe':['Cream linen, coffee mugs and a quiet plant corner','cafe','soft'],
  neutral:['Calm, clean botanical neutrals','flat','soft'],linen:['Woven flax, soft sage and faded ink','weave','soft'],porcelain:['Cool glazed white with cobalt details','ceramic','glass'],slate:['Crisp angled blue-grey planes','slant','soft'],graphite:['Quiet drafting grid and metal accents','grid','soft'],midnight:['Deep indigo and scattered starlight','stars','glass'],
  coffee:['Warm latte surfaces and ceramic colors','flat','soft'],espresso:['Dark roast, crema and warm brass','flat','soft'],cocoa:['Soft cocoa and berry-cream highlights','dots','soft'],matcha:['Fresh tea greens and botanical curves','leaves','soft'],'tea-garden':['Pale jade, petals and tea-rose ink','petals','soft'],honeycomb:['Honey gold and a delicate hexagonal lattice','honey','playful'],
@@ -52,6 +53,7 @@ export function themePattern(t){
       return`url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="280" height="220" fill="none" stroke="${t.accent}" stroke-opacity=".12" stroke-width="1.5" stroke-linecap="round">${paths}</svg>`)}")`;
     }
     case'cafe':return"url('/assets/themes/cozy-cafe.svg')";
+    case'night-shift':return'radial-gradient(ellipse at 70% 0,#b66b1824,transparent 48%),repeating-linear-gradient(90deg,transparent 0 79px,#83927b06 79px 80px)';
     case'flat':return'none';
     case'weave':return`repeating-linear-gradient(90deg,transparent 0 3px,${c} 3px 4px),repeating-linear-gradient(0deg,transparent 0 7px,${d} 7px 8px)`;
     case'wood':return`linear-gradient(${t.canvas}b8,${t.canvas}b8),url('/assets/themes/wood.webp')`;
@@ -72,7 +74,7 @@ export function themePattern(t){
 export const NAMED_THEMES=Object.freeze(THEME_CHROME.map(([name,group,kind,canvas,surface,accent,second,text,,round,font])=>{
   const id=name.toLowerCase().replace(/ & /g,'-').replaceAll(' ','-'),[description,motif,sound]=identity[id],rows=THEME_PALETTES[id][0].split(';').map(s=>s.split(','));
   if(id==='ocean-glass'){name='Liquid Glass';canvas='#bcdaea';surface='#eaf7fc';accent='#46677d';second='#7954c8';text='#173448';}
-  const raised=mixColors(surface,kind==='light'?'#ffffff':'#000000',.08),t={id,name,group:group==='Seasons'?'Season palettes':group==='Celebrations'?'Holiday palettes':group,kind,canvas,surface,raised,accent,second,round,font:font==='serif'?'Georgia,serif':'system-ui,sans-serif',identity:description,motif,sound,aliases:id==='ocean-glass'?['Ocean Glass']:[],slots:rows.map(r=>'#'+r[0]),slotNames:rows.map(r=>r[1])};
+  const raised=mixColors(surface,kind==='light'?'#ffffff':'#000000',.08),t={id,name,group:group==='Seasons'?'Season palettes':group==='Celebrations'?'Holiday palettes':group,kind,canvas,surface,raised,accent,second,round,font:font==='serif'?'Georgia,serif':'system-ui,sans-serif',identity:description,motif,sound,aliases:id==='ocean-glass'?['Ocean Glass']:id==='night-shift'?['FNAF',"Five Nights at Freddy's",'Five Nights at Freddy’s']:[],slots:rows.map(r=>'#'+r[0]),slotNames:rows.map(r=>r[1])};
   t.text=readableColor(text,[canvas,surface,raised],7);t.muted=readableColor(mixColors(t.text,surface,.24),[canvas,surface,raised],4.5);t.line=readableColor(accent,[surface,raised],3);t.focus=readableColor(second,[canvas,surface,raised],4.5);t.pattern=themePattern(t);
   return Object.freeze(t);
 }));

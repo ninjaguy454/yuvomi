@@ -585,4 +585,5 @@ export const THEME_CHROME = [
     21,
     "serif"
   ]
+  , ["Night Shift","Custom","dark","#141615","#232623","#edbb68","#ffcf80","#f7f1df","night-shift",14,"sans"]
 ];

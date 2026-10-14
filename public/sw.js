@@ -90,6 +90,7 @@ const APP_SHELL = [
   '/assets/themes/wood.webp',
   '/assets/themes/parchment.webp',
   '/assets/themes/cozy-cafe.svg',
+  '/assets/themes/night-shift-stage.svg',
   '/utils/availability-calendar.js',
   '/utils/task-live.js',
   '/utils/task-state.js',

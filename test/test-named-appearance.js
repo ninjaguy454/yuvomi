@@ -5,16 +5,16 @@ let model;
 try { model = await import('../public/utils/named-appearance.js'); }
 catch (e) { if (e.code !== 'ERR_MODULE_NOT_FOUND') throw e; }
 const need = () => { assert.ok(model, 'approved named appearance model must exist'); return model; };
-test('one coherent catalog exposes exactly45 complete identities including Cozy Cafe and the four reviewed concepts', () => {
+test('one coherent catalog exposes exactly46 complete identities including Cozy Cafe and the four reviewed concepts', () => {
   const { NAMED_THEMES } = need();
-  assert.equal(NAMED_THEMES.length,45);
-  assert.equal(new Set(NAMED_THEMES.map(t=>t.id)).size,45);
+  assert.equal(NAMED_THEMES.length,46);
+  assert.equal(new Set(NAMED_THEMES.map(t=>t.id)).size,46);
   assert.equal(NAMED_THEMES.filter(t=>t.kind==='light').length,23);
   for (const name of ['Liquid Glass','Coffee','Cozy Cafe','Christmas','Medieval Parchment']) assert.ok(NAMED_THEMES.some(t=>t.name===name));
   assert.equal(NAMED_THEMES.find(t=>t.id==='ocean-glass').name,'Liquid Glass');
   assert.ok(NAMED_THEMES.find(t=>t.id==='ocean-glass').aliases.includes('Ocean Glass'));
   for(const t of NAMED_THEMES){assert.equal(t.slots.length,12);assert.equal(t.slotNames.length,12);assert.equal(new Set(t.slots).size,12);assert.ok(t.identity);}
-  assert.equal(new Set(NAMED_THEMES.map(t=>JSON.stringify(t.slots))).size,45);
+  assert.equal(new Set(NAMED_THEMES.map(t=>JSON.stringify(t.slots))).size,46);
 });
 
 test('Cozy Cafe is a distinct fixed theme and its decorative mugs/plants are local, static and lightweight',()=>{

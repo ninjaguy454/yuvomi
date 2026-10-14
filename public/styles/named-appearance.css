@@ -46,3 +46,23 @@ html[data-theme=dark]{--card-slot-01-v1-fill:#364e4e;--card-slot-01-v1-text:#f5f
 [data-card-color="slot-11-v1"]{--card-fill:var(--card-slot-11-v1-fill);--card-text:var(--card-slot-11-v1-text);--card-edge:var(--card-slot-11-v1-edge);--color-text-secondary:var(--card-slot-11-v1-muted);--color-text-tertiary:var(--card-slot-11-v1-muted);--color-border-control:var(--card-slot-11-v1-edge);--focus-ring-color:var(--card-slot-11-v1-focus);--color-danger:var(--card-slot-11-v1-danger);--color-danger-ink:var(--card-slot-11-v1-danger);--color-success:var(--card-slot-11-v1-success);--color-success-ink:var(--card-slot-11-v1-success);--color-warning:var(--card-slot-11-v1-warning);--color-warning-ink:var(--card-slot-11-v1-warning);--color-info:var(--card-slot-11-v1-info);--color-info-ink:var(--card-slot-11-v1-info);--note-color:var(--card-slot-11-v1-fill)!important}
 [data-card-color="slot-12-v1"]{--card-fill:var(--card-slot-12-v1-fill);--card-text:var(--card-slot-12-v1-text);--card-edge:var(--card-slot-12-v1-edge);--color-text-secondary:var(--card-slot-12-v1-muted);--color-text-tertiary:var(--card-slot-12-v1-muted);--color-border-control:var(--card-slot-12-v1-edge);--focus-ring-color:var(--card-slot-12-v1-focus);--color-danger:var(--card-slot-12-v1-danger);--color-danger-ink:var(--card-slot-12-v1-danger);--color-success:var(--card-slot-12-v1-success);--color-success-ink:var(--card-slot-12-v1-success);--color-warning:var(--card-slot-12-v1-warning);--color-warning-ink:var(--card-slot-12-v1-warning);--color-info:var(--card-slot-12-v1-info);--color-info-ink:var(--card-slot-12-v1-info);--note-color:var(--card-slot-12-v1-fill)!important}
 [data-card-color="neutral-v1"]{--card-fill:var(--card-neutral-v1-fill);--card-text:var(--card-neutral-v1-text);--card-edge:var(--card-neutral-v1-edge);--color-text-secondary:var(--card-neutral-v1-muted);--color-text-tertiary:var(--card-neutral-v1-muted);--color-border-control:var(--card-neutral-v1-edge);--focus-ring-color:var(--card-neutral-v1-focus);--color-danger:var(--card-neutral-v1-danger);--color-danger-ink:var(--card-neutral-v1-danger);--color-success:var(--card-neutral-v1-success);--color-success-ink:var(--card-neutral-v1-success);--color-warning:var(--card-neutral-v1-warning);--color-warning-ink:var(--card-neutral-v1-warning);--color-info:var(--card-neutral-v1-info);--color-info-ink:var(--card-neutral-v1-info);--note-color:var(--card-neutral-v1-fill)!important}
+
+/* Night Shift: original unofficial fan artwork, static and decorative.
+   Scope every rule to this theme so switching restores existing components. */
+html[data-named-theme="night-shift"] :is(.dashboard-overview,.wall-dashboard__header)::after {
+  content:"";display:block;flex:none;width:100%;height:160px;margin-top:18px;
+  border:1px solid #726245;border-radius:14px;pointer-events:none;
+  background-color:#2a2b21;background-image:url('/assets/themes/night-shift-stage.svg'),linear-gradient(115deg,#b7742533,transparent 70%);
+  background-repeat:no-repeat;background-position:center;background-size:auto 100%,100% 100%;
+  box-shadow:inset 0 1px 0 #c5a9741a;
+}
+html[data-named-theme="night-shift"] .widget {box-shadow:inset 0 1px 0 #e4e8cd09}
+html[data-named-theme="night-shift"] .widget__header {border-bottom:1px solid var(--color-border-subtle)}
+.named-theme-tile[data-theme-choice="night-shift"]::after {
+  content:"";display:block;height:64px;margin-top:12px;border:1px solid var(--tile-line);border-radius:6px;
+  background:#2a2b21 url('/assets/themes/night-shift-stage.svg') center/contain no-repeat;pointer-events:none;
+}
+html[data-wall-mode][data-named-theme="night-shift"] .wall-dashboard__header::after {height:136px;margin-top:4px}
+@media(max-width:650px){html[data-named-theme="night-shift"] :is(.dashboard-overview,.wall-dashboard__header)::after {height:110px;margin-top:12px}}
+@media(prefers-reduced-transparency:reduce){html[data-named-theme="night-shift"] :is(.dashboard-overview,.wall-dashboard__header)::after {background-image:url('/assets/themes/night-shift-stage.svg')}}
+@media(forced-colors:active){html[data-named-theme="night-shift"] :is(.dashboard-overview,.wall-dashboard__header)::after,.named-theme-tile[data-theme-choice="night-shift"]::after {display:none}}

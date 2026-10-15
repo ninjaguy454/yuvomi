@@ -1,5 +1,6 @@
 /** Acceptance is narrower than editing/reassignment and never authenticates a picker. */
 import {actorId,actorPermissions} from '../permissions.js';
+import {readTaskAssigneePolicy,categoryAssigneePolicy} from './task-assignee-policy.js';
 import {taskCapabilities,taskDevicePrincipal,deviceTaskVisible} from './task-access.js';
 import {devicePrincipal,deviceRequestStillValid} from './devices.js';
 import {householdMembers} from './activity-eligibility.js';
@@ -62,7 +63,10 @@ export function assertChildRecipient(d,child,userId){
   }catch{throw acceptanceError('This subtask cannot be assigned to the selected member.',409,'subtask_ineligible');}
 }
 export function acceptanceOptions(d,principal,id,primaryUserId){
-  const auth=acceptanceAuthority(d,principal,id),{task,device,canHelpers}=auth,p=auth.principal;
+  const auth=acceptanceAuthority(d,principal,id),{task,device}=auth,p=auth.principal;
+  const saved=readTaskAssigneePolicy(d,id),policy=categoryAssigneePolicy(d,task.category);
+  const slots=policy.max_assignees===null?null:Math.max(0,policy.max_assignees-Math.max(1,saved?.direct_assignee_ids.length||0));
+  const canHelpers=auth.canHelpers&&(slots===null||slots>0);
   const offer=taskOfferState(d,p,task);if(!offer.visible)throw acceptanceError('This Task is no longer available to accept.',409,'offer_unavailable');
   const allowed=acceptanceMembers(d,p);
   const eligible=allowed.filter(member=>{try{assertAcceptanceMember(d,p,task,member.id);return true;}catch{return false;}});
@@ -78,6 +82,7 @@ export function acceptanceOptions(d,principal,id,primaryUserId){
   const candidates=canHelpers?eligible.filter(m=>m.id!==primary):[];
   const children=authorizedAcceptanceChildren(d,p,task),supervision=inspectTaskSupervision(d,task.id);
   return {expected_revision:task.revision,primary_mode:device?'choose':'self',primary_user_id:primary,
+    assignee_policy:{version:policy.version,category_key:policy.category_key,max_assignees:policy.max_assignees},available_assignee_slots:slots,
     primary_candidates:(device?eligible:eligible.filter(m=>m.id===me)).map(memberView),
     can_add_helpers:canHelpers,helpers_reason:canHelpers?null:'Permission to accept with helpers is required. Sign in with an authorized account or ask an administrator.',
     coassignee_candidates:candidates.map(memberView),

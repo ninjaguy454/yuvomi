@@ -1,3 +1,4 @@
+import {readTaskAssigneePolicy} from './task-assignee-policy.js';
 /** A recurring Task's policy is independent from its reusable source template.
  * Skill definitions and member proficiency stay live; only required skill IDs
  * and the Activity's authored assignment/presence configuration are captured. */
@@ -47,6 +48,7 @@ export function captureTaskActivityBindingDefinition(d, taskId, { seriesId = nul
   if (!binding) return null;
   const snapshot = taskActivitySnapshot(d, taskId, binding)
     || captureActivityTemplateDefinition(d, binding.activity_template_id);
+  const policy=readTaskAssigneePolicy(d,taskId);if(policy){const {direct_assignee_ids,...countPolicy}=policy;snapshot.assignee_policy=countPolicy;}
   if (seriesId != null) {
     snapshot.rotation_scope = `series:${seriesId}`;
     snapshot.rotation_cursor_user_id = d.prepare('SELECT assigned_to FROM tasks WHERE id=?').get(taskId)?.assigned_to ?? null;

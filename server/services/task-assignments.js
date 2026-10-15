@@ -1,5 +1,11 @@
+import {readTaskAssigneePolicy} from './task-assignee-policy.js';
 /** Canonical assignment relations and child-to-parent participation. */
 export function setTaskAssignments(d, taskId, userIds) {
+  if(readTaskAssigneePolicy(d,taskId)){
+    const children=d.prepare(`SELECT DISTINCT p.user_id FROM task_responsibilities p WHERE p.task_id=? AND p.role='participant' AND p.source='subtasks' AND p.status='active'
+      AND EXISTS(SELECT 1 FROM tasks c JOIN task_assignments a ON a.task_id=c.id WHERE c.parent_task_id=p.task_id AND c.archived_at IS NULL AND a.user_id=p.user_id)`).all(taskId).map(row=>row.user_id);
+    userIds=[...new Set([...userIds,...children])];
+  }
   // Trip step owners participate in the ordinary parent even when its
   // coordinator or direct assignees are edited separately.
   if (d.prepare("SELECT 1 FROM sqlite_master WHERE name='trip_task_groups' AND type='table'").get()
@@ -39,7 +45,7 @@ export function setTaskAssignments(d, taskId, userIds) {
   for (const uid of previous.filter((id) => !current.includes(id))) {
     const otherRole = d.prepare("SELECT 1 FROM task_responsibilities WHERE task_id = ? AND user_id = ? AND status = 'active'")
       .get(task.parent_task_id, uid);
-    if (!otherRole) d.prepare('DELETE FROM task_assignments WHERE task_id = ? AND user_id = ?').run(task.parent_task_id, uid);
+    if (!otherRole&&!readTaskAssigneePolicy(d,task.parent_task_id)?.direct_assignee_ids.includes(uid)) d.prepare('DELETE FROM task_assignments WHERE task_id = ? AND user_id = ?').run(task.parent_task_id, uid);
   }
 }
 

@@ -1,3 +1,4 @@
+import {readTaskAssigneePolicy,persistTaskAssigneePolicy,assertActivityAssigneePolicy,categoryAssigneePolicy} from './task-assignee-policy.js';
 import { todayKey, householdTimeZone } from '../utils/timezone.js';
 import { taskWindowAncestors, taskUnskippedWhere } from './task-window.js';
 import { readTaskActivityDefinition } from './task-activity-snapshot.js';
@@ -223,6 +224,8 @@ export function recordTaskAssignment(d, taskId, activity, resolution, {
   const participants = resolution.participants?.length
     ? resolution.participants
     : (resolution.primary ? [resolution.primary] : []);
+  const countPolicy=readTaskAssigneePolicy(d,taskId);
+  if(countPolicy){assertActivityAssigneePolicy(countPolicy,activity,{...resolution,strategy:policy});persistTaskAssigneePolicy(d,taskId,countPolicy,[...new Set(participants.map(member=>Number(member.id)))]);}
   const state = resolution.unavailable ? 'unavailable' : (resolution.primary ? 'assigned' : 'open');
   // A first-class subtask can make somebody a participant of its parent even
   // when that person is not selected by the parent's Activity policy. Those
@@ -332,6 +335,7 @@ export function claimTask(d, taskId, userId, {actorId=userId,sourceDevice=null}=
       assertTaskAssignmentAvailability(d, taskId, [userId]);
     }
     assertTaskSupervisionAssignee(d, taskId, member.id);
+    persistTaskAssigneePolicy(d,taskId,categoryAssigneePolicy(d,d.prepare('SELECT category FROM tasks WHERE id=?').get(taskId).category),[Number(member.id)]);
     const changed = d.prepare(`
       UPDATE task_assignment_context SET state = 'assigned', updated_at = ${nowSql()}
        WHERE task_id = ? AND state IN ('open', 'unavailable')
@@ -383,6 +387,7 @@ export function overrideTaskAssignment(d, taskId, targetUserId, actorUserId) {
       assertTaskAssignmentAvailability(d, taskId, [targetUserId]);
     }
     assertTaskSupervisionAssignee(d, taskId, member.id);
+    persistTaskAssigneePolicy(d,taskId,categoryAssigneePolicy(d,d.prepare('SELECT category FROM tasks WHERE id=?').get(taskId).category),[Number(member.id)]);
     supersedeActiveTaskObligations(d, taskId);
     d.prepare(`UPDATE task_responsibilities SET status = 'superseded', updated_at = ${nowSql()} WHERE task_id = ? AND role IN ('primary', 'participant') AND status = 'active'`).run(taskId);
     d.prepare(`UPDATE task_assignment_context SET state = 'assigned', updated_at = ${nowSql()} WHERE task_id = ?`).run(taskId);

@@ -1,4 +1,5 @@
 import {assignNewTaskCardColor} from './task-card-colors.js';
+import {persistNewTaskAssignees,updateCapturedDirectAssignees} from './task-assignee-policy.js';
 import {createHash} from 'node:crypto';
 import {setTaskAssignments} from './task-assignments.js';
 import {setTaskLocation} from './task-locations.js';
@@ -89,6 +90,7 @@ export function createTripTaskGroup(d,trip,actorId,coordinatorId){
  if(!d.prepare('SELECT 1 FROM users WHERE id=?').get(uid))throw new TaskStateError('Choose a valid Trip coordinator.',{},400);
  const parent=Number(d.prepare("INSERT INTO tasks(title,description,category,priority,status,created_by,assigned_to,points,visibility,is_recurring,expiration_policy) VALUES(?,?,'misc','none','open',?,?,0,'all',0,'keep_overdue')").run(`Trip: ${trip.name}`,trip.notes||null,actorId,uid).lastInsertRowid);
  assignNewTaskCardColor(d,parent);
+ persistNewTaskAssignees(d,parent,[uid]);
  setTaskAssignments(d,parent,[uid]);
  d.prepare('INSERT INTO trip_task_groups(trip_id,parent_task_id,coordinator_id) VALUES(?,?,?)').run(trip.id,parent,uid);
  recordTaskActivity(d,parent,'created',actorId,{source:'trip',trip_id:trip.id});
@@ -141,6 +143,7 @@ export function reconcileTripTasks(d,trip,body,actorId){
    if(parent.status==='done')throw new TaskStateError('Reopen the completed Trip checklist before adding steps.');
    const id=Number(d.prepare("INSERT INTO tasks(title,description,category,priority,status,created_by,parent_task_id,points,visibility,is_recurring,expiration_policy) VALUES(?,?,'misc',?,'open',?,?,0,'all',0,'keep_overdue')").run(recipe.title,recipe.description,recipe.priority,actorId,parent.id).lastInsertRowid);
    assignNewTaskCardColor(d,id,{inheritFrom:parent.id});
+   persistNewTaskAssignees(d,id,recipe.assigned_user_ids||[]);
    d.prepare('INSERT INTO trip_task_steps(trip_id,step_key,task_id,phase,recipe_json) VALUES(?,?,?,?,?)').run(trip.id,recipe.step_key,id,recipe.phase,json(recipe));
    d.prepare('INSERT INTO trip_tasks(trip_id,task_id,phase) VALUES(?,?,?)').run(trip.id,id,recipe.phase);
    s={trip_id:trip.id,step_key:recipe.step_key,task_id:id,generated_json:'{}',overrides_json:'[]'};t=d.prepare('SELECT * FROM tasks WHERE id=?').get(id);
@@ -153,7 +156,7 @@ export function reconcileTripTasks(d,trip,body,actorId){
   const next={...current};for(const [key,value] of Object.entries(desired))if(!overrides.has(key))next[key]=value;
   if(json(current)!==json(next)||t.sort_order!==order)
    d.prepare('UPDATE tasks SET title=?,description=?,priority=?,due_date=?,due_time=?,assigned_to=?,is_optional=?,sort_order=? WHERE id=?').run(next.title,next.description,next.priority,next.due_date,next.due_time,next.assigned_user_ids[0]??null,next.is_optional,order,t.id);
-  if(json(current.assigned_user_ids)!==json(next.assigned_user_ids)||group.state==='cancelled')setTaskAssignments(d,t.id,next.assigned_user_ids);
+  if(json(current.assigned_user_ids)!==json(next.assigned_user_ids)||group.state==='cancelled'){updateCapturedDirectAssignees(d,t.id,next.assigned_user_ids,{adoptCurrent:json(recipe.assigned_user_ids)!==json(previousRecipe.assigned_user_ids)});setTaskAssignments(d,t.id,next.assigned_user_ids);}
   if(!overrides.has('location')&&json(current.location)!==json(next.location))setTaskLocation(d,t.id,next.location,actorId);
   syncReminders(d,trip,s,d.prepare('SELECT * FROM tasks WHERE id=?').get(t.id),recipe);
   d.prepare('UPDATE trip_task_steps SET phase=?,recipe_json=?,generated_json=?,overrides_json=? WHERE trip_id=? AND step_key=?').run(recipe.phase,json(recipe),json(next),json([...overrides]),trip.id,recipe.step_key);
@@ -170,7 +173,7 @@ export function reconcileTripTasks(d,trip,body,actorId){
  const changed=before!==json(d.prepare('SELECT * FROM trip_task_steps WHERE trip_id=? ORDER BY rowid').all(trip.id))||generated!==group.generated_json||body.coordinator_id!=null&&body.coordinator_id!==group.coordinator_id;
  if(body.coordinator_id!=null&&body.coordinator_id!==group.coordinator_id){
   if(!d.prepare('SELECT 1 FROM users WHERE id=?').get(body.coordinator_id))throw new TaskStateError('Choose a valid Trip coordinator.',{},400);
-  d.prepare('UPDATE tasks SET assigned_to=? WHERE id=?').run(body.coordinator_id,parent.id);setTaskAssignments(d,parent.id,[body.coordinator_id]);
+   updateCapturedDirectAssignees(d,parent.id,[body.coordinator_id],{adoptCurrent:true});d.prepare('UPDATE tasks SET assigned_to=? WHERE id=?').run(body.coordinator_id,parent.id);setTaskAssignments(d,parent.id,[body.coordinator_id]);
  }
  if(changed)d.prepare('UPDATE trip_task_groups SET generated_json=?,coordinator_id=COALESCE(?,coordinator_id),revision=revision+1 WHERE trip_id=?').run(generated,body.coordinator_id??null,trip.id);
 }

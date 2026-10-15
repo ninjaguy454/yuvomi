@@ -34,3 +34,58 @@ export function persistTaskAssigneePolicy(d,taskId,policy,directIds){
   d.prepare('DELETE FROM task_direct_assignees WHERE task_id=?').run(taskId);
   const insert=d.prepare('INSERT INTO task_direct_assignees(task_id,user_id) VALUES(?,?)');for(const id of directIds)insert.run(taskId,id);
 }
+const samePeople=(a,b)=>a.length===b.length&&[...a].sort((x,y)=>x-y).every((id,i)=>id===[...b].sort((x,y)=>x-y)[i]);
+/** An unchanged full legacy editor payload is not an adoption/conversion. */
+export function proposedTaskAssigneePolicy(d,task,body,{category=body.category??task?.category??'misc',directIds=null}={}){
+  const saved=task?readTaskAssigneePolicy(d,task.id):null;
+  const visible=task?d.prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(task.id).map(row=>row.user_id):[];
+  const explicit=Object.hasOwn(body,'direct_assignee_ids');
+  if(explicit&&(!Array.isArray(body.assigned_to)||!Array.isArray(body.direct_assignee_ids)||!samePeople(body.assigned_to,body.direct_assignee_ids)))
+    throw new TaskAssigneePolicyError('Direct assignees must match the explicit assignment selection.');
+  const ids=directIds??(explicit?body.direct_assignee_ids:body.assigned_to??saved?.direct_assignee_ids??visible);
+  const changedCategory=!!task&&category!==task.category;
+  const reference=explicit?saved?.direct_assignee_ids??visible:visible;
+  const changedPeople=(explicit||body.assigned_to!==undefined)&&!samePeople(ids,reference);
+  if(task&&!changedCategory&&!changedPeople)return null;
+  if(task&&!saved&&changedCategory&&body.assigned_to===undefined)
+    throw new TaskAssigneePolicyError('Choose the direct assignees explicitly before applying a category rule.','direct_assignees_required');
+  const policy=categoryAssigneePolicy(d,category);assertAssigneeCount(policy,ids);return {...policy,direct_assignee_ids:ids};
+}
+export function persistNewTaskAssignees(d,taskId,directIds,policy=undefined){
+  const row=d.prepare('SELECT category FROM tasks WHERE id=?').get(taskId);
+  if(policy===null)return;
+  persistTaskAssigneePolicy(d,taskId,policy??categoryAssigneePolicy(d,row.category),directIds);
+}
+export function assigneePolicyProjection(d,taskId){const saved=readTaskAssigneePolicy(d,taskId);if(!saved)return {assignee_policy:null,direct_assignee_ids:null};const {direct_assignee_ids,...policy}=saved;return {assignee_policy:policy,direct_assignee_ids};}
+export function assertActivityAssigneePolicy(policy,activity,resolution){
+  if(!policy)return;
+  const ids=[...new Set((resolution.participants?.length?resolution.participants:resolution.primary?[resolution.primary]:[]).map(member=>Number(member.id)))];
+  const requested=(resolution.strategy??activity.assignment_policy??activity.assignment_strategy)==='rotating_multi'?Number(activity.participant_count)||1:ids.length;
+  if(policy.max_assignees!==null&&requested>policy.max_assignees)throw new TaskAssigneePolicyError(`This category permits at most ${policy.max_assignees} direct assignees; ${requested} requested.`,'category_assignee_limit',{category_key:policy.category_key,max_assignees:policy.max_assignees,selected_count:requested});
+  assertAssigneeCount(policy,ids);
+}
+/** Pure validation/enrollment for an explicitly authored future definition. */
+export function proposeDefinitionAssigneePolicies(d,before,after){
+  const oldActions=new Map(before?.subtasks?.map(action=>[action.action_key,action])||[]);
+  for(const [old,row] of [[before,after],...after.subtasks.map(row=>[oldActions.get(row.action_key),row])]){
+    const ids=row.assigned_user_ids||[],category=row.task.category||'misc';
+    if(old&&old.task.category===category&&samePeople(old.assigned_user_ids||[],ids))continue;
+    const direct=old?.assignee_policy&&samePeople(old.assigned_user_ids||[],ids)?old.assignee_policy.direct_assignee_ids:ids;
+    const policy=categoryAssigneePolicy(d,category);assertAssigneeCount(policy,direct);row.assignee_policy={...policy,direct_assignee_ids:[...direct]};
+    if(row===after&&after.binding?.snapshot)after.binding.snapshot.assignee_policy=policy;
+  }
+  return after;
+}
+export function persistCapturedTaskAssignees(d,taskId,captured,actualIds,{rotating=false}={}){
+  if(!captured)return;
+  const ids=rotating?actualIds:captured.direct_assignee_ids.filter(id=>actualIds.includes(id));
+  persistTaskAssigneePolicy(d,taskId,captured,ids);
+}
+export function updateCapturedDirectAssignees(d,taskId,ids,{adoptCurrent=false}={}){const saved=readTaskAssigneePolicy(d,taskId);if(saved||adoptCurrent)persistTaskAssigneePolicy(d,taskId,adoptCurrent?categoryAssigneePolicy(d,d.prepare('SELECT category FROM tasks WHERE id=?').get(taskId).category):saved,ids);}
+export function proposedBoundTaskCategoryPolicy(d,task,body,activity,binding){
+  if(body.category===undefined||body.category===task.category)return null;
+  const policy=categoryAssigneePolicy(d,body.category),saved=readTaskAssigneePolicy(d,task.id);
+  if(!saved){if(policy.max_assignees===null)return null;throw new TaskAssigneePolicyError('Review the direct assignees explicitly before applying a category limit to this existing Activity.','direct_assignees_required');}
+  assertActivityAssigneePolicy(policy,activity,{strategy:binding.assignment_override_user_id?'fixed':activity.assignment_policy||activity.assignment_strategy,participants:saved.direct_assignee_ids.map(id=>({id}))});
+  return {...policy,direct_assignee_ids:saved.direct_assignee_ids};
+}

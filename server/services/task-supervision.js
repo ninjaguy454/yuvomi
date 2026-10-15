@@ -1,4 +1,5 @@
 import {assignNewTaskCardColor} from './task-card-colors.js';
+import {persistNewTaskAssignees,updateCapturedDirectAssignees} from './task-assignee-policy.js';
 /** Linked supervision uses the source action's Task status as its only completion authority. */
 import { effectiveSkillProficiency, householdMembers, sharedEligibleInterval } from './activity-eligibility.js';
 import { activityPresenceWindow, evaluateAvailability, availabilityInstantMs } from './presence.js';
@@ -543,6 +544,7 @@ function insertProjection(d, source, title, parentId, assignedTo) {
     .run(title, source.category || 'misc', source.start_date, source.start_time ?? null, source.due_date, source.due_time,
       assignedTo || null, source.created_by, parentId, source.visibility || 'all').lastInsertRowid);
   assignNewTaskCardColor(d,id,{inheritFrom:source.id});
+  persistNewTaskAssignees(d,id,assignedTo?[Number(assignedTo)]:[]);
   d.prepare(`INSERT INTO task_planning_context(task_id,place_id,presence_policy,presence_window,source)
     SELECT ?,place_id,presence_policy,presence_window,source FROM task_planning_context WHERE task_id = ?`).run(id, source.id);
   return id;
@@ -550,6 +552,7 @@ function insertProjection(d, source, title, parentId, assignedTo) {
 
 function setProjectionAssignees(d, id, userIds) {
   const ids = [...new Set(userIds.filter(Boolean).map(Number))];
+  updateCapturedDirectAssignees(d,id,ids);
   const current = d.prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(id).map(row => Number(row.user_id));
   if ((task(d, id)?.assigned_to || null) === (ids[0] || null)
     && current.length === ids.length && current.every(uid => ids.includes(uid))) return;

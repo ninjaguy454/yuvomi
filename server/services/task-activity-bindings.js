@@ -1,3 +1,4 @@
+import {categoryAssigneePolicy,readTaskAssigneePolicy,persistTaskAssigneePolicy,assertActivityAssigneePolicy,TaskAssigneePolicyError} from './task-assignee-policy.js';
 /**
  * Connects ordinary Tasks to the reusable Activity Template / skill engine.
  *
@@ -272,6 +273,7 @@ export function previewTaskActivityBinding(d, {
   allowInactive = false,
   activitySnapshot = null,
   definitionSnapshot = null,
+  assigneePolicy = undefined,
 } = {}) {
   const id = asPositiveInt(activityTemplateId);
   if (!id) throw new TaskActivityBindingError('Choose a valid activity template.');
@@ -301,8 +303,12 @@ export function previewTaskActivityBinding(d, {
         ...activityPresenceWindow(d, { task, dateKey, windowMode: activity.presence_window || 'due' }),
       },
     });
-    return { activity, subjectUserId: subjectId, assignmentOverrideUserId: overrideId, resolution };
+    const captured=activitySnapshot??definitionSnapshot;
+    const policy=assigneePolicy===undefined?(captured?captured.assignee_policy??null:categoryAssigneePolicy(d,task?.category??activity.category)):assigneePolicy;
+    assertActivityAssigneePolicy(policy,activity,overrideId?{...resolution,strategy:'fixed'}:resolution);
+    return { activity, subjectUserId: subjectId, assignmentOverrideUserId: overrideId, resolution,assigneePolicy:policy };
   } catch (err) {
+    if(err instanceof TaskAssigneePolicyError)throw err;
     throw new TaskActivityBindingError(err.message);
   }
 }
@@ -323,6 +329,7 @@ export function applyTaskActivityBinding(d, taskId, {
   allowInactive = false,
   supportOriginTaskId = null,
   materializeChecklist = true,
+  adoptAssigneePolicy = false,
   variableLabels = {},
   activitySnapshot = null,
   definitionSnapshot = null,
@@ -334,8 +341,10 @@ export function applyTaskActivityBinding(d, taskId, {
   }
 
   const existingBinding = getTaskActivityBinding(d, task.id);
-  const snapshot = parseTaskActivitySnapshot(activitySnapshot ?? definitionSnapshot
+  let snapshot = parseTaskActivitySnapshot(activitySnapshot ?? definitionSnapshot
     ?? (Number(existingBinding?.activity_template_id) === Number(activityTemplateId) ? existingBinding?.definition_snapshot_json : null));
+  const adoptedPolicy=adoptAssigneePolicy?categoryAssigneePolicy(d,task.category):undefined;
+  if(adoptedPolicy&&snapshot)snapshot={...snapshot,assignee_policy:adoptedPolicy};
   const preview = previewTaskActivityBinding(d, {
     activityTemplateId,
     subjectUserId,
@@ -344,6 +353,7 @@ export function applyTaskActivityBinding(d, taskId, {
     task,
     allowInactive,
     activitySnapshot: snapshot,
+    assigneePolicy:adoptedPolicy??(snapshot?snapshot.assignee_policy??null:existingBinding?readTaskAssigneePolicy(d,taskId):undefined),
   });
 
   let resolution;
@@ -365,6 +375,7 @@ export function applyTaskActivityBinding(d, taskId, {
     throw new TaskActivityBindingError(err.message);
   }
 
+  if(preview.assigneePolicy){assertActivityAssigneePolicy(preview.assigneePolicy,preview.activity,preview.assignmentOverrideUserId?{...resolution,strategy:'fixed'}:resolution);persistTaskAssigneePolicy(d,taskId,preview.assigneePolicy,[...new Set((resolution.participants?.length?resolution.participants:resolution.primary?[resolution.primary]:[]).map(member=>Number(member.id)))]);}
   // Read before the upsert: after it, every first-time binding would look
   // existing and its authoring-time checklist would never be materialized.
   d.prepare(`

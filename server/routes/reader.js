@@ -1,4 +1,5 @@
 import {assignNewTaskCardColor} from '../services/task-card-colors.js';
+import {persistNewTaskAssignees} from '../services/task-assignee-policy.js';
 import { hasCapability } from '../permissions.js';
 import { taskUnskippedWhere } from '../services/task-window.js';
 import { assertTaskMutation, taskVisibilityWhere } from '../services/task-access.js';
@@ -301,6 +302,7 @@ router.post('/tasks', (req, res) => {
   db.get().transaction(() => {
     const result = db.get().prepare(`INSERT INTO tasks (title, description, category, priority, due_date, due_time, assigned_to, created_by, visibility) VALUES (?, ?, 'misc', ?, ?, ?, ?, ?, 'all')`).run(title, description, priority, dueDate, dueTime, assignee, req.authUserId);
     assignNewTaskCardColor(db.get(),result.lastInsertRowid);
+    persistNewTaskAssignees(db.get(),result.lastInsertRowid,assignee?[assignee]:[]);
     if (assignee) db.get().prepare('INSERT INTO task_assignments (task_id, user_id) VALUES (?, ?)').run(result.lastInsertRowid, assignee);
   })();
   return res.redirect(303, '/reader?view=add-task&created=1');

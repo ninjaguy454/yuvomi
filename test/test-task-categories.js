@@ -93,6 +93,15 @@ try {
   });
 
   let customKey;
+  await asyncTest('category limit-only edits preserve labels; omitted policy remains compatible', async () => {
+    const before=database.prepare('SELECT * FROM task_categories WHERE key=?').get('school');
+    const update=await jsend(`${base}/categories/school`,'PUT',{max_assignees:1});
+    assert(update.status===200,JSON.stringify(update));assert(update.body.data.max_assignees===1,'cap saved');
+    const after=database.prepare('SELECT * FROM task_categories WHERE key=?').get('school');
+    assert(after.name===before.name&&after.label_key===before.label_key,'limit does not rename');
+    for(const max_assignees of [0,-1,1.5,'2',true])assert((await jsend(`${base}/categories/school`,'PUT',{max_assignees})).status===400,'invalid cap rejected');
+    assert((await jsend(`${base}/categories/school`,'PUT',{max_assignees:null})).body.data.max_assignees===null,'uncapped round trip');
+  });
   await asyncTest('POST /categories erstellt Custom-Kategorie mit Slug-Key', async () => {
     const { status, body } = await jsend(`${base}/categories`, 'POST', { name: 'Möbel & Deko' });
     assert(status === 201, `Status ${status}`);

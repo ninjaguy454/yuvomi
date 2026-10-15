@@ -1,4 +1,5 @@
 import {setTaskAssignments as setAssignments} from '../services/task-assignments.js';
+import {parseCategoryAssigneeLimit} from '../services/task-assignee-policy.js';
 import {isTripStep,tripTaskState,markTripTaskOverrides} from '../services/trip-task-state.js';
 import {attachTripTaskProjection} from '../services/trip-task-projection.js';
 import {retireTripTask,refreshTripStepReminders} from '../services/trip-tasks.js';
@@ -807,7 +808,7 @@ function setArchived(taskId, archived) {
 /** Verwaltbare Kategorien aus der DB (nach sort_order). */
 function loadTaskCategories() {
   return db.get().prepare(
-    'SELECT key, name, label_key, sort_order FROM task_categories ORDER BY sort_order ASC, key ASC'
+    'SELECT key, name, label_key, sort_order, max_assignees FROM task_categories ORDER BY sort_order ASC, key ASC'
   ).all();
 }
 
@@ -818,7 +819,7 @@ function validTaskCategoryKeys() {
 
 /** Anzahl Aufgaben, die eine Kategorie referenzieren (Guard vor dem Löschen). */
 function taskCategoryInUseCount(key) {
-  return db.get().prepare('SELECT COUNT(*) AS n FROM tasks WHERE category = ?').get(key).n;
+  return ['tasks','activity_templates','workflow_templates'].reduce((count,table)=>count+db.get().prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE category=?`).get(key).n,0);
 }
 
 /**
@@ -1848,6 +1849,7 @@ router.delete('/tags/:tag', (req, res) => {
 // POST /api/v1/tasks/categories  Body: { name } → { data: TaskCategory }
 router.post('/categories', (req, res) => {
   try {
+    const maxAssignees=Object.hasOwn(req.body,'max_assignees')?parseCategoryAssigneeLimit(req.body.max_assignees):null;
     const vName = v.str(req.body.name, 'Name', { max: v.MAX_SHORT });
     if (vName.error) return res.status(400).json({ error: vName.error, code: 400 });
 
@@ -1859,10 +1861,10 @@ router.post('/categories', (req, res) => {
     const maxOrder = db.get().prepare('SELECT COALESCE(MAX(sort_order), -1) AS m FROM task_categories').get().m;
     const key = uniqueKey(db.get(), 'task_categories', vName.value);
     db.get().prepare(
-      'INSERT INTO task_categories (key, name, label_key, sort_order) VALUES (?, ?, NULL, ?)'
-    ).run(key, vName.value, maxOrder + 1);
+      'INSERT INTO task_categories (key, name, label_key, sort_order, max_assignees) VALUES (?, ?, NULL, ?, ?)'
+    ).run(key, vName.value, maxOrder + 1,maxAssignees);
 
-    const cat = db.get().prepare('SELECT key, name, label_key, sort_order FROM task_categories WHERE key = ?').get(key);
+    const cat = db.get().prepare('SELECT key, name, label_key, sort_order, max_assignees FROM task_categories WHERE key = ?').get(key);
     res.status(201).json({ data: cat });
   } catch (err) {
     if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
@@ -1892,16 +1894,19 @@ router.put('/categories/:key', (req, res) => {
     const cat = db.get().prepare('SELECT * FROM task_categories WHERE key = ?').get(req.params.key);
     if (!cat) return res.status(404).json({ error: 'Category not found.', code: 404 });
 
-    const vName = v.str(req.body.name, 'Name', { max: v.MAX_SHORT });
+    const maxAssignees=Object.hasOwn(req.body,'max_assignees')?parseCategoryAssigneeLimit(req.body.max_assignees):cat.max_assignees;
+    const rename=Object.hasOwn(req.body,'name');
+    if(!rename&&!Object.hasOwn(req.body,'max_assignees'))return res.status(400).json({error:'Choose a name or assignee limit.',code:400});
+    const vName = rename?v.str(req.body.name, 'Name', { max: v.MAX_SHORT }):{value:cat.name};
     if (vName.error) return res.status(400).json({ error: vName.error, code: 400 });
 
     const conflict = db.get().prepare(`
       SELECT key FROM task_categories WHERE COALESCE(name, key) = ? COLLATE NOCASE AND key != ?
     `).get(vName.value, cat.key);
-    if (conflict) return res.status(409).json({ error: 'Category already exists.', code: 409, reason: 'category_exists' });
+    if (rename&&conflict) return res.status(409).json({ error: 'Category already exists.', code: 409, reason: 'category_exists' });
 
-    db.get().prepare('UPDATE task_categories SET name = ?, label_key = NULL WHERE key = ?').run(vName.value, cat.key);
-    const updated = db.get().prepare('SELECT key, name, label_key, sort_order FROM task_categories WHERE key = ?').get(cat.key);
+    db.get().prepare('UPDATE task_categories SET name=?, label_key=?, max_assignees=? WHERE key=?').run(vName.value,rename?null:cat.label_key,maxAssignees,cat.key);
+    const updated = db.get().prepare('SELECT key, name, label_key, sort_order, max_assignees FROM task_categories WHERE key = ?').get(cat.key);
     res.json({ data: updated });
   } catch (err) {
     if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });

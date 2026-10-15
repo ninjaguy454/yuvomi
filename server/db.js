@@ -10,6 +10,7 @@ import {addNoteGroupSchema} from './services/note-group-schema.js';
 import {addNoteLayoutOwnerSchema} from './services/note-layout-owner-schema.js';
 import {addTaskScoringSchema} from './services/task-scoring-schema.js';
 import {addActivityTemplateScoringSchema} from './services/activity-template-scoring-schema.js';
+import {addTaskAssigneePolicySchema} from './services/task-assignee-policy-schema.js';
 /**
  * Modul: Datenbank (Database)
  * Zweck: SQLite/SQLCipher Verbindung, Schema-Migration (versioniert) und Query-Helfer
@@ -9127,6 +9128,7 @@ FORK_MIGRATIONS.push({version:10057, description:'Rewards: parent prize delivery
 FORK_MIGRATIONS.push({version:10058, description:'Rewards: scoped device purchases and one-action member authentication', up:addDevicePrizeSchema});
 FORK_MIGRATIONS.push({version:10059,description:'Appearance: persisted indexed Task and Note colors',up:addCardColorSchema});
 FORK_MIGRATIONS.push({version:10060,description:'Activity Templates: explicit scoring modes and checklist point amounts',up:addActivityTemplateScoringSchema});
+FORK_MIGRATIONS.push({version:10061,description:'Prospective category assignee limits and direct performer provenance',up:addTaskAssigneePolicySchema});
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];
 
 const FORK_MIGRATION_REMAPS = [

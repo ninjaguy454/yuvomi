@@ -71,3 +71,45 @@ for(const legacy of [false,true])for(const echo of [false,true])test(`historical
   const next=f.d.prepare('SELECT id FROM tasks WHERE recurrence_origin_id=? AND parent_task_id IS NULL').get(id),policy=readTaskAssigneePolicy(f.d,next.id);
   if(legacy)assert.equal(policy,null);else assert.equal(policy.max_assignees,null);
 });
+
+const boundTemplate=f=>Number(f.d.prepare("INSERT INTO activity_templates(name,title_template,category,assignment_policy,assignment_strategy,fixed_user_id,subject_required,allow_assignment_override) VALUES('Captured bound routine','Captured bound routine','school','fixed','fixed',2,0,1)").run().lastInsertRowid);
+for(const legacy of [false,true])test(`historical bound title preserves ${legacy?'missing legacy':'captured uncapped'} root and binding policy`,async t=>{
+  const f=await scoringFixture(t),template=boundTemplate(f),made=await f.create({...recurrence,category:'school',activity_template_id:template,assigned_to:[2],points:2}),id=made.data.id;
+  assert.equal(made.status,201,JSON.stringify(made));
+  if(legacy)for(const row of f.d.prepare('SELECT id,definition_json FROM task_recurrence_definitions').all()){
+    const definition=JSON.parse(row.definition_json);delete definition.assignee_policy;delete definition.binding.snapshot.assignee_policy;
+    f.d.prepare('UPDATE task_recurrence_definitions SET definition_json=? WHERE id=?').run(JSON.stringify(definition),row.id);
+  }
+  const canonical=latest(f);f.d.prepare("UPDATE task_categories SET max_assignees=1 WHERE key='school'").run();
+  for(const people of [[3],[2]])assert.equal((await f.edit(id,{assigned_to:people})).status,200);
+  assert.equal((await f.finish(id)).status,200);const old=history(f,id),snapshot=f.snapshot(),body={edit_scope:'future',title:'Unrelated bound future title'};
+  const preview=await f.preview(id,body);assert.equal(preview.status,200,JSON.stringify(preview));assert.equal(f.snapshot(),snapshot);
+  const saved=await f.edit(id,body);assert.equal(saved.status,200,JSON.stringify(saved));
+  assert.deepEqual(latest(f).assignee_policy,canonical.assignee_policy);assert.deepEqual(latest(f).binding.snapshot.assignee_policy,canonical.binding.snapshot.assignee_policy);assert.equal(history(f,id),old);
+  const next=f.d.prepare('SELECT id FROM tasks WHERE recurrence_origin_id=? AND parent_task_id IS NULL').get(id),policy=readTaskAssigneePolicy(f.d,next.id);
+  if(legacy)assert.equal(policy,null);else assert.equal(policy.max_assignees,null);
+});
+
+test('this-and-future binding change captures new direct performers despite an unchanged visibility union',async t=>{
+  const f=await scoringFixture(t),template=boundTemplate(f);f.d.prepare("UPDATE task_categories SET max_assignees=1 WHERE key='school'").run();
+  const made=await f.create({...recurrence,category:'school',activity_template_id:template,assigned_to:[2],subtasks:[{title:'Child',assigned_user_ids:[3]}]}),id=made.data.id;
+  assert.equal(made.status,201,JSON.stringify(made));
+  const pair=Number(f.d.prepare("INSERT INTO activity_templates(name,title_template,category,assignment_policy,assignment_strategy,participant_count,subject_required,allow_assignment_override) VALUES('New pair','New pair','school','rotating_multi','eligible_round_robin',2,0,1)").run().lastInsertRowid);
+  const skill=Number(f.d.prepare("INSERT INTO skills(name,minimum_age,age_promotion,created_by) VALUES('Pair eligibility',0,'normal',1)").run().lastInsertRowid);
+  for(const user of [1,2,3])f.d.prepare("INSERT INTO user_skill_proficiency(user_id,skill_id,proficiency,source,updated_by) VALUES(?,?,?,'manual',1)").run(user,skill,user===1?'excluded':'normal');
+  f.d.prepare('INSERT INTO activity_template_skills(activity_template_id,skill_id,sort_order) VALUES(?,?,0)').run(pair,skill);
+  f.d.prepare("UPDATE task_categories SET max_assignees=2 WHERE key='school'").run();const snapshot=f.snapshot(),body={edit_scope:'future',activity_template_id:pair,assigned_to:[]};
+  const preview=await f.preview(id,body);assert.equal(preview.status,200,JSON.stringify(preview));assert.equal(f.snapshot(),snapshot);
+  const saved=await f.edit(id,body);assert.equal(saved.status,200,JSON.stringify(saved));
+  const definition=latest(f),policy=readTaskAssigneePolicy(f.d,id);assert.deepEqual(definition.assignee_policy,policy);assert.deepEqual(policy.direct_assignee_ids,[2,3]);assert.equal(policy.max_assignees,2);assert.equal(definition.binding.snapshot.assignee_policy.max_assignees,2);
+  assert.equal((await f.finish(id)).status,200);const next=f.d.prepare('SELECT id FROM tasks WHERE recurrence_origin_id=? AND parent_task_id IS NULL').get(id);assert.deepEqual(readTaskAssigneePolicy(f.d,next.id),policy);
+});
+
+test('this-and-future ordered rotation edit captures the new direct performer despite unchanged visibility',async t=>{
+  const f=await scoringFixture(t),made=await f.create({...recurrence,category:'school',assigned_to:[2],assignment_mode:'round_robin',rotation_user_ids:[2,3],rotation_group:'policy-review-group',rotation_slot:0,subtasks:[{title:'Two',assigned_user_ids:[2]},{title:'Three',assigned_user_ids:[3]}]}),id=made.data.id;
+  assert.equal(made.status,201,JSON.stringify(made));f.d.prepare("UPDATE task_categories SET max_assignees=1 WHERE key='school'").run();const snapshot=f.snapshot(),body={edit_scope:'future',rotation_user_ids:[3,2]};
+  const preview=await f.preview(id,body);assert.equal(preview.status,200,JSON.stringify(preview));assert.equal(f.snapshot(),snapshot);
+  const saved=await f.edit(id,body);assert.equal(saved.status,200,JSON.stringify(saved));
+  assert.deepEqual(latest(f).assignee_policy,readTaskAssigneePolicy(f.d,id));assert.deepEqual(latest(f).assignee_policy.direct_assignee_ids,[3]);assert.equal(latest(f).assignee_policy.max_assignees,1);
+  assert.equal((await f.finish(id)).status,200);const next=f.d.prepare('SELECT id FROM tasks WHERE recurrence_origin_id=? AND parent_task_id IS NULL').get(id);assert.equal(readTaskAssigneePolicy(f.d,next.id).max_assignees,1);assert.equal(readTaskAssigneePolicy(f.d,next.id).direct_assignee_ids.length,1);
+});

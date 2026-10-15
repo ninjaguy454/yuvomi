@@ -75,19 +75,33 @@ export function assertActivityAssigneePolicy(policy,activity,resolution){
   if(policy.max_assignees!==null&&requested>policy.max_assignees)throw new TaskAssigneePolicyError(`This category permits at most ${policy.max_assignees} direct assignees; ${requested} requested.`,'category_assignee_limit',{category_key:policy.category_key,max_assignees:policy.max_assignees,selected_count:requested});
   assertAssigneeCount(policy,ids);
 }
+const bindingAssignmentConfiguration=binding=>binding?{
+  ...Object.fromEntries(['activity_template_id','subject_user_id','assignment_override_user_id'].map(key=>[key,binding[key]??null])),
+  ...Object.fromEntries(['assignment_policy','assignment_strategy','fixed_user_id','participant_count','rotation_group'].map(key=>[key,binding.snapshot?.[key]??null]))
+}:null;
+function changedRootAssignmentConfiguration(before,after){
+  return JSON.stringify(bindingAssignmentConfiguration(before.binding))!==JSON.stringify(bindingAssignmentConfiguration(after.binding))
+    ||['assignment_mode','rotation_group','rotation_slot'].some(key=>(before.task[key]??(key==='rotation_slot'?0:key==='assignment_mode'?'fixed':null))!==(after.task[key]??(key==='rotation_slot'?0:key==='assignment_mode'?'fixed':null)))
+    ||JSON.stringify(before.rotation_user_ids??[])!==JSON.stringify(after.rotation_user_ids??[]);
+}
 /** Pure validation/enrollment for an explicitly authored future definition. */
-export function proposeDefinitionAssigneePolicies(d,before,after,{assignmentIntent=null}={}){
+export function proposeDefinitionAssigneePolicies(d,before,after,{assignmentIntent=null,resolveRootDirectIds=null}={}){
   const oldActions=new Map(before?.subtasks?.map(action=>[action.action_key,action])||[]);
   for(const [old,row] of [[before,after],...after.subtasks.map(row=>[oldActions.get(row.action_key),row])]){
     const ids=row.assigned_user_ids||[],category=row.task.category||'misc';
     const fields=row===after?assignmentIntent?.fields??{}:(assignmentIntent?.actions?.update??[]).find(action=>action.action_key===row.action_key)?.fields??{};
     const assignmentField=row===after?'assigned_to':'assigned_user_ids',explicit=Object.hasOwn(fields,assignmentField),selected=explicit?fields[assignmentField]:ids;
     const previous=old?.assignee_policy?.direct_assignee_ids??old?.assigned_user_ids??[];
-    if(old&&old.task.category===category&&(explicit?samePeople(previous,selected):samePeople(old.assigned_user_ids||[],ids))){
+    const configurationChanged=row===after&&old&&changedRootAssignmentConfiguration(old,row);
+    if(old&&!configurationChanged&&old.task.category===category&&(explicit?samePeople(previous,selected):samePeople(old.assigned_user_ids||[],ids))){
       if(old.assignee_policy)row.assignee_policy=structuredClone(old.assignee_policy);else delete row.assignee_policy;
+      if(row===after&&row.binding?.snapshot){
+        if(old.binding?.snapshot?.assignee_policy)row.binding.snapshot.assignee_policy=structuredClone(old.binding.snapshot.assignee_policy);
+        else delete row.binding.snapshot.assignee_policy;
+      }
       continue;
     }
-    const direct=explicit?selected:old?.assignee_policy&&samePeople(old.assigned_user_ids||[],ids)?previous:ids;
+    const direct=explicit?selected:configurationChanged&&resolveRootDirectIds?resolveRootDirectIds():old?.assignee_policy&&samePeople(old.assigned_user_ids||[],ids)?previous:ids;
     const policy=categoryAssigneePolicy(d,category);assertAssigneeCount(policy,direct);row.assignee_policy={...policy,direct_assignee_ids:[...direct]};
     if(row===after&&after.binding?.snapshot)after.binding.snapshot.assignee_policy=policy;
   }

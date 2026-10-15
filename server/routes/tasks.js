@@ -288,7 +288,8 @@ function futureEditContext(req,task) {
     return fields;
   };
   const definition=proposedFutureSeriesDefinition(db.get(),req,task,before,req.body.future_patch??{}, {validateFields});
-  proposeDefinitionAssigneePolicies(db.get(),before,definition,{assignmentIntent:req.body.future_patch});
+  proposeDefinitionAssigneePolicies(db.get(),before,definition,{assignmentIntent:req.body.future_patch,
+    resolveRootDirectIds:definition.task.assignment_mode==='round_robin'?()=>seriesRotationAssignment(task,definition,{advance:true}).assigned_user_ids:null});
   if(!futureRootCapabilities(db.get(),req,task,definition).view)throw new TaskStateError('This future definition is unavailable.',{},404);
   assertSeriesDefinitionMutation(db.get(),req,task,before,definition,{futureOnly:true});
   validateFutureDefinitionWindows(req,task,definition);
@@ -475,11 +476,14 @@ function finalizeFutureActionKeys(definition) {
   }
   return created;
 }
-function assertCompatibleFutureDefinition(req,task,series,definition) {
+function assertCompatibleFutureDefinition(req,task,series,definition,{capturedDirectIds=null}={}) {
   const before=effectiveSeriesScoringDefinition(db.get(),seriesDefinitionForGeneration(db.get(),series.series_id,series.occurrence.generation+1)).data;
   const assignmentIntent=!definition.binding&&(definition.task.assignment_mode??'fixed')==='fixed'&&Object.hasOwn(req.body,'direct_assignee_ids')
     ?{fields:{assigned_to:parseAssignedTo(req.body.direct_assignee_ids)}}:null;
-  proposeDefinitionAssigneePolicies(db.get(),before,definition,{assignmentIntent});
+  proposeDefinitionAssigneePolicies(db.get(),before,definition,{assignmentIntent,resolveRootDirectIds:()=>{
+    if(capturedDirectIds!==null)return capturedDirectIds;
+    const resolved=scoringAssignmentIntent(task,req.body);return resolved.policyAssigned??resolved.assigned;
+  }});
   assertSeriesDefinitionMutation(db.get(),req,task,before,definition,{futureOnly:true});
   if(!futureRootCapabilities(db.get(),req,task,definition).view)throw new TaskStateError('This future definition is unavailable.',{},404);
   validateFutureDefinitionWindows(req,task,definition);
@@ -589,7 +593,6 @@ function validateFutureDefinitionConfiguration(task,before,definition) {
     throw new TaskStateError('Cannot change a rotation-group position after its current cycle has started.',{},409);
 }
 function previewFutureDefinitions(req,task,before,definition,{viewerId,authorizedTaskIds,scope='future_only'}) {
-  proposeDefinitionAssigneePolicies(db.get(),before,definition);
   const wires=futureScoringWires(req,task,before,definition),proposal={...wires.after};
   if(proposal.scoring_mode==='legacy')delete proposal.scoring_mode;
   const prepared=prepareFutureScoringExecution(task,before,definition,wires);
@@ -3029,7 +3032,7 @@ export function updateTaskDefinition(req, res) {
           const definition=normalizeSeriesSchedule(captureSeriesDefinition(db.get(),task.id),series.occurrence);
           const colorBase=seriesDefinitionForGeneration(db.get(),series.series_id,series.occurrence.generation+1)?.data||series.definition.data;
           preserveFutureCardColorPolicies(definition,colorBase,req.body.card_color_choice);
-          assertCompatibleFutureDefinition(req,current,series,definition);
+          assertCompatibleFutureDefinition(req,current,series,definition,{capturedDirectIds:definition.assignee_policy?.direct_assignee_ids??null});
           const revised=appendSeriesDefinition(db.get(),task.id,{expectedRevision:req.body.expected_series_revision,
             actorId:req.authUserId||req.session.userId,definition});
           const occurrence=recordOccurrenceDefinition(db.get(),task.id,{definitionId:revised.definition.id,

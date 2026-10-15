@@ -35,6 +35,9 @@ export function sameSeriesBindingPolicy(left,right,{includeRequirements=false}={
       if(includeRequirements)value.snapshot.required_skill_ids=[...value.snapshot.required_skill_ids].sort((a,b)=>a-b);
       else delete value.snapshot.required_skill_ids;
       delete value.snapshot.checklist;delete value.snapshot.rotation_rendering;
+      // readTaskActivityDefinition adds the bound subject as runtime context.
+      // The binding's subject_user_id already owns that authored selection.
+      delete value.snapshot.subject_user_id;
     }
     return value;
   };

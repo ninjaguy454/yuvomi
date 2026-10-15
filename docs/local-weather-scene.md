@@ -41,7 +41,9 @@ The unchanged night derivative is complemented by a masked deep-blue sky wash
 and at most72static illustrative stars selected deterministically from verified
 sky-mask pixels. The wash fades with the same solar grade; stars sit beneath
 weather clouds, dim with cloud cover, and disappear in overcast, fog, precipitation
-and thunderstorms. They add no animation loop, are not observed astronomical
+and thunderstorms. Stars require known dry clear/partly-cloudy facts; rich unknown
+conditions and obscurants such as smoke or haze do not imply a clear sky. Engines
+without luminance-mask CSS support hide both new layers. They add no animation loop, are not observed astronomical
 positions, and leave the daytime painting, card colors and terrain treatment intact.
 
 Wide artwork uses the approved50%52% cover camera with stage aspect at most2.1.

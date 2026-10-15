@@ -87,6 +87,21 @@ test('clear-night sky has a masked dark treatment and static stars beneath weath
     assert.equal(await page.$eval('.local-weather-stars',node=>getComputedStyle(node).pointerEvents),'none');
     assert.ok(await page.evaluate(()=>{const world=document.querySelector('.local-weather-sky-world');return world.querySelector('.local-weather-night-wash')&&world.querySelector('.local-weather-stars').nextElementSibling.classList.contains('local-weather-cloud-strip');}));
     assert.deepEqual(await cards(page),before);
+    const unsupported=await page.evaluate(()=>{
+      const entries=[...document.styleSheets].filter(value=>value.href?.endsWith('/styles/local-weather-scene.css')).map(sheet=>{
+        const index=[...sheet.cssRules].findIndex(rule=>rule.type===CSSRule.SUPPORTS_RULE&&rule.cssText.includes('.local-weather-night-wash'));
+        return {sheet,index,original:index<0?null:sheet.cssRules[index].cssText};
+      });
+      if(!entries.length||entries.some(value=>value.index<0))return null;
+      for(const {sheet,index}of entries){sheet.deleteRule(index);sheet.insertRule('@supports (mask-mode:not-a-real-mode){.local-weather-night-wash,.local-weather-stars{display:block}}',index);}
+      try{return ['.local-weather-night-wash','.local-weather-stars'].map(selector=>getComputedStyle(document.querySelector(selector)).display);}
+      finally{for(const {sheet,index,original}of entries){sheet.deleteRule(index);sheet.insertRule(original,index);}}
+    });
+    assert.deepEqual(unsupported,['none','none'],'unavailable luminance mask hides new full-world layers');
+    for(const phenomena of [['smoke'],['haze'],[],['clear','smoke']]){
+      await page.evaluate(phenomena=>window.testScene.update({theme:{condition:'cloudy',is_day:false},scene:{...window.clearNightFacts,phenomena,precipitation:{kind:phenomena.includes('clear')?'none':'unknown',intensity:null}}}),phenomena);
+      assert.equal((await page.evaluate(()=>window.testScene.getStats())).starOpacity,0,'rich unknown and obscured skies have no stars');
+    }
     await page.evaluate(()=>window.testScene.update({theme:{condition:'sunny',is_day:true},scene:{...window.clearNightFacts,solar:{is_day:true,sunrise_at:null,sunset_at:null}}}));
     await page.waitForFunction(()=>window.testScene.getStats().starOpacity===0&&window.testScene.getStats().nightSkyDarkness===0);
     await page.waitForFunction(()=>!window.testScene.getStats().rafActive);

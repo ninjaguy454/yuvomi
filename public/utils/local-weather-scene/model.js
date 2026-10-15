@@ -7,7 +7,7 @@ const wrap = value => ((value%1)+1)%1;
 export function deriveNightSky(frame) {
   const daylight=typeof frame?.daylight==='number'&&Number.isFinite(frame.daylight)?clamp(frame.daylight):1;
   const night=daylight>.98?0:1-daylight,clouds=typeof frame?.clouds==='number'&&Number.isFinite(frame.clouds)?clamp(frame.clouds):1;
-  const clear=frame?.rich===true&&!frame.lightning&&!['rain','snow','hail','fog'].some(key=>frame[key]>.02);
+  const clear=frame?.rich===true&&frame.clearSky===true&&!frame.lightning&&!['rain','snow','hail','fog'].some(key=>frame[key]>.02);
   return {darkness:night*.74,stars:clear?night*night*(1-clouds)*(1-clouds):0};
 }
 
@@ -52,7 +52,8 @@ export function deriveSceneTargets(theme,scene,now=Date.now(),time=0) {
   const measured=rich&&typeof scene.cloud_cover==='number'&&Number.isFinite(scene.cloud_cover)?clamp(scene.cloud_cover):null;
   const categoryCloud=phenomena.has('overcast')?1:phenomena.has('partly-cloudy')?.58:rain||snow||fog||phenomena.has('thunder')||phenomena.has('hail')?.75:0;
   const visibility=rich&&typeof scene.visibility_m==='number'&&Number.isFinite(scene.visibility_m)?scene.visibility_m:null;
-  return {rich,precipitationKind:kind,wind,windX:directed?-Math.sin(wind.from_degrees*Math.PI/180)*clamp(speed,0,50)/18:0,gust,
+  const clearSky=rich&&kind==='none'&&phenomena.size>0&&[...phenomena].every(value=>['clear','partly-cloudy'].includes(value))&&!['liquid_mm','snow_cm','snow_water_mm'].some(key=>precipitation[key]>0);
+  return {rich,clearSky,precipitationKind:kind,wind,windX:directed?-Math.sin(wind.from_degrees*Math.PI/180)*clamp(speed,0,50)/18:0,gust,
     rain:rain?intensity:0,snow:snow?intensity:0,hail:rich&&phenomena.has('hail')?intensity:0,
     fog:fog?(visibility===null?.65:clamp(1-visibility/12000,.15,1)):0,clouds:rich?(measured??categoryCloud):0,
     daylight,freezing:rich&&phenomena.has('freezing-liquid'),rime:rich&&phenomena.has('rime'),

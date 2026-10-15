@@ -67,7 +67,7 @@ async function accelerate(page,{win=false,scare=null}={}){await page.evaluate(as
     for(let i=0;i<Math.ceil(dt*100/.1);i++){if(win)for(const side of ['left','right'])this.setShutter(side,this.state.bots.some(b=>b.room===side+'-door'));original.call(this,.1);}
   };
 }, {win,scare});}
-async function capture(page,name){if(process.env.NIGHT_GAME_REVIEW_DIR)await page.screenshot({path:join(process.env.NIGHT_GAME_REVIEW_DIR,name+'.png')});}
+async function capture(page,name){if(process.env.NIGHT_GAME_REVIEW_DIR){mkdirSync(process.env.NIGHT_GAME_REVIEW_DIR,{recursive:true});await page.screenshot({path:join(process.env.NIGHT_GAME_REVIEW_DIR,name+'.png')});}}
 
 test('real Dashboard mounts a deliberate sparse game, preserves data and cleans route/theme/history ownership',async()=>{
   const {context,page}=await pageFor();try{
@@ -144,6 +144,7 @@ test('every game screen fits short, safe-area and desktop viewports without scro
   const matrix=[
     {width:320,height:480}, {width:360,height:400},
     {width:390,height:640,safe:{top:24,bottom:20,left:0,right:0}},
+    {width:480,height:520}, {width:600,height:550},
     {width:600,height:760}, {width:800,height:480},
     {width:1024,height:600}, {width:568,height:280},
     {width:844,height:360,safe:{top:0,bottom:20,left:36,right:36}},
@@ -167,7 +168,7 @@ test('every game screen fits short, safe-area and desktop viewports without scro
       if(process.env.NIGHT_GAME_REVIEW_DIR)await capture(page,`fit-${size.width}x${size.height}`);
       await page.keyboard.press('Escape');await closed(page);
     }
-    assert.deepEqual(snapshot(),before);assert.deepEqual(errors,[]);assert.deepEqual(external,[]);checks.push('all game screens fit ten viewport/safe-area configurations with no section scrolling, clipped controls or sub-44px touch targets');
+    assert.deepEqual(snapshot(),before);assert.deepEqual(errors,[]);assert.deepEqual(external,[]);checks.push('all game screens fit twelve viewport/safe-area configurations with no section scrolling, clipped controls or sub-44px touch targets; nearly-square portraits keep full-width stacked camera/map');
   }finally{await context.close()}
 });
 

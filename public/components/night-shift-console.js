@@ -28,7 +28,7 @@ export async function openNightShiftConsole({signal,user,returnFocus,onClose=()=
     const style=getComputedStyle(dialog),safe=name=>parseFloat(style.getPropertyValue('--ns-safe-'+name))||0;
     const usableWidth=width-safe('left')-safe('right'),usableHeight=height-safe('top')-safe('bottom');
     dialog.dataset.layout=usableWidth>=720||usableWidth>usableHeight*1.15?'wide':'portrait';
-    dialog.toggleAttribute('data-short',usableHeight<560&&usableWidth>=460);
+    dialog.toggleAttribute('data-short',dialog.dataset.layout==='wide'&&usableHeight<560&&usableWidth>=460);
     dialog.toggleAttribute('data-tight',usableHeight<480);
     dialog.scrollTop=0;dialog.scrollLeft=0;
   }

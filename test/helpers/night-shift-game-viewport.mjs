@@ -49,9 +49,9 @@ export async function viewportLayout(page, label, safe = {}) {
     });
     const camera = root.querySelector('.scene');
     const containers = [root,...root.querySelectorAll('.sparse-briefing,.hud,.play-grid,.camera-frame,.map-panel,.camera-map,.console-footer,.result,.pause-screen')].filter(visible);
-    return {label,phase:root.dataset.phase, bounds, root:rect(root), rootOutside:outside(rect(root)), controls,
+    return {label,phase:root.dataset.phase, layoutMode:root.dataset.layout, bounds, root:rect(root), rootOutside:outside(rect(root)), controls,
       overflow:containers.filter(node => node.scrollHeight > node.clientHeight + 2 || node.scrollWidth > node.clientWidth + 2).map(node=>({id:node.id || node.className,client:[node.clientWidth,node.clientHeight],scroll:[node.scrollWidth,node.scrollHeight]})),
-      camera:visible(camera)?rect(camera):null, attackVisible:!root.querySelector('#ns-attack-overlay').hidden,
+      camera:visible(camera)?rect(camera):null, cameraFrame:rect(root.querySelector('.camera-frame')), mapPanel:rect(root.querySelector('.map-panel')), attackVisible:!root.querySelector('#ns-attack-overlay').hidden,
       rootScroll:[root.scrollLeft,root.scrollTop], pageScroll:[scrollX,scrollY]};
   }, {label,safe});
 }
@@ -69,5 +69,9 @@ export function assertViewportLayout(layout) {
   if (layout.phase === 'playing') {
     assert.ok(layout.camera?.height >= 32, layout.label + ': camera artwork remains visible');
     assert.equal(layout.controls.filter(control=>control.id.startsWith('ns-')).length >= 5, true);
+    if (layout.layoutMode === 'portrait') {
+      assert.ok(Math.abs(layout.cameraFrame.left-layout.mapPanel.left)<1 && Math.abs(layout.cameraFrame.right-layout.mapPanel.right)<1,
+        layout.label + ': stacked portrait camera and map use the same full stage width');
+    }
   }
 }

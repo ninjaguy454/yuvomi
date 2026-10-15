@@ -115,8 +115,8 @@ test('authentic GET suppressed history and frozen zero/reopen retain exact earni
 test('authentic native subtask checkbox reverses and restores each recipient exactly once',{timeout:150000},async()=>{
  const page=await client(390),task=(await api(page,'post','/tasks',{title:'Synthetic reversible checkbox',scoring_mode:'subtasks',assigned_to:[2,3],subtasks:[{title:'Toggle credit',points:7},{title:'Remain open',points:0}]})).data,child=task.subtasks[0].id;
  const balances=async()=>new Map((await api(page,'get','/rewards/overview')).data.balances.map(row=>[row.id,row.balance])),before=await balances();
- await page.reload();await page.waitForSelector('#btn-new-task');const card=`[data-task-id="${task.id}"]`,button=`${card} [data-action="toggle-subtask"][data-id="${child}"]`;await page.waitForSelector(card);if(!await page.$eval(button,el=>el.checkVisibility()))await page.click(`${card} .activity-card__details-toggle`);await page.waitForSelector(button,{visible:true});
- for(const status of ['done','open','done','open','done']){
+ await page.reload();await page.waitForSelector('#btn-new-task');const card=`[data-task-id="${task.id}"]`,button=`${card} [data-action="toggle-subtask"][data-id="${child}"]`;await page.waitForSelector(card);if(!await page.$eval(button,el=>el.checkVisibility()))await page.click(`${card} .activity-card__subtasks-toggle`);await page.waitForSelector(button,{visible:true});
+ for(const status of ['done','in_progress','done','in_progress','done']){
   const response=page.waitForResponse(r=>r.request().method()==='PATCH'&&new URL(r.url()).pathname===`/api/v1/tasks/${child}/status`);await page.click(button);const result=await response;assert.equal(result.status(),200,await result.text());await page.waitForFunction((selector,status)=>{const el=document.querySelector(selector);return el?.dataset.status===status&&el.getAttribute('aria-busy')==='false';},{},button,status);
   const actual=await balances();for(const id of [2,3])assert.equal(actual.get(id)-before.get(id),status==='done'?7:0);record('latency',{phase:'native-subtask-toggle',status,balances:[...actual]});
  }

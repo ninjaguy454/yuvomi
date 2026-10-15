@@ -12,6 +12,56 @@ const load = async url => {
 const theme = {condition:'storm',is_day:true,sunrise_at:null,sunset_at:null};
 const facts = patch => ({version:1,phenomena:['thunder'],precipitation:{kind:'unknown',intensity:null},wind:{speed_mps:null,gust_mps:null,from_degrees:null},cloud_cover:null,visibility_m:null,solar:{is_day:true,sunrise_at:null,sunset_at:null},...patch});
 
+test('clear nighttime sky is dark with stars while day and unknown conditions have no stars', async () => {
+  const {deriveNightSky}=await load(modelUrl);
+  assert.equal(typeof deriveNightSky,'function','night sky treatment exists');
+  const clear={rich:true,clearSky:true,daylight:0,clouds:0,rain:0,snow:0,hail:0,fog:0,lightning:false};
+  const night=deriveNightSky(clear),day=deriveNightSky({...clear,daylight:1}),dusk=deriveNightSky({...clear,daylight:.5});
+  assert.ok(night.darkness>.5&&night.stars>.8);
+  assert.deepEqual(day,{darkness:0,stars:0});
+  assert.ok(dusk.darkness>0&&dusk.darkness<night.darkness&&dusk.stars<night.stars);
+  assert.equal(deriveNightSky({...clear,rich:false}).stars,0);
+});
+
+test('clouds occlude stars and fog, rain, snow, hail and thunderstorms suppress them',async()=>{
+  const {deriveNightSky}=await load(modelUrl);
+  assert.equal(typeof deriveNightSky,'function');
+  const clear={rich:true,clearSky:true,daylight:0,clouds:0,rain:0,snow:0,hail:0,fog:0,lightning:false};
+  assert.ok(deriveNightSky({...clear,clouds:.5}).stars<deriveNightSky(clear).stars);
+  for(const patch of [{clouds:1},{fog:.5},{rain:1},{snow:1},{hail:1},{lightning:true}]){
+    const value=deriveNightSky({...clear,...patch});assert.equal(value.stars,0);assert.ok(value.darkness>.5);
+  }
+});
+
+test('stars require known dry clear facts, excluding rich obscurants and unknown conditions',async()=>{
+  const {deriveNightSky,deriveSceneTargets}=await load(modelUrl);
+  const {projectWeatherScene}=await import('../public/utils/weather-scene-facts.js');
+  const now=new Date('2026-10-15T01:00:00Z'),nightTheme={condition:'sunny',is_day:false,observed_at:now.toISOString(),fetched_at:now.toISOString(),expires_at:'2026-10-15T02:00:00.000Z',sunrise_at:null,sunset_at:null};
+  const project=(code,secondary=[])=>projectWeatherScene('openweathermap',{weather:[{id:code},...secondary.map(id=>({id}))],clouds:{all:0},visibility:15000},nightTheme,'metric',now);
+  for(const code of [800,801,802])assert.ok(deriveNightSky(deriveSceneTargets(nightTheme,project(code),+now)).stars>.8,'known dry clear/partly-cloudy '+code);
+  for(const code of [711,721,731,751,761,762,771,781]){
+    const scene=project(code);assert.ok(scene,'accepted provider observation '+code);
+    assert.equal(deriveNightSky(deriveSceneTargets(nightTheme,scene,+now)).stars,0,'obscurant or unknown '+code);
+  }
+  assert.equal(deriveNightSky(deriveSceneTargets(nightTheme,project(800,[711]),+now)).stars,0,'secondary smoke obscures an otherwise clear report');
+  const wet=project(800);wet.precipitation.liquid_mm=.1;
+  assert.equal(deriveNightSky(deriveSceneTargets(nightTheme,wet,+now)).stars,0,'reported precipitation prevents clear stars');
+});
+
+test('static stars are bounded, deterministic and confined to verified sky-mask pixels',async()=>{
+  const {createSkyStars}=await load(modelUrl);
+  assert.equal(typeof createSkyStars,'function');
+  const mask=new Uint8ClampedArray(96*63*4);
+  for(let y=0;y<20;y++)for(let x=0;x<40;x++)mask.set([255,255,255,255],(y*96+x)*4);
+  const points=createSkyStars(mask);
+  assert.ok(points.length>0&&points.length<=72);
+  assert.deepEqual(points,createSkyStars(mask));
+  assert.equal(new Set(points.map(p=>p.x+','+p.y)).size,points.length);
+  for(const p of points){assert.ok(p.x>=0&&p.x<40/96&&p.y>=0&&p.y<20/63&&p.radius>0&&p.radius<=1.5);}
+  assert.deepEqual(createSkyStars(new Uint8ClampedArray(96*63*4)),[]);
+  assert.deepEqual(createSkyStars(null),[]);
+});
+
 test('missing precipitation and wind remain unknown, with no invented rain, direction or gust', async () => {
   const { deriveSceneTargets } = await load(modelUrl);
   const target = deriveSceneTargets(theme, facts(), Date.parse('2026-10-14T12:00Z'));

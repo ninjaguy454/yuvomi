@@ -18,6 +18,11 @@ Gust timing, sky illumination and residue do not report actual strike locations,
 frost on a household pane, blizzards or dry thunderstorms. No chimney or lights
 were added to Cole's partly hidden inn.
 
+Runtime clear-night treatment adds masked sky darkening and at most72static
+illustrative stars beneath weather clouds. These are an adaptation, not part of
+Cole's original painting or the unchanged WebP derivatives; they are not observed
+astronomical positions and are hidden in fog, precipitation and thunderstorms.
+
 Production shell adaptation: desktop uses the approved 50% 52% cover camera.
 The art stage retains a maximum aspect of2.1. In very wide or shallow windows,
 normal app scrolling reveals the lower artwork without moving card targets.

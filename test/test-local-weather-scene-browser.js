@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
-import {existsSync,readFileSync,mkdirSync} from 'node:fs';
+import {existsSync,readFileSync,mkdirSync,writeFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {join,resolve,extname} from 'node:path';
 import puppeteer from 'puppeteer';
@@ -39,6 +39,85 @@ const mount=async(page,origin)=>{
 };
 const cards=page=>page.$$eval('.activity-card,.note-card,.agenda-event',nodes=>nodes.map(node=>{const r=node.getBoundingClientRect(),s=getComputedStyle(node);return {x:r.x,y:r.y,width:r.width,height:r.height,transform:s.transform,background:s.backgroundColor,color:s.color,text:node.innerText};}));
 const capture=async(page,name)=>{if(process.env.LOCAL_WEATHER_SCENE_REVIEW_DIR){mkdirSync(process.env.LOCAL_WEATHER_SCENE_REVIEW_DIR,{recursive:true});await page.screenshot({path:join(process.env.LOCAL_WEATHER_SCENE_REVIEW_DIR,'integration-renderer-'+name+'.png')});}};
+
+async function compareSkyPixels(page){
+  const visible=await page.screenshot({encoding:'base64'});
+  await page.$$eval('.local-weather-night-wash,.local-weather-stars',nodes=>nodes.forEach(node=>node.style.visibility='hidden'));
+  let plain;
+  try{plain=await page.screenshot({encoding:'base64'});}
+  finally{await page.$$eval('.local-weather-night-wash,.local-weather-stars',nodes=>nodes.forEach(node=>node.style.removeProperty('visibility')));}
+  return page.evaluate(async({visible,plain})=>{
+    async function decode(source,width=null,height=null){const image=new Image();image.src=source;await image.decode();const canvas=document.createElement('canvas');canvas.width=width||image.naturalWidth;canvas.height=height||image.naturalHeight;const context=canvas.getContext('2d');context.drawImage(image,0,0,canvas.width,canvas.height);return{width:canvas.width,height:canvas.height,pixels:context.getImageData(0,0,canvas.width,canvas.height).data};}
+    const a=await decode('data:image/png;base64,'+visible),b=await decode('data:image/png;base64,'+plain),mask=await decode('/assets/weather/cole-sky-mask.webp',96,63),g=window.testScene.getStats().artCamera;
+    const blocked=[...document.querySelectorAll('.activity-card,.note-card,.agenda-event,.local-weather-credit,button')].map(node=>node.getBoundingClientRect());
+    const scale=a.width/innerWidth,at=(image,x,y)=>{const i=(Math.round(y*scale)*image.width+Math.round(x*scale))*4;return Array.from(image.pixels.slice(i,i+3));};
+    const luminance=rgb=>rgb.map(value=>value/255).map(value=>value<=.04045?value/12.92:((value+.055)/1.055)**2.4).reduce((sum,value,i)=>sum+value*[.2126,.7152,.0722][i],0);
+    const sky=[];
+    for(let y=3;y<29;y+=3)for(let x=3;x<94;x+=5){const i=(y*96+x)*4;if(mask.pixels[i]<235||mask.pixels[i+3]<230)continue;
+      const sx=(x+.5)/96*g.width-g.left,sy=(y+.5)/63*g.height-g.top;if(sx<8||sx>innerWidth-8||sy<8||sy>innerHeight-8||blocked.some(r=>sx>=r.left&&sx<=r.right&&sy>=r.top&&sy<=r.bottom))continue;
+      sky.push({before:luminance(at(b,sx,sy)),after:luminance(at(a,sx,sy))});}
+    const median=values=>values.sort((x,y)=>x-y)[Math.floor(values.length/2)]||0;
+    const before=median(sky.map(row=>row.before)),after=median(sky.map(row=>row.after));
+    const terrain=[[.25,.78],[.48,.65],[.70,.90]].map(([x,y])=>{const sx=x*g.width-g.left,sy=y*g.height-g.top;const c=at(a,sx,sy),d=at(b,sx,sy);return Math.max(...c.map((value,i)=>Math.abs(value-d[i])));});
+    return{skySamples:sky.length,skyMedianBefore:before,skyMedianAfter:after,skyLuminanceRatio:after/before,terrainMaxChannelChange:Math.max(...terrain)};
+  },{visible,plain});
+}
+
+test('clear-night sky has a masked dark treatment and static stars beneath weather clouds',async()=>{
+  const f=await fixture(),{page}=f;
+  try{
+    await page.setViewport({width:1280,height:900});await page.goto(f.origin);const before=await cards(page);
+    await page.evaluate(async()=>{
+      const {mountLocalWeatherScene}=await import('/utils/local-weather-scene.js');window.testScene=mountLocalWeatherScene();
+      window.clearNightFacts={version:1,provider:'open-meteo',condition_code:0,phenomena:['clear'],precipitation:{kind:'none',intensity:null},wind:{speed_mps:null,gust_mps:null,from_degrees:null},cloud_cover:0,visibility_m:null,solar:{is_day:false,sunrise_at:null,sunset_at:null}};
+      window.testScene.update({theme:{condition:'sunny',is_day:false,sunrise_at:null,sunset_at:null},scene:window.clearNightFacts});
+    });
+    await page.waitForFunction(()=>window.testScene.getStats().skyPickerReady);
+    await page.waitForFunction(()=>[...document.querySelectorAll('.local-weather-art')].every(image=>image.complete&&image.naturalWidth));
+    await capture(page,'night-clear');
+    assert.ok(await page.$('.local-weather-night-wash'),'registered sky darkening exists');
+    assert.ok(await page.$('.local-weather-stars'),'registered star layer exists');
+    let stats=await page.evaluate(()=>window.testScene.getStats());
+    assert.equal(stats.skyStars,72);assert.ok(stats.nightSkyDarkness>.5&&stats.starOpacity>.8);
+    assert.equal(stats.rafActive,false,'clear stars add no animation loop');
+    const nightPixels=await compareSkyPixels(page);
+    assert.ok(nightPixels.skySamples>=8&&nightPixels.skyLuminanceRatio<.5,'actual masked sky is substantially darker');
+    assert.ok(nightPixels.terrainMaxChannelChange<=1,'night sky layer leaves landscape pixels unchanged');
+    assert.equal(await page.$$eval('.local-weather-stars circle',nodes=>nodes.length),72);
+    assert.equal(await page.$eval('.local-weather-stars',node=>getComputedStyle(node).pointerEvents),'none');
+    assert.ok(await page.evaluate(()=>{const world=document.querySelector('.local-weather-sky-world');return world.querySelector('.local-weather-night-wash')&&world.querySelector('.local-weather-stars').nextElementSibling.classList.contains('local-weather-cloud-strip');}));
+    assert.deepEqual(await cards(page),before);
+    const unsupported=await page.evaluate(()=>{
+      const entries=[...document.styleSheets].filter(value=>value.href?.endsWith('/styles/local-weather-scene.css')).map(sheet=>{
+        const index=[...sheet.cssRules].findIndex(rule=>rule.type===CSSRule.SUPPORTS_RULE&&rule.cssText.includes('.local-weather-night-wash'));
+        return {sheet,index,original:index<0?null:sheet.cssRules[index].cssText};
+      });
+      if(!entries.length||entries.some(value=>value.index<0))return null;
+      for(const {sheet,index}of entries){sheet.deleteRule(index);sheet.insertRule('@supports (mask-mode:not-a-real-mode){.local-weather-night-wash,.local-weather-stars{display:block}}',index);}
+      try{return ['.local-weather-night-wash','.local-weather-stars'].map(selector=>getComputedStyle(document.querySelector(selector)).display);}
+      finally{for(const {sheet,index,original}of entries){sheet.deleteRule(index);sheet.insertRule(original,index);}}
+    });
+    assert.deepEqual(unsupported,['none','none'],'unavailable luminance mask hides new full-world layers');
+    for(const phenomena of [['smoke'],['haze'],[],['clear','smoke']]){
+      await page.evaluate(phenomena=>window.testScene.update({theme:{condition:'cloudy',is_day:false},scene:{...window.clearNightFacts,phenomena,precipitation:{kind:phenomena.includes('clear')?'none':'unknown',intensity:null}}}),phenomena);
+      assert.equal((await page.evaluate(()=>window.testScene.getStats())).starOpacity,0,'rich unknown and obscured skies have no stars');
+    }
+    await page.evaluate(()=>window.testScene.update({theme:{condition:'sunny',is_day:true},scene:{...window.clearNightFacts,solar:{is_day:true,sunrise_at:null,sunset_at:null}}}));
+    await page.waitForFunction(()=>window.testScene.getStats().starOpacity===0&&window.testScene.getStats().nightSkyDarkness===0);
+    await page.waitForFunction(()=>!window.testScene.getStats().rafActive);
+    const dayPixels=await compareSkyPixels(page);assert.ok(Math.abs(dayPixels.skyLuminanceRatio-1)<.005&&dayPixels.terrainMaxChannelChange<=1,'day composition stays unchanged');
+    if(process.env.LOCAL_WEATHER_SCENE_REVIEW_DIR)writeFileSync(join(process.env.LOCAL_WEATHER_SCENE_REVIEW_DIR,'night-sky-pixel-verification.json'),JSON.stringify({night:nightPixels,day:dayPixels},null,2)+'\n');
+    await capture(page,'clear-day');
+    await page.evaluate(()=>window.testScene.update({theme:{condition:'cloudy',is_day:false},scene:{...window.clearNightFacts,condition_code:3,phenomena:['overcast'],cloud_cover:1}}));
+    await page.waitForFunction(()=>window.testScene.getStats().scene.clouds===1);
+    assert.equal((await page.evaluate(()=>window.testScene.getStats())).starOpacity,0);await capture(page,'night-cloud');
+    await page.evaluate(scene=>window.testScene.update({theme:{condition:'storm',is_day:false},scene:{...scene,solar:{is_day:false,sunrise_at:null,sunset_at:null}}}),facts());
+    await page.waitForFunction(()=>window.testScene.getStats().scene.lightning);
+    assert.equal((await page.evaluate(()=>window.testScene.getStats())).starOpacity,0);await capture(page,'night-storm');
+    await page.evaluate(()=>window.testScene.dispose());assert.deepEqual(f.errors,[]);
+    assert.equal(await page.$('.local-weather-stars,.local-weather-night-wash'),null);
+  }finally{await f.close();}
+});
 
 test('clouds and precipitation follow the same reported west and east wind',async()=>{
   const f=await fixture(),{page}=f;

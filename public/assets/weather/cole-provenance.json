@@ -19,7 +19,7 @@
   "adaptations": [
     "Sky matte follows painted mountain/ridges and preserves foreground branches.",
     "Clear sky clone texture comes from the original upper-right painted sky; moving cloud texture comes from its incoming upper-left clouds.",
-    "Night uses conventional brightness/saturation and cool color grading; no invented stars, lights or buildings.",
+    "Night WebP derivative uses conventional brightness/saturation and cool color grading; it contains no added stars, lights or buildings. Runtime sky treatment is documented separately below.",
     "Snow uses terrain/roof/branch masks and original luminance texture; rider region excluded from broad ground coating.",
     "Source JPEG is retained unchanged; no generative image model was used."
   ],
@@ -93,6 +93,7 @@
     "Six selected WebP derivatives copied unchanged; source JPEG remains in isolated review evidence.",
     "Production shell uses the approved 50% 52% cover camera and maximum stage aspect2.1; ordinary app scrolling reveals lower artwork in wide/shallow windows. Mobile uses the same viewport-filling cover camera, cropping horizontally in portrait.",
     "Registered masked clouds and synthetic visible-sky illumination; no observed strike, chimney, lights or blizzard is asserted.",
+    "Runtime clear-night treatment darkens only the registered sky and adds at most72static illustrative star points under cloud layers. Star points follow the verified sky matte, fade with solar/cloud conditions, and are hidden in fog, precipitation and thunderstorms. The six WebP derivatives remain unchanged.",
     "Cards retain their existing fills, content, typography, transforms and controls; bounded artwork appears only on a narrow decorative rim.",
     "The readable linked credit is an app-scrollport footer at every screen size, keeping it clear of card controls and fixed navigation."
   ],

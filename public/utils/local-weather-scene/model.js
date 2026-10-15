@@ -2,6 +2,27 @@
 const clamp = (value, low=0, high=1) => Math.max(low,Math.min(high,value));
 const wrap = value => ((value%1)+1)%1;
 
+// Artistic sky treatment. Static stars never add a motion loop or imply a live
+// astronomical observation; weather layers above them provide cloud occlusion.
+export function deriveNightSky(frame) {
+  const daylight=typeof frame?.daylight==='number'&&Number.isFinite(frame.daylight)?clamp(frame.daylight):1;
+  const night=daylight>.98?0:1-daylight,clouds=typeof frame?.clouds==='number'&&Number.isFinite(frame.clouds)?clamp(frame.clouds):1;
+  const clear=frame?.rich===true&&frame.clearSky===true&&!frame.lightning&&!['rain','snow','hail','fog'].some(key=>frame[key]>.02);
+  return {darkness:night*.74,stars:clear?night*night*(1-clouds)*(1-clouds):0};
+}
+
+export function createSkyStars(pixels) {
+  if(!pixels||pixels.length!==96*63*4)return [];
+  const seed=index=>{let n=Math.imul(index^(index>>>16),0x45d9f3b);n=Math.imul(n^(n>>>16),0x45d9f3b);return((n^(n>>>16))>>>0)/4294967296;};
+  const candidates=[];
+  for(let y=1;y<39;y+=2)for(let x=1;x<96;x+=2){
+    const offset=(y*96+x)*4,bright=.2126*pixels[offset]+.7152*pixels[offset+1]+.0722*pixels[offset+2];
+    if(bright>225&&pixels[offset+3]>230)candidates.push({x:(x+.5)/96,y:(y+.5)/63,order:seed(y*96+x+17)});
+  }
+  candidates.sort((a,b)=>a.order-b.order);
+  return candidates.slice(0,72).map((point,index)=>({x:point.x,y:point.y,radius:.7+seed(index+79)*.65,opacity:.65+seed(index+157)*.35}));
+}
+
 export function solarGrade(now,rise,set,isDay) {
   if(![now,rise,set].every(value=>typeof value==='number'&&Number.isFinite(value))||set<=rise||set-rise>86400000)return isDay?1:0;
   const smooth=x=>{x=clamp(x);return x*x*(3-2*x);};
@@ -31,7 +52,8 @@ export function deriveSceneTargets(theme,scene,now=Date.now(),time=0) {
   const measured=rich&&typeof scene.cloud_cover==='number'&&Number.isFinite(scene.cloud_cover)?clamp(scene.cloud_cover):null;
   const categoryCloud=phenomena.has('overcast')?1:phenomena.has('partly-cloudy')?.58:rain||snow||fog||phenomena.has('thunder')||phenomena.has('hail')?.75:0;
   const visibility=rich&&typeof scene.visibility_m==='number'&&Number.isFinite(scene.visibility_m)?scene.visibility_m:null;
-  return {rich,precipitationKind:kind,wind,windX:directed?-Math.sin(wind.from_degrees*Math.PI/180)*clamp(speed,0,50)/18:0,gust,
+  const clearSky=rich&&kind==='none'&&phenomena.size>0&&[...phenomena].every(value=>['clear','partly-cloudy'].includes(value))&&!['liquid_mm','snow_cm','snow_water_mm'].some(key=>precipitation[key]>0);
+  return {rich,clearSky,precipitationKind:kind,wind,windX:directed?-Math.sin(wind.from_degrees*Math.PI/180)*clamp(speed,0,50)/18:0,gust,
     rain:rain?intensity:0,snow:snow?intensity:0,hail:rich&&phenomena.has('hail')?intensity:0,
     fog:fog?(visibility===null?.65:clamp(1-visibility/12000,.15,1)):0,clouds:rich?(measured??categoryCloud):0,
     daylight,freezing:rich&&phenomena.has('freezing-liquid'),rime:rich&&phenomena.has('rime'),

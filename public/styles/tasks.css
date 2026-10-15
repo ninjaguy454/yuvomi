@@ -2944,14 +2944,38 @@
   margin-top: var(--space-2);
 }
 
+/* Pass the shell's available height through the Kanban layout. Groups keep
+ * their natural height until they fill that space; only their card area
+ * scrolls. The board's native horizontal track stays at the shell bottom. */
+.tasks-page:has(.task-board) {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.tasks-page:has(.task-board) > .tasks-toolbar { flex-shrink: 0; }
+
+.tasks-body:has(.task-board) {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 0;
+}
+
+#task-list:has(> .task-board) { flex: 1; min-height: 0; }
+
 .task-board {
   display: grid;
   grid-auto-flow: column;
   grid-auto-columns: minmax(300px, 360px);
   grid-template-columns: none;
+  grid-template-rows: minmax(0, 1fr);
   align-items: start;
   gap: var(--space-3);
-  min-height: 60vh;
+  height: 100%;
+  min-height: 0;
   padding-bottom: var(--space-2);
   overflow-x: auto;
   overscroll-behavior-inline: contain;
@@ -2961,7 +2985,8 @@
 
 .task-board__bucket {
   min-width: 0;
-  max-height: calc(100dvh - 15rem);
+  min-height: 0;
+  max-height: 100%;
   border: var(--space-px) solid var(--color-border-subtle);
   background: var(--color-surface-2);
   scroll-snap-align: start;
@@ -2992,6 +3017,7 @@
 }
 
 .task-board__bucket-scroll {
+  --scrollport-pad: var(--space-2);
   /* Keep absolute accessibility labels inside this scrollport. Without a
    * containing block, offscreen recurring/locked labels enlarge the document
    * even though their cards are clipped by the column. */
@@ -3521,15 +3547,6 @@
 
   .task-board {
     grid-auto-columns: minmax(min(88vw, 320px), 88vw);
-    scrollbar-width: none;
-  }
-
-  .task-board::-webkit-scrollbar {
-    display: none;
-  }
-
-  .task-board__bucket {
-    max-height: none;
   }
 
   .task-calendar__header {

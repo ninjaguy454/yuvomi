@@ -3301,7 +3301,7 @@ function renderKanban(container) {
             <i data-lucide="${bucketSort?.locked ? 'lock' : 'arrow-up-down'}" class="icon-sm" aria-hidden="true"></i>
           </button>
         </header>
-        <div class="task-board__bucket-scroll">
+        <div class="task-board__bucket-scroll page-scrollport">
           ${KANBAN_SECTIONS().filter(({ value }) => state.groupMode === 'status' ? value === bucket.id : !['archived', 'expired','skipped'].includes(value) || byStatus.get(value).length)
             .map(({ value }) => renderBoardStatusSection(bucketKey, value, byStatus.get(value))).join('')}
         </div>

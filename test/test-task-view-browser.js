@@ -19,7 +19,7 @@ app.get('/view-test', (_req, res) => res.send(`<!doctype html><html lang="en"><h
   ${[...readFileSync(join(sourceRoot, 'index.html'), 'utf8').matchAll(/<link rel="stylesheet" href="([^"]+)"\s*\/>/g)].map(match => match[0]).join('')}
   <link rel="stylesheet" href="/styles/tasks.css">
   <style>html,body{height:100%;margin:0}body{display:flex;flex-direction:column}
-    .app-content{height:100vh;flex:none}#main-content{padding:16px}
+    .app-content{height:100vh;flex:none}#main-content{height:100%;padding:16px}
     *,*::before,*::after{animation:none!important;scroll-behavior:auto!important;transition:none!important}
   </style></head><body><div class="app-content"><main id="main-content"></main></div></body></html>`));
 
@@ -593,14 +593,9 @@ for (const width of [1380, 390]) {
         await frames(page);
         const after = await measure();
         near(after.document.scroll, height, 'expanding/collapsing cards and status sections stays inside the page');
-        if (width > 640) {
-          assert.ok(after.column.scroll > after.column.client, 'column content remains scrollable');
-          near(after.board.height, before.board.height, 'desktop board footprint stays bounded');
+          assert.ok(after.column.scroll > after.column.client, 'each group keeps its own scrollport on desktop and mobile');
+          near(after.board.height, before.board.height, 'board footprint stays bounded by the available shell');
           near(after.page.scroll, before.page.scroll, 'no blank outer page tail');
-        } else {
-          near(after.column.scroll, after.column.client, 'mobile keeps its page-owned vertical scrolling');
-          if (pass === 0) assert.ok(after.page.scroll > before.page.scroll, 'mobile expands to fit actual checklist content');
-        }
       }
       assert.equal(fixture.writes.length, 0, 'view expansion never changes Tasks');
     } finally { await page.close(); }
@@ -939,7 +934,7 @@ for (const mode of ['list', 'kanban']) {
   });
 }
 
-test('mobile Kanban live insertion anchors the page when bucket content has no independent vertical scrollport', async () => {
+test('mobile Kanban live insertion anchors the independently scrolling group', async () => {
   const page = await mounted('kanban', { width: 390, height: 844, isMobile: true, hasTouch: true });
   try {
     const before = await anchor(page, 25);
@@ -947,14 +942,15 @@ test('mobile Kanban live insertion anchors the page when bucket content has no i
       const bucket = card.closest('.task-board__bucket-scroll');
       return bucket.scrollHeight > bucket.clientHeight;
     });
-    assert.equal(independent, false, 'mobile CSS lets the page own vertical bucket scrolling');
-    assert.ok(before.y > 0 && before.x > 0, 'fixture scrolls page vertically and board horizontally');
+    assert.equal(independent, true, 'mobile groups own their vertical scrolling');
+    assert.ok(before.y > 0 && before.x > 0, 'fixture scrolls the group vertically and board horizontally');
+    assert.equal(await page.$eval('.app-content', node => node.scrollTop), 0);
     fixture.tasks.push(taskRow(701, { title: 'A new Laundry occurrence', category: 'group-2', is_recurring: true }));
     await emitLive(page, 111);
     await page.waitForSelector('.task-card[data-task-id="701"]');
     await frames(page);
     const after = await position(page, 25);
-    near(after.offset, before.offset, 'page-owned Kanban anchor after insertion above it');
+    near(after.offset, before.offset, 'group-owned Kanban anchor after insertion above it');
     near(after.x, before.x, 'mobile horizontal board offset');
     assert.equal(after.sameCard, true); assert.equal(after.sameBoard, true); assert.equal(after.sameScroll, true);
   } finally { await page.close(); }

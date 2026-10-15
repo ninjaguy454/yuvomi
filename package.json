@@ -419,8 +419,7 @@
     "test:night-shift-game": "node --test test/test-night-shift-game.js",
     "test:night-shift-game-browser": "node --test --test-concurrency=1 test/test-night-shift-game-browser.js",
     "test:task-assignee-policy": "node --test --test-concurrency=1 test/test-task-assignee-policy.js test/test-task-assignee-policy-routes.js test/test-task-assignee-policy-review.js test/test-task-assignee-policy-draft.js test/test-task-assignee-policy-encrypted-upgrade.js",
-    "test:task-assignee-policy-browser": "node --test --test-concurrency=1 test/test-task-assignee-policy-browser.js test/test-task-assignee-policy-full-app-browser.js",
-    "test:task-assignee-policy-browser": "node --test test/test-task-assignee-policy-browser.js"
+    "test:task-assignee-policy-browser": "node --test --test-concurrency=1 test/test-task-assignee-policy-browser.js test/test-task-assignee-policy-full-app-browser.js"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",

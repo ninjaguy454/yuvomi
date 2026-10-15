@@ -20,7 +20,7 @@ async function edit(id){
   await page.evaluate(async id=>{await(await import('/pages/tasks.js')).openTaskById(id,{user:window.yuvomi.user});},id);
   await press('#detail-view-edit');await page.waitForSelector('#task-form');
 }
-const selected=()=>page.$$eval('#task-form input[data-ms-input="task_assigned"]:checked',nodes=>nodes.map(node=>Number(node.value)));
+const selected=()=>page.$$eval('#task-form input[data-ms-input="task_assigned"]:checked',nodes=>nodes.map(node=>Number(node.value)).sort((a,b)=>a-b));
 
 test.before(async()=>{
   const hash=await hashPassword('Synthetic-Count-Only!',4);
@@ -65,11 +65,11 @@ test('authentic future editor promotes child-only membership through preview and
   assert.deepEqual(await selected(),[2]);
   await page.$eval('input[data-ms-input="task_assigned"][value="3"]',node=>node.click());assert.deepEqual(await selected(),[2,3]);
   await press('#task-submit-btn');await page.waitForSelector('#task-scoring-confirm');
-  const preview=requests.filter(request=>request.path.endsWith('/scoring-preview')).at(-1);assert.deepEqual(preview.body.future_patch.fields.assigned_to,[2,3]);
+  const preview=requests.filter(request=>request.path.endsWith('/scoring-preview')).at(-1);assert.deepEqual([...preview.body.future_patch.fields.assigned_to].sort((a,b)=>a-b),[2,3]);
   await page.screenshot({path:join(output,'future-promotion-preview.png'),fullPage:true});
   const response=page.waitForResponse(response=>response.request().method()==='PUT'&&new URL(response.url()).pathname==='/api/v1/tasks/'+task.id);
   await press('#task-scoring-confirm');const saved=await response;assert.equal(saved.status(),200,await saved.text());await page.waitForSelector('#task-form',{hidden:true});
   assert.deepEqual(readTaskAssigneePolicy(d,task.id).direct_assignee_ids,[2]);
   const definition=d.prepare('SELECT definition_json FROM task_recurrence_definitions WHERE series_id=(SELECT series_id FROM task_recurrence_occurrences WHERE task_id=?) ORDER BY id DESC').get(task.id);
-  assert.deepEqual(JSON.parse(definition.definition_json).assignee_policy.direct_assignee_ids,[2,3]);assert.deepEqual(errors,[]);
+  assert.deepEqual(JSON.parse(definition.definition_json).assignee_policy.direct_assignee_ids.sort((a,b)=>a-b),[2,3]);assert.deepEqual(errors,[]);
 });

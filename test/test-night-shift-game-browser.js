@@ -58,6 +58,7 @@ async function pageFor(paired=false,options={}){
   return{context,page};
 }
 const opened=async page=>{await page.click('[data-night-shift-entry]');await page.waitForSelector('[data-night-shift-console][open]');};
+const setGameSound=async(page,enabled)=>{if(await page.$eval('#ns-sound',n=>n.checked)!==enabled)await page.click('#ns-sound');};
 const closed=page=>page.waitForFunction(()=>!document.querySelector('[data-night-shift-console]'));
 async function accelerate(page,{win=false,scare=null}={}){await page.evaluate(async({win,scare})=>{
   const {Game}=await import('/utils/night-shift-game.js');const original=Game.prototype.step;window.__nightOriginalStep=original;
@@ -79,7 +80,7 @@ test('real Dashboard mounts a deliberate sparse game, preserves data and cleans 
     assert.equal(await page.$$('.modal-overlay').then(n=>n.length),0,'Dashboard help and create shortcuts stay inactive');
     assert.equal(new URL(page.url()).pathname,'/','Dashboard navigation chords stay inactive');
     await page.keyboard.press('Tab');assert.equal(await page.evaluate(()=>!!document.activeElement.closest('[data-night-shift-console]')),true,'native focus traversal remains inside the dialog');
-    assert.equal(await page.$eval('#ns-play',n=>n.hidden),true);assert.equal(await page.$eval('#ns-sound',n=>n.checked),false);
+    assert.equal(await page.$eval('#ns-play',n=>n.hidden),true);assert.equal(await page.$eval('#ns-sound',n=>n.checked),true);
     assert.equal(await page.$eval('#ns-gentle',n=>n.checked),false,'visual jumpscares default on independently of muted audio');
     await page.click('#ns-start');await page.waitForFunction(()=>!!window.__gameModel);const originalCamera=await page.evaluate(()=>window.__gameModel.state.camera);await page.evaluate(()=>document.getElementById('synthetic-other-camera').click());assert.equal(await page.evaluate(()=>window.__gameModel.state.camera),originalCamera,'game must not bind other page camera controls');await page.evaluate(()=>document.getElementById('synthetic-other-camera').remove());await page.click('[data-camera="store"]');await page.keyboard.press('a');await page.keyboard.press('d');await page.keyboard.press('p');
     assert.equal(await page.$eval('#ns-paused',n=>n.hidden),false);await page.click('#ns-resume');
@@ -96,7 +97,7 @@ test('real Dashboard mounts a deliberate sparse game, preserves data and cleans 
 test('real game renders four attributed popups with original scream and closes audio/timer on exit',async()=>{
   for(const [id,name,closeBy]of[['bunny','Bonnie'],['chicken','Chica'],['bear','Freddy'],['fox','Foxy'],['bear','Freddy','theme'],['fox','Foxy','navigation']]){
     const{context,page}=await pageFor();try{
-      const before=snapshot();await accelerate(page,{scare:id});await opened(page);await page.click('#ns-sound');await page.click('#ns-start');await page.waitForFunction(()=>window.__gameModel?.state.phase==='lost');
+      const before=snapshot();await accelerate(page,{scare:id});await opened(page);await setGameSound(page,true);await page.click('#ns-start');await page.waitForFunction(()=>window.__gameModel?.state.phase==='lost');
       assert.equal(await page.$eval('#ns-result-title',n=>n.textContent),name);assert.equal(await page.$eval('#ns-attack-overlay',n=>n.hidden),false);
       const sound=await page.evaluate(()=>window.__gameAudio.starts.find(s=>s.duration>.9));assert.ok(sound);const shown=await page.$eval('#ns-attack-overlay',n=>Number(n.dataset.shownAt));assert.ok(Math.abs(sound.time-shown)<100);
       if(id==='bunny'){await page.click('#ns-gentle');assert.ok(await page.evaluate(()=>window.__gameAudio.stops>0),'Gentle stops the active scream and exposes results');await page.evaluate(async()=>{(await import('/utils/night-shift-game.js')).Game.prototype.step=window.__nightOriginalStep});await page.click('#ns-restart');assert.equal(await page.evaluate(()=>window.__gameModel.state.phase),'playing');assert.equal(await page.$eval('#ns-gentle',n=>n.checked),true,'restart preserves the explicit visual opt-out');}
@@ -115,7 +116,7 @@ test('a pending console cannot appear after route cancellation and auth-context 
     options.holdStyle=false;if(!request.isInterceptResolutionHandled())await request.continue().catch(()=>{});
     await page.evaluate(()=>window.yuvomi.navigate('/'));await page.waitForSelector('[data-night-shift-entry]');
     await opened(page);assert.equal(await page.$$('[data-night-shift-console]').then(n=>n.length),1);
-    await page.click('#ns-sound');await page.click('#ns-start');
+    await setGameSound(page,true);await page.click('#ns-start');
     await page.evaluate(()=>window.dispatchEvent(new Event('auth:context-ending')));await closed(page);
     await page.waitForFunction(()=>window.__gameAudio.closed===window.__gameAudio.created);
     assert.equal(await page.$$('[data-night-shift-entry],[data-night-shift-style]').then(n=>n.length),0);
@@ -126,8 +127,8 @@ test('real-app win/restart, gentle/reduced motion, phone controls and locked sha
   const{context,page}=await pageFor(true);try{
     const before=snapshot();assert.equal(await page.$eval('[data-device-theme]',n=>n.disabled),true,'game never enables locked theme changes');
     await accelerate(page,{win:true});await opened(page);await page.click('#ns-start');await page.waitForFunction(()=>window.__gameModel?.state.phase==='won');assert.equal(await page.$eval('#ns-result-title',n=>n.textContent),'6 AM');await page.keyboard.press('Escape');await closed(page);
-    await page.reload();await page.waitForSelector('[data-night-shift-entry]');await accelerate(page,{scare:'fox'});await page.emulateMediaFeatures([{name:'prefers-reduced-motion',value:'reduce'}]);await opened(page);await page.click('#ns-sound');await page.click('#ns-start');await page.waitForFunction(()=>window.__gameModel?.state.phase==='lost');assert.equal(await page.$eval('#ns-attack-overlay',n=>n.hidden),true);assert.equal(await page.evaluate(()=>window.__gameAudio.starts.some(s=>s.duration>.9)),false);await page.keyboard.press('Escape');await closed(page);
-    await page.emulateMediaFeatures([{name:'prefers-reduced-motion',value:'no-preference'}]);await page.reload();await page.waitForSelector('[data-night-shift-entry]');await accelerate(page,{scare:'bear'});await opened(page);await page.click('#ns-sound');await page.click('#ns-gentle');await page.click('#ns-start');await page.waitForFunction(()=>window.__gameModel?.state.phase==='lost');assert.equal(await page.$eval('#ns-attack-overlay',n=>n.hidden),true);assert.equal(await page.evaluate(()=>window.__gameAudio.starts.some(s=>s.duration>.9)),false);await page.click('#ns-gentle');assert.equal(await page.$eval('#ns-attack-overlay',n=>n.hidden),true,'changing Gentle after loss never triggers a retroactive scare');await page.keyboard.press('Escape');await closed(page);
+    await page.reload();await page.waitForSelector('[data-night-shift-entry]');await accelerate(page,{scare:'fox'});await page.emulateMediaFeatures([{name:'prefers-reduced-motion',value:'reduce'}]);await opened(page);await setGameSound(page,true);await page.click('#ns-start');await page.waitForFunction(()=>window.__gameModel?.state.phase==='lost');assert.equal(await page.$eval('#ns-attack-overlay',n=>n.hidden),true);assert.equal(await page.evaluate(()=>window.__gameAudio.starts.some(s=>s.duration>.9)),false);await page.keyboard.press('Escape');await closed(page);
+    await page.emulateMediaFeatures([{name:'prefers-reduced-motion',value:'no-preference'}]);await page.reload();await page.waitForSelector('[data-night-shift-entry]');await accelerate(page,{scare:'bear'});await opened(page);await setGameSound(page,true);await page.click('#ns-gentle');await page.click('#ns-start');await page.waitForFunction(()=>window.__gameModel?.state.phase==='lost');assert.equal(await page.$eval('#ns-attack-overlay',n=>n.hidden),true);assert.equal(await page.evaluate(()=>window.__gameAudio.starts.some(s=>s.duration>.9)),false);await page.click('#ns-gentle');assert.equal(await page.$eval('#ns-attack-overlay',n=>n.hidden),true,'changing Gentle after loss never triggers a retroactive scare');await page.keyboard.press('Escape');await closed(page);
     for(const[width,height]of[[1440,1000],[390,844],[320,700],[844,390]]){
       await page.setViewport({width,height,isMobile:width<900,hasTouch:width<900});await page.reload();await page.waitForSelector('[data-night-shift-entry]');await opened(page);await page.click('#ns-start');const camera=await page.$('[data-camera="east"]');if(width<900)await camera.tap();else await camera.click();
       const layout=await page.evaluate(()=>{const root=document.querySelector('[data-night-shift-console]'),header=root.querySelector('.console-header').getBoundingClientRect(),inside=selector=>{const r=root.querySelector(selector).getBoundingClientRect();return r.top>=header.bottom&&r.bottom<=innerHeight;};return{width:innerWidth,height:innerHeight,overflow:root.scrollWidth>root.clientWidth+1,tiny:[...root.querySelectorAll('button,input[type=range]')].filter(n=>n.getClientRects().length).filter(n=>{const r=n.getBoundingClientRect();return r.width<43.5||r.height<43.5}).length,camera:inside('.camera-frame'),shutters:inside('.shutters'),paragraphs:[...root.querySelectorAll('p')].filter(n=>{const r=n.getBoundingClientRect();return r.width>2&&r.height>2&&!n.classList.contains('eyebrow')}).length}});
@@ -193,7 +194,7 @@ test('a touch or mouse tap on the encounter cannot click the covered result exit
       assert.equal(await page.$eval('[data-night-shift-console]',n=>n.dataset.phase),'lost');await page.click('#ns-result-exit');await closed(page);
       await opened(page);await installViewportScenario(page);await page.click('#ns-start');await scenarioMode(page,'lost');await page.waitForFunction(()=>document.getElementById('ns-attack-overlay').hidden===false);await page.click('#ns-exit');await closed(page);
     }
-    assert.equal(await page.evaluate(()=>window.__gameAudio.created),0,'default visual scares never enable muted audio');assert.deepEqual(snapshot(),before);checks.push('touch and mouse encounter taps never click covered results; old gameplay presses released after the encounter cannot activate results; fresh result Exit and explicit header Exit remain available; default visuals stay silent');
+    assert.ok(await page.evaluate(()=>window.__gameAudio.created>0&&window.__gameAudio.starts.some(s=>s.duration>.9)),'default sound and scream activate during deliberately started play');assert.deepEqual(snapshot(),before);checks.push('touch and mouse encounter taps never click covered results; old gameplay presses released after the encounter cannot activate results; fresh result Exit and explicit header Exit remain available; default game scream plays after Start');
   }finally{await context.close()}
 });
 
@@ -201,7 +202,7 @@ test('open-game resize, orientation and visual-viewport chrome changes preserve 
   const {context,page}=await pageFor(true);try{
     const before=snapshot();await page.setViewport({width:390,height:700,isMobile:true,hasTouch:true});await page.reload();await page.waitForSelector('[data-night-shift-entry]');
     const originalOverflow=await page.evaluate(()=>[getComputedStyle(document.documentElement).overflow,getComputedStyle(document.body).overflow]);
-    await opened(page);await installViewportScenario(page);await page.click('#ns-gentle');await page.click('#ns-start');await page.tap('[data-camera="store"]');await page.tap('#ns-left-shutter');
+    await opened(page);await installViewportScenario(page);await setGameSound(page,false);await page.click('#ns-gentle');await page.click('#ns-start');await page.tap('[data-camera="store"]');await page.tap('#ns-left-shutter');
     await page.$eval('#ns-volume',n=>{n.value='22';n.dispatchEvent(new Event('input',{bubbles:true}));});
     const inspect=async label=>{const layout=await viewportLayout(page,label);layouts.push(layout);assertViewportLayout(layout);};
     for(const [width,height]of [[390,520],[640,360],[360,640],[800,400],[390,700]]){
@@ -233,4 +234,23 @@ test('open-game resize, orientation and visual-viewport chrome changes preserve 
     await page.setViewport({width:390,height:640,isMobile:true,hasTouch:true});assert.equal(await page.$$('[data-night-shift-console],[data-night-shift-style]').then(n=>n.length),0);
     assert.deepEqual(snapshot(),before);assert.deepEqual(errors,[]);assert.deepEqual(httpFailures,[]);checks.push('live resize/orientation, browser-chrome viewport/offsets, wheel/touch scroll lock, explicit Gentle choice through restart, default visual scare with muted sound, resize during scare and cleanup verified');
   }finally{await context.close()}
+});
+
+test('game-local sound defaults on only after Start, saved mute and Gentle survive reopening, and audio refusal never blocks play',async()=>{
+  for(const paired of [false,true]){
+  const {context,page}=await pageFor(paired);try{
+    const before=snapshot();await opened(page);
+    assert.equal(await page.$eval('#ns-sound',n=>n.checked),true,'new games default Sound + scream on');
+    assert.equal(await page.$eval('#ns-gentle',n=>n.checked),false,'new games default visual scare on');
+    assert.equal(await page.evaluate(()=>window.__gameAudio.created),0,'opening never autoplays or creates audio');
+    await page.click('#ns-sound');await page.click('#ns-gentle');await page.$eval('#ns-volume',n=>{n.value='0';n.dispatchEvent(new Event('input',{bubbles:true}));});
+    await page.click('#ns-exit');await closed(page);await page.reload();await page.waitForSelector('[data-night-shift-entry]');await opened(page);
+    assert.deepEqual(await page.evaluate(()=>[document.getElementById('ns-sound').checked,document.getElementById('ns-gentle').checked,document.getElementById('ns-volume').value]),[false,true,'0'],'saved game-local opt-outs override defaults');
+    await page.click('#ns-start');assert.equal(await page.evaluate(()=>window.__gameAudio.created),0);await page.keyboard.press('Escape');await closed(page);
+    await opened(page);await page.click('#ns-sound');await page.$eval('#ns-volume',n=>{n.value='15';n.dispatchEvent(new Event('input',{bubbles:true}));});
+    await page.evaluate(()=>{window.AudioContext=class{constructor(){throw Error('Synthetic platform audio refusal')}};});
+    await page.click('#ns-start');assert.equal(await page.$eval('[data-night-shift-console]',n=>n.dataset.phase),'playing');await page.click('#ns-pause');await page.click('#ns-resume');await page.click('#ns-exit');await closed(page);
+    assert.deepEqual(snapshot(),before);assert.deepEqual(errors,[]);checks.push((paired?'device':'member')+': game-only sound/visual defaults, no pre-Start audio, saved mute/Gentle/zero volume across reload, platform audio refusal and unchanged global sound/preferences verified');
+  }finally{await context.close()}
+  }
 });

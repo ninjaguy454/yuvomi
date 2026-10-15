@@ -4,3 +4,15 @@ export function nightShiftCopy(locale='en'){return locale==='de'?DE:EN;}
 export function canEnterNightShift({theme,pathname,wallMode,editing,dashboardAccess}={}){
   return theme==='night-shift'&&pathname==='/'&&!wallMode&&!editing&&dashboardAccess===true;
 }
+
+// Only game-local choices; household appearance/sound preferences are unrelated.
+export function nightShiftSettings(raw){
+  try{if(typeof raw==='string')raw=JSON.parse(raw);}catch{raw=null;}
+  if(!raw||typeof raw!=='object'||Array.isArray(raw))raw={};
+  return{sound:typeof raw.sound==='boolean'?raw.sound:true,gentle:typeof raw.gentle==='boolean'?raw.gentle:false,volume:Number.isFinite(raw.volume)?Math.max(0,Math.min(35,raw.volume)):15};
+}
+export function nightShiftSettingsKey(payload){
+  const device=payload?.principal?.kind==='device'&&!payload?.temporary;
+  const id=device?payload.principal.id:payload?.user?.id;
+  return Number.isSafeInteger(id)&&id>0?'vidamia:night-shift-game:v1:'+(device?'device:':'user:')+id:null;
+}

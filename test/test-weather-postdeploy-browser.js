@@ -130,7 +130,13 @@ test('mounted idle Wall updates across sunset through its normal minute timer wi
     assert.equal(before.sky.darkness,0);assert.equal(before.sky.stars,0);
     await page.evaluate(next => {window.weatherOriginalStage=document.querySelector('.local-weather-scene');window.weatherFixtureNow=next;},afterSunset);
     const started = Date.now();
-    await page.waitForFunction(() => document.documentElement.dataset.namedTheme.endsWith('-night')&&document.querySelector('.local-weather-scene').dataset.phase==='night', {timeout:70000,polling:250});
+    await page.waitForFunction(() => {
+      const stage=document.querySelector('.local-weather-scene');
+      // The night phase starts during the solar fade; sample the asserted visual end state.
+      return document.documentElement.dataset.namedTheme.endsWith('-night')&&stage.dataset.phase==='night'
+        &&Number(stage.querySelector('.local-weather-night-wash').style.opacity)>.5
+        &&Number(stage.querySelector('.local-weather-stars').style.opacity)>.8;
+    }, {timeout:70000,polling:250});
     const after = await sample(page,'wall-after-sunset');after.realTimerWaitMs=Date.now()-started;
     assert.equal(await page.evaluate(() => document.querySelector('.local-weather-scene')===window.weatherOriginalStage),true,'board keeps its mounted scene');
     assert.equal(after.envelope.theme.is_day,true,'cached reported flag stays daytime; valid sunset drives the current phase');

@@ -80,10 +80,14 @@ export function proposeDefinitionAssigneePolicies(d,before,after,{assignmentInte
   const oldActions=new Map(before?.subtasks?.map(action=>[action.action_key,action])||[]);
   for(const [old,row] of [[before,after],...after.subtasks.map(row=>[oldActions.get(row.action_key),row])]){
     const ids=row.assigned_user_ids||[],category=row.task.category||'misc';
-    const explicit=row===after?Object.hasOwn(assignmentIntent?.fields??{},'assigned_to'):(assignmentIntent?.actions?.update??[]).some(action=>action.action_key===row.action_key&&Object.hasOwn(action.fields??{},'assigned_user_ids'));
+    const fields=row===after?assignmentIntent?.fields??{}:(assignmentIntent?.actions?.update??[]).find(action=>action.action_key===row.action_key)?.fields??{};
+    const assignmentField=row===after?'assigned_to':'assigned_user_ids',explicit=Object.hasOwn(fields,assignmentField),selected=explicit?fields[assignmentField]:ids;
     const previous=old?.assignee_policy?.direct_assignee_ids??old?.assigned_user_ids??[];
-    if(old&&old.task.category===category&&samePeople(old.assigned_user_ids||[],ids)&&(!explicit||samePeople(previous,ids)))continue;
-    const direct=!explicit&&old?.assignee_policy&&samePeople(old.assigned_user_ids||[],ids)?previous:ids;
+    if(old&&old.task.category===category&&(explicit?samePeople(previous,selected):samePeople(old.assigned_user_ids||[],ids))){
+      if(explicit){if(old.assignee_policy)row.assignee_policy=structuredClone(old.assignee_policy);else delete row.assignee_policy;}
+      continue;
+    }
+    const direct=explicit?selected:old?.assignee_policy&&samePeople(old.assigned_user_ids||[],ids)?previous:ids;
     const policy=categoryAssigneePolicy(d,category);assertAssigneeCount(policy,direct);row.assignee_policy={...policy,direct_assignee_ids:[...direct]};
     if(row===after&&after.binding?.snapshot)after.binding.snapshot.assignee_policy=policy;
   }

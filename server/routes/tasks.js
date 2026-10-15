@@ -477,7 +477,9 @@ function finalizeFutureActionKeys(definition) {
 }
 function assertCompatibleFutureDefinition(req,task,series,definition) {
   const before=effectiveSeriesScoringDefinition(db.get(),seriesDefinitionForGeneration(db.get(),series.series_id,series.occurrence.generation+1)).data;
-  proposeDefinitionAssigneePolicies(db.get(),before,definition);
+  const assignmentIntent=!definition.binding&&(definition.task.assignment_mode??'fixed')==='fixed'&&Object.hasOwn(req.body,'direct_assignee_ids')
+    ?{fields:{assigned_to:parseAssignedTo(req.body.direct_assignee_ids)}}:null;
+  proposeDefinitionAssigneePolicies(db.get(),before,definition,{assignmentIntent});
   assertSeriesDefinitionMutation(db.get(),req,task,before,definition,{futureOnly:true});
   if(!futureRootCapabilities(db.get(),req,task,definition).view)throw new TaskStateError('This future definition is unavailable.',{},404);
   validateFutureDefinitionWindows(req,task,definition);

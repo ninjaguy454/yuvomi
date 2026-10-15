@@ -73,3 +73,20 @@ test('authentic future editor promotes child-only membership through preview and
   const definition=d.prepare('SELECT definition_json FROM task_recurrence_definitions WHERE series_id=(SELECT series_id FROM task_recurrence_occurrences WHERE task_id=?) ORDER BY id DESC').get(task.id);
   assert.deepEqual(JSON.parse(definition.definition_json).assignee_policy.direct_assignee_ids.sort((a,b)=>a-b),[2,3]);assert.deepEqual(errors,[]);
 });
+
+test('authentic historical compatibility edit preserves direct intent and completed awards',{timeout:90000},async()=>{
+  d.exec('INSERT OR IGNORE INTO reward_participants(user_id,enabled) VALUES(2,1),(3,1)');
+  const made=(await api('post','/tasks',{title:'Completed compatibility intent',category:'household',assigned_to:[2],points:2,scoring_mode:'whole_task',is_recurring:true,recurrence_rule:'FREQ=DAILY',due_date:'2026-11-01',subtasks:[{title:'Compatibility child',assigned_user_ids:[3]}]})).data;
+  await api('patch',`/tasks/${made.id}/status`,{status:'done',complete_remaining:true,expected_revision:made.revision});
+  const task=(await api('get','/tasks/'+made.id)).data,old=d.prepare('SELECT * FROM tasks WHERE id=?').get(made.id);
+  const awards=()=>JSON.stringify(Object.fromEntries(['reward_ledger','reward_task_awards','task_scoring_settlements','task_scoring_settlement_releases'].map(table=>[table,d.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()]))),earned=awards();
+  assert.ok(d.prepare("SELECT 1 FROM reward_ledger WHERE task_id=? AND type='earn'").get(made.id));
+  const body={edit_scope:'future',assigned_to:[2,3],direct_assignee_ids:[2,3],expected_revision:task.revision,expected_series_revision:task.recurrence_series_revision};
+  await api('post',`/tasks/${task.id}/scoring-preview`,body);await api('put','/tasks/'+task.id,body);
+  const definition=d.prepare('SELECT definition_json FROM task_recurrence_definitions WHERE series_id=? ORDER BY id DESC LIMIT 1').get(task.recurrence_series_id);
+  assert.deepEqual(JSON.parse(definition.definition_json).assignee_policy.direct_assignee_ids.sort((a,b)=>a-b),[2,3]);assert.deepEqual(d.prepare('SELECT * FROM tasks WHERE id=?').get(task.id),old);assert.equal(awards(),earned);
+  const next=d.prepare('SELECT id FROM tasks WHERE recurrence_origin_id=? AND parent_task_id IS NULL').get(task.id),child=d.prepare("SELECT id FROM tasks WHERE parent_task_id=? AND title='Compatibility child'").get(next.id);
+  const parent=(await api('get','/tasks/'+next.id)).data,current=(await api('get','/tasks/'+child.id)).data;
+  await api('put','/tasks/'+child.id,{assigned_to:[],expected_revision:current.revision,expected_parent_revision:parent.revision});
+  assert.deepEqual(d.prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(next.id).map(row=>row.user_id),[2,3]);assert.equal(awards(),earned);assert.deepEqual(errors,[]);
+});

@@ -40,6 +40,34 @@ test('theme choices preview locally and persist only through Confirm',async()=>{
     assert.equal(stored(display.device.id).appearance.named_appearance.theme,'coffee');assert.equal(await page.$('#confirm-modal-ok'),null);
   }finally{await context.close();}
 });
+test('fixed theme previews retain catalog controls, tile focus and configured dynamic choices',async()=>{
+  const display=fixture('Stable preview catalog','fern'),{page,context}=await pageFor(display);
+  try{
+    await page.waitForSelector('[data-device-theme]');await page.click('.nav-sidebar [data-device-theme]');await page.waitForSelector('[data-shared-device-theme] [data-theme-choice=coffee]');
+    await page.evaluate(()=>{const root=document.querySelector('[data-shared-theme-picker]');window.retainedCatalog={root,grid:root.querySelector('.named-theme-grid'),coffee:root.querySelector('[data-theme-choice=coffee]'),fern:root.querySelector('[data-theme-choice=fern]'),search:root.querySelector('[data-theme-search]'),select:root.querySelector('[data-named-field=theme]')};});
+    await page.click('[data-shared-device-theme] [data-theme-choice=coffee]');await page.waitForFunction(()=>document.documentElement.dataset.namedTheme==='coffee'&&!document.querySelector('.named-appearance-picker').hasAttribute('aria-busy'));
+    assert.deepEqual(await page.evaluate(()=>{const r=window.retainedCatalog;return{grid:r.grid===r.root.querySelector('.named-theme-grid'),coffee:r.coffee===r.root.querySelector('[data-theme-choice=coffee]'),fern:r.fern===r.root.querySelector('[data-theme-choice=fern]'),search:r.search===r.root.querySelector('[data-theme-search]'),select:r.select===r.root.querySelector('[data-named-field=theme]'),focus:document.activeElement===r.coffee,selected:r.coffee.getAttribute('aria-pressed'),former:r.fern.getAttribute('aria-pressed')};}),{grid:true,coffee:true,fern:true,search:true,select:true,focus:true,selected:'true',former:'false'});
+    assert.equal(stored(display.device.id).appearance.named_appearance.theme,'fern');
+    await page.select('[data-named-field=theme]','holidays');await page.waitForFunction(()=>!document.querySelector('.named-appearance-picker').hasAttribute('aria-busy'));
+    await page.select('[data-named-field=outside]','coffee');await page.waitForFunction(()=>!document.querySelector('.named-appearance-picker').hasAttribute('aria-busy'));
+    await page.select('[data-named-field=theme]','christmas');await page.waitForFunction(()=>!document.querySelector('.named-appearance-picker').hasAttribute('aria-busy'));
+    await page.select('[data-named-field=theme]','holidays');await page.waitForFunction(()=>!document.querySelector('.named-appearance-picker').hasAttribute('aria-busy'));
+    assert.equal(await page.$eval('[data-named-field=outside]',n=>n.value),'coffee');
+    await page.click('[data-shared-theme-confirm]');await page.waitForFunction(()=>!document.querySelector('[data-shared-device-theme]'));
+    assert.equal(stored(display.device.id).appearance.named_appearance.theme,'holidays');assert.equal(stored(display.device.id).appearance.named_appearance.outside,'coffee');
+  }finally{await context.close();}
+});
+test('a filtered selection removes the former theme exception from the dropdown',async()=>{
+  const display=fixture('Filtered preview catalog','fern'),{page,context}=await pageFor(display);
+  try{
+    await page.waitForSelector('[data-device-theme]');await page.click('.nav-sidebar [data-device-theme]');await page.waitForSelector('[data-theme-search]');
+    await page.$eval('[data-theme-search]',node=>{node.value='Coffee';node.dispatchEvent(new Event('input',{bubbles:true}));});
+    assert.equal(await page.$$eval('[data-named-field=theme] option[value=fern]',nodes=>nodes.length),1,'the saved choice stays available before selection');
+    await page.click('[data-theme-choice=coffee]');await page.waitForFunction(()=>document.documentElement.dataset.namedTheme==='coffee'&&!document.querySelector('.named-appearance-picker').hasAttribute('aria-busy'));
+    assert.equal(await page.$$eval('[data-named-field=theme] option[value=fern]',nodes=>nodes.length),0,'the former choice no longer qualifies for an exception');
+    assert.equal(await page.$eval('[data-named-field=theme]',node=>node.value),'coffee');
+  }finally{await context.close();}
+});
 test('default-enabled shared Theme entry edits only device appearance and temporary/switching cleanup preserves owners',async()=>{
   const {page,context}=await pageFor(first);try{
     await page.waitForSelector('.nav-sidebar [data-device-theme]');assert.equal(await page.$eval('[data-device-theme]',n=>n.disabled),false);assert.equal(await page.$eval('html',n=>n.dataset.namedTheme),'hanukkah');const credential=d.prepare('SELECT context_key FROM device_credentials WHERE device_id=?').get(first.device.id).context_key;

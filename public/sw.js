@@ -48,6 +48,12 @@ const API_CACHE_WHITELIST = ['/calendar', '/tasks', '/shopping', '/meals', '/con
 
 // App-Shell: sofort benötigt für ersten Render
 const APP_SHELL = [
+  '/utils/night-shift-entry.js',
+  '/utils/night-shift-game.js',
+  '/utils/night-shift-scream.js',
+  '/utils/night-shift-copy.js',
+  '/components/night-shift-console.js',
+  '/styles/night-shift-game.css',
   '/components/device-theme.js',
   '/components/emoji-picker.js',
   '/components/point-adjustment.js',

@@ -44,6 +44,7 @@ import { prefersInkText } from '/utils/contrast.js';
 import { openQuickLinksManager } from '/components/quick-links-manager.js';
 import { attachOverlay } from '/utils/overlay-history.js';
 import { mountWallDashboard } from '/components/wall-dashboard.js';
+import { mountNightShiftEntry } from '/utils/night-shift-entry.js';
 import { renderRotationContext } from '/components/rotation-bindings.js';
 
 // Hält den AbortController des aktuellen FAB-Listeners - wird bei jedem render() erneuert.
@@ -3775,6 +3776,7 @@ export async function render(container, { user }) {
   `);
 
   const stopTaskCountdowns = bindTaskCountdowns(container);
+  const stopNightShift = mountNightShiftEntry(container, { signal: _fabController.signal });
   _countdownBindings.set(container, stopTaskCountdowns);
   _fabController.signal.addEventListener('abort', stopTaskCountdowns, { once: true });
 
@@ -4435,6 +4437,7 @@ export async function render(container, { user }) {
   // Internal Dashboard rerenders replace the binding. The router's original
   // disposer must still stop the current binding owned by this page container.
   return () => {
+    stopNightShift();
     _countdownBindings.get(container)?.();
     _countdownBindings.delete(container);
   };

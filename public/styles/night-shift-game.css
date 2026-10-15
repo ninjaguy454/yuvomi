@@ -2,7 +2,7 @@
 .ns-console *{box-sizing:border-box}.ns-console button,.ns-console input{font:inherit}.ns-console button{cursor:pointer;color:inherit;background:#2a2e27;border:1px solid var(--line);border-radius:9px;min-height:44px;padding:10px 14px}
 .ns-console button:hover{background:#373d31;border-color:#b8be92}.ns-console button:focus-visible,.ns-console input:focus-visible{outline:3px solid #ffcf80;outline-offset:3px}.ns-console [hidden]{display:none!important}.ns-console h2,.ns-console h3,.ns-console p{margin:0}.ns-console small{display:block}
 .ns-console kbd{font:10px ui-monospace,monospace;opacity:.9;border:1px solid #78846e;border-radius:3px;padding:2px 4px;white-space:nowrap}.ns-console .eyebrow{font:10px ui-monospace,monospace;letter-spacing:1.8px;color:var(--amber)}.ns-console .crew-symbols{position:absolute;width:0;height:0;overflow:hidden}
-.ns-console{background:#171d18;border:1px solid #839069;color:#f7f1df;border-radius:18px;max-width:1160px;width:calc(100% - 48px);max-height:calc(100dvh - 40px);padding:0;overflow-y:auto;box-shadow:0 20px 80px #0009}
+.ns-console{background:#171d18;border:1px solid #839069;color:#f7f1df;border-radius:18px;padding:0;box-shadow:0 20px 80px #0009}
 .ns-console::backdrop{background:#070b09e8}
 .ns-console .console-header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:22px 28px;border-bottom:1px solid #526047;background:#21271e}
 .ns-console .console-header h2{font-size:24px;letter-spacing:-.8px;margin-top:6px}
@@ -309,3 +309,109 @@
 @media(prefers-reduced-motion:reduce){.ns-console .attack-overlay{display:none!important}
 .ns-console .attack-overlay svg{animation:none!important}
 }
+
+/* The console owns one viewport. Artwork yields space before controls do. */
+:root:has(.ns-console[open]),body:has(.ns-console[open]){overflow:hidden;overscroll-behavior:none}
+.ns-console{
+  --ns-safe-top:env(safe-area-inset-top,0px);--ns-safe-right:env(safe-area-inset-right,0px);
+  --ns-safe-bottom:env(safe-area-inset-bottom,0px);--ns-safe-left:env(safe-area-inset-left,0px);--ns-edge:6px;
+  position:fixed;inset:auto;margin:0;box-sizing:border-box;
+  left:calc(var(--ns-viewport-left,0px) + var(--ns-safe-left) + (var(--ns-viewport-width,100vw) - var(--ns-safe-left) - var(--ns-safe-right))/2);
+  top:calc(var(--ns-viewport-top,0px) + var(--ns-safe-top) + (var(--ns-viewport-height,100dvh) - var(--ns-safe-top) - var(--ns-safe-bottom))/2);
+  transform:translate(-50%,-50%);
+  width:min(1160px,calc(var(--ns-viewport-width,100vw) - var(--ns-safe-left) - var(--ns-safe-right) - 2*var(--ns-edge)));
+  height:min(920px,calc(var(--ns-viewport-height,100dvh) - var(--ns-safe-top) - var(--ns-safe-bottom) - 2*var(--ns-edge)));
+  max-width:none;max-height:none;min-width:0;min-height:0;overflow:hidden;overscroll-behavior:none;
+  display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto minmax(0,1fr) auto;
+  grid-template-areas:'header' 'hud' 'stage' 'settings';border-radius:12px;
+}
+.ns-console button{min-height:44px;min-width:44px;line-height:1.2}
+.ns-console button:focus-visible,.ns-console input:focus-visible{outline-offset:-3px}
+.ns-console .console-header{grid-area:header;position:relative;top:auto;padding:6px 12px;gap:8px;min-width:0}
+.ns-console .console-header h2{font-size:20px;margin-top:2px;white-space:nowrap}
+.ns-console .console-header .eyebrow{font-size:8px;line-height:1.2}
+.ns-console .console-header .quiet{flex:none;padding:6px 10px}
+.ns-console #ns-play{display:contents}
+.ns-console .hud{grid-area:hud;padding:6px 12px;gap:12px;min-width:0}
+.ns-console .hud>div:first-child{min-width:54px}
+.ns-console .hud strong{font-size:20px;margin-top:2px}
+.ns-console .hud small{font-size:9px;line-height:1.2}
+.ns-console .power-wrap{max-width:none;min-width:0}
+.ns-console .power-wrap>div{display:flex;flex-direction:row;align-items:center;gap:6px}
+.ns-console .power-wrap strong{font-size:14px;margin:0}
+.ns-console .power-wrap meter{height:8px;margin-top:3px}
+.ns-console .hud .quiet{padding:6px 10px;font-size:12px}
+.ns-console .play-grid{grid-area:stage;display:grid;min-width:0;min-height:0;padding:8px;gap:6px;grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:minmax(0,1fr) auto auto}
+.ns-console .camera-column{display:contents}
+.ns-console .camera-frame{grid-column:1/-1;grid-row:1;display:grid;grid-template-rows:auto minmax(0,1fr) auto;min-width:0;min-height:0}
+.ns-console .camera-label{font-size:10px;line-height:1.2;letter-spacing:.3px;padding:5px 7px;gap:4px;min-width:0}
+.ns-console .camera-label>span:last-child{font-size:8px}
+.ns-console .camera-caption{font-size:10px;line-height:1.2;padding:4px 7px;min-height:22px;gap:4px}
+.ns-console .scene{width:100%;height:100%;min-height:0;aspect-ratio:auto}
+.ns-console .camera-frame:after{inset:23px 0 22px}
+.ns-console .monitor-down{inset:23px 0 22px}
+.ns-console .map-panel{grid-column:1/-1;grid-row:2;min-height:0;min-width:0;padding:3px;border-radius:7px}
+.ns-console .camera-map{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:4px;width:100%;height:100%;max-width:none;min-height:0;margin:0}
+.ns-console .camera-map>svg,.ns-console .map-office{display:none}
+.ns-console .camera-map button{position:static;width:100%;min-width:44px;min-height:48px;height:100%;padding:4px 3px;text-align:center;font-size:11px;line-height:1.15;overflow-wrap:anywhere;order:0}
+.ns-console .camera-map button[aria-pressed=true]{padding:3px 2px}
+.ns-console .camera-map button small{font-size:8px;line-height:1.2;margin-bottom:3px;white-space:normal}
+.ns-console .camera-map kbd{display:none}
+.ns-console .monitor-button{grid-column:1;grid-row:3;min-height:48px;margin:0;padding:5px;font-size:11px;line-height:1.2}
+.ns-console .monitor-button kbd{display:none}
+.ns-console .shutters{grid-column:2/4;grid-row:3;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;min-width:0}
+.ns-console .shutters button,.ns-console .shutters button.threat{min-height:48px;min-width:44px;padding:5px;gap:3px;justify-content:center}
+.ns-console .shutters strong{font-size:11px;line-height:1.2}
+.ns-console .door-tag{font-size:8px;line-height:1.2;letter-spacing:.2px}
+.ns-console .door-tag kbd{display:none}
+.ns-console .shutters button>span:last-child{display:none}
+.ns-console .shutters button.threat{box-shadow:inset 0 0 0 1px #edbb68}
+.ns-console .console-footer{grid-area:settings;display:grid;grid-template-columns:auto auto minmax(70px,1fr);gap:8px;align-items:center;padding:4px 8px;min-width:0;font-size:11px}
+.ns-console .option{min-height:44px;gap:6px;font-size:11px;line-height:1.2;min-width:0}
+.ns-console .option input{flex:none;margin:0;width:20px;height:20px}
+.ns-console .volume{display:flex;flex-direction:column;align-items:stretch;gap:0;min-width:0;min-height:44px;font-size:10px;line-height:1.2}
+.ns-console .volume input{display:block;width:100%;min-width:44px;min-height:44px;margin:0}
+.ns-console #ns-sound-note{display:none}
+.ns-console .sparse-briefing{grid-area:stage;display:flex;flex-direction:column;justify-content:center;align-items:center;min-width:0;min-height:0;padding:12px;gap:8px}
+.ns-console .title-crew{flex:1 1 0;min-height:0;height:auto;max-height:255px;width:100%;margin:0;overflow:hidden}
+.ns-console .title-crew svg,.ns-console .title-crew svg:nth-child(2){height:100%;max-height:255px;min-height:0;width:25%}
+.ns-console .brief-copy{flex:none}
+.ns-console .sparse-briefing .brief-copy h3{font-size:clamp(26px,4vw,35px);margin:6px 0 10px}
+.ns-console .primary{min-height:44px;padding:8px 18px}
+.ns-console .result,.ns-console .result.won,.ns-console .pause-screen{grid-area:stage;display:flex;flex-direction:column;justify-content:center;align-items:center;min-width:0;min-height:0;padding:10px;gap:8px}
+.ns-console .scare{flex:0 1 190px;min-height:0;height:auto;width:min(170px,100%);margin:0;overflow:hidden}
+.ns-console .scare svg{height:100%;min-height:0;max-height:190px;width:100%}
+.ns-console .result h3,.ns-console .pause-screen h3{font-size:28px;line-height:1.1;margin:0;flex:none}
+.ns-console .result .eyebrow{line-height:1.2;flex:none}
+.ns-console .result-actions{flex:none;gap:8px;flex-wrap:nowrap}
+.ns-console .attack-overlay{position:relative;grid-area:stage;inset:auto;width:100%;height:100%;min-height:0;min-width:0;pointer-events:auto;touch-action:manipulation}
+.ns-console .attack-overlay svg{height:100%;max-height:100%;width:min(85%,430px);pointer-events:none}
+.ns-console[data-layout=wide] .play-grid{grid-template-columns:repeat(6,minmax(0,1fr));grid-template-rows:minmax(0,1fr) auto}
+.ns-console[data-layout=wide] .camera-frame{grid-column:1/5;grid-row:1}
+.ns-console[data-layout=wide] .map-panel{grid-column:5/7;grid-row:1;padding:6px}
+.ns-console[data-layout=wide] .camera-map{grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(3,minmax(48px,1fr))}
+.ns-console[data-layout=wide] .monitor-button{grid-column:1/3;grid-row:2}
+.ns-console[data-layout=wide] .shutters{grid-column:3/7;grid-row:2}
+.ns-console[data-layout=wide] .console-footer{grid-template-columns:auto auto minmax(140px,240px);justify-content:start;gap:20px}
+.ns-console[data-layout=wide] .volume{flex-direction:row;align-items:center;gap:8px;font-size:11px}
+.ns-console[data-layout=wide] .volume input{width:110px}
+.ns-console[data-short]{grid-template-columns:minmax(190px,1fr) minmax(220px,1fr);grid-template-rows:auto minmax(0,1fr) auto;grid-template-areas:'header hud' 'stage stage' 'settings settings';--ns-edge:4px}
+.ns-console[data-short] .console-header{padding:4px 8px;border-bottom:1px solid #526047}
+.ns-console[data-short] .console-header h2{font-size:18px}
+.ns-console[data-short] .console-header .eyebrow{display:none}
+.ns-console[data-short] .console-header kbd{display:none}
+.ns-console[data-short] .hud{padding:4px 8px;gap:8px}
+.ns-console[data-short] .hud strong{font-size:17px}
+.ns-console[data-short] .hud .quiet kbd{display:none}
+.ns-console[data-short] .power-wrap strong{font-size:13px}
+.ns-console[data-short] .play-grid{padding:6px;grid-template-columns:repeat(6,minmax(0,1fr))}
+.ns-console[data-short] .camera-frame{grid-column:1/4}
+.ns-console[data-short] .map-panel{grid-column:4/7;padding:3px}
+.ns-console[data-short] .camera-map{grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:repeat(2,minmax(44px,1fr))}
+.ns-console[data-short] .camera-map button{min-height:44px}
+.ns-console[data-short] .console-footer{padding-block:2px}
+.ns-console[data-tight][data-layout=portrait] .console-header,.ns-console[data-tight][data-layout=portrait] .hud{padding:4px 10px}
+.ns-console[data-tight][data-layout=portrait] .play-grid{padding:6px}
+.ns-console[data-tight][data-layout=portrait] .map-panel{padding:2px}
+.ns-console[data-tight][data-layout=portrait] .camera-map button{min-height:44px}
+.ns-console[data-tight][data-layout=portrait] .monitor-button,.ns-console[data-tight][data-layout=portrait] .shutters button{min-height:44px}

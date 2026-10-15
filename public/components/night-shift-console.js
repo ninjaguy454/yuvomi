@@ -19,6 +19,21 @@ export async function openNightShiftConsole({signal,returnFocus,onClose=()=>{}}=
   const dialog=document.createElement('dialog');dialog.id='ns-game';dialog.className='ns-console';dialog.dataset.nightShiftConsole='';dialog.dir='ltr';dialog.setAttribute('aria-labelledby','ns-console-title');dialog.innerHTML=MARKUP;
   const $=id=>dialog.querySelector('#ns-'+id);
   const events=new AbortController();const listen=(target,type,callback,options={})=>target.addEventListener(type,callback,{...options,signal:events.signal});
+  // Browser chrome, rotation and the visual viewport can change without a page render.
+  let viewportFrame=0;
+  function fitViewport(){
+    const viewport=window.visualViewport,width=viewport?.width||innerWidth,height=viewport?.height||innerHeight;
+    for(const [name,value]of Object.entries({width,height,left:viewport?.offsetLeft||0,top:viewport?.offsetTop||0}))dialog.style.setProperty('--ns-viewport-'+name,value+'px');
+    const style=getComputedStyle(dialog),safe=name=>parseFloat(style.getPropertyValue('--ns-safe-'+name))||0;
+    const usableWidth=width-safe('left')-safe('right'),usableHeight=height-safe('top')-safe('bottom');
+    dialog.dataset.layout=usableWidth>=720||usableWidth>usableHeight*1.15?'wide':'portrait';
+    dialog.toggleAttribute('data-short',usableHeight<560&&usableWidth>=460);
+    dialog.toggleAttribute('data-tight',usableHeight<480);
+    dialog.scrollTop=0;dialog.scrollLeft=0;
+  }
+  function queueViewport(){cancelAnimationFrame(viewportFrame);viewportFrame=requestAnimationFrame(()=>{viewportFrame=0;fitViewport();});}
+  listen(window,'resize',queueViewport);
+  if(window.visualViewport){listen(window.visualViewport,'resize',queueViewport);listen(window.visualViewport,'scroll',queueViewport);}
   const copy=nightShiftCopy(getLocale());
   const text=(id,value)=>{const node=$(id);const child=[...node.childNodes].find(n=>n.nodeType===3);if(child)child.nodeValue=value;};
   for(const [id,key]of [['start','start'],['exit','exit'],['result-exit','exit'],['restart','restart'],['pause','pause'],['resume','resume']])text(id,copy[key]);
@@ -28,7 +43,7 @@ export async function openNightShiftConsole({signal,returnFocus,onClose=()=>{}}=
   let destroyed=false,overlayToken=null;
   function destroy(){
     if(destroyed)return;destroyed=true;events.abort();signal?.removeEventListener('abort',destroy);
-    cancelAnimationFrame(frame);frame=0;hideAttack();silence();audio?.close().catch(()=>{});game.exit();
+    cancelAnimationFrame(frame);cancelAnimationFrame(viewportFrame);frame=0;hideAttack();silence();audio?.close().catch(()=>{});game.exit();
     if(dialog.open)dialog.close();dialog.remove();sheet.remove();if(overlayToken!==null)dropOverlay(overlayToken);
     onClose();const target=typeof returnFocus==='function'?returnFocus():returnFocus;if(target?.isConnected)target.focus({preventScroll:true});
   }
@@ -48,7 +63,9 @@ export async function openNightShiftConsole({signal,returnFocus,onClose=()=>{}}=
     for (const voice of activeVoices) {try {voice.stop();} catch {} }
     activeVoices.clear();
   }
-  function hideAttack(){clearTimeout(attackTimer);attackTimer=0;$('attack-overlay').hidden=true;}
+  let resultPointer=null;
+  function hideAttack(){clearTimeout(attackTimer);attackTimer=0;$('attack-overlay').hidden=true;resultPointer=null;for(const id of ['restart','result-exit'])$(id).disabled=false;}
+  function finishAttack(){hideAttack();if(!destroyed&&game.state.phase==='lost')$('restart').focus({preventScroll:true});}
   function gentleEncounter(){hideAttack();silence();$('scare').classList.add('gentle');$('scare-face').setAttribute('href','#ns-crew-'+(game.state.scareBot||'bear'));}
   function unlockAudio() {
     if (!$('sound').checked || Number($('volume').value) === 0) return;
@@ -138,11 +155,12 @@ export async function openNightShiftConsole({signal,returnFocus,onClose=()=>{}}=
         $('result-title').textContent = s.phase === 'won' ? copy.win : s.bots.find(b=>b.id===s.scareBot)?.name || 'Freddy';
         $('result-copy').textContent = s.phase === 'won' ? 'Shift complete.' : s.reason === 'power' ? 'Power depleted.' : 'A character entered the office.';
         if(s.phase==='lost'&&!gentle){
+          resultPointer=null;for(const id of ['restart','result-exit'])$(id).disabled=true;
           $('attack-face').setAttribute('href','#ns-dread-'+s.scareBot);$('attack-overlay').hidden=false;
           $('attack-overlay').dataset.shownAt=String(performance.now());cue('scream');
-          attackTimer=setTimeout(hideAttack,1200);
+          attackTimer=setTimeout(finishAttack,1200);
         }else cue('end');
-        dialog.scrollTop=0;$('restart').focus({preventScroll:true});
+        dialog.scrollTop=0;if($('attack-overlay').hidden)$('restart').focus({preventScroll:true});
       }
       lastPhase = s.phase;
     }
@@ -162,10 +180,17 @@ export async function openNightShiftConsole({signal,returnFocus,onClose=()=>{}}=
   function resume() {game.resume(); unlockAudio(); paint(); dialog.scrollTop=0; $('monitor').focus({preventScroll:true}); run();}
   function shutter(side) {game.setShutter(side,!game.state.shutters[side]); cue('switch'); paint();}
   function monitor() {game.setMonitor(!game.state.monitor); cue('switch'); paint();}
-  ['exit','result-exit'].forEach(id=>listen($(id),'click',closeGame));
+  listen($('exit'),'click',closeGame);
   listen(dialog,'cancel', event=>{event.preventDefault();closeGame();});
   listen(dialog,'close',()=>{if(game.state.phase!=='ready')closeGame();});
-  ['start','restart'].forEach(id=>listen($(id),'click',start));
+  listen($('start'),'click',start);
+  // A touch begun on the old camera/control must not activate a newly revealed action.
+  for(const [id,action]of [['restart',start],['result-exit',closeGame]]){
+    const button=$(id);
+    listen(button,'pointerdown',event=>{resultPointer=!button.disabled&&['won','lost'].includes(game.state.phase)?{button,pointerId:event.pointerId}:null;});
+    listen(button,'pointercancel',()=>{resultPointer=null;});
+    listen(button,'click',event=>{const fresh=event.detail===0||resultPointer?.button===button;resultPointer=null;if(fresh&&!button.disabled&&$('attack-overlay').hidden&&['won','lost'].includes(game.state.phase))action();});
+  }
   listen($('pause'),'click',pause); listen($('resume'),'click',resume);
   listen($('left-shutter'),'click',()=>shutter('left')); listen($('right-shutter'),'click',()=>shutter('right'));
   listen($('monitor'),'click',monitor);
@@ -189,6 +214,6 @@ export async function openNightShiftConsole({signal,returnFocus,onClose=()=>{}}=
   },{capture:true});
   settingsText(); paint();
   signal?.addEventListener('abort',destroy,{once:true});
-  document.body.append(dialog);overlayToken=attachOverlay(dialog,destroy);dialog.showModal();$('start').focus({preventScroll:true});
+  document.body.append(dialog);fitViewport();overlayToken=attachOverlay(dialog,destroy);dialog.showModal();$('start').focus({preventScroll:true});
   return {destroy};
 }

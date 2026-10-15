@@ -62,7 +62,9 @@ export function createSceneDynamics() {
       if(!target.snow&&f.denseIce<.008)f.denseIce=0;
       f.ice=Math.max(f.snowMass,target.freezing?.35:target.rime?.45:0);
     }
-    first=false;return {...f,...target, ...Object.fromEntries(keys.map(key=>[key,f[key]])),wet:f.wet,snowMass:f.snowMass,denseIce:f.denseIce,ice:f.ice,windTravel:f.windTravel,transitioning:f.transitioning};
+    // Mount/resize can draw before an observation arrives. The first real facts
+    // must initialize their current solar grade rather than fade from empty day.
+    if(theme)first=false;return {...f,...target, ...Object.fromEntries(keys.map(key=>[key,f[key]])),wet:f.wet,snowMass:f.snowMass,denseIce:f.denseIce,ice:f.ice,windTravel:f.windTravel,transitioning:f.transitioning};
   }
   return {update(nextTheme,nextScene){theme=nextTheme;scene=nextScene?.version===1?nextScene:null;if(!scene){clear();advance(0,0,Date.now(),true);}},advance,frame:()=>({...f}),
     pending:()=>!!scene&&(f.transitioning||f.wet>0||f.snowMass>0),clear(){scene=null;theme=null;clear();}};
@@ -70,9 +72,9 @@ export function createSceneDynamics() {
 
 export function cameraGeometry(boxWidth,boxHeight) {
   boxWidth=Math.max(1,boxWidth);boxHeight=Math.max(1,boxHeight);
-  const mobile=boxWidth<=700,fit=mobile||boxWidth/boxHeight>2.11?'contain':'cover';
-  const scale=mobile?boxWidth/1600:(fit==='cover'?Math.max:Math.min)(boxWidth/1600,boxHeight/1042);
-  const width=1600*scale,height=1042*scale,left=(width-boxWidth)*.5,top=mobile?0:(height-boxHeight)*.52;
+  const mobile=boxWidth<=700,fit=boxWidth/boxHeight>2.11?'contain':'cover';
+  const scale=(fit==='cover'?Math.max:Math.min)(boxWidth/1600,boxHeight/1042);
+  const width=1600*scale,height=1042*scale,left=(width-boxWidth)*.5,top=(height-boxHeight)*.52;
   return {width,height,left,top,scale,fit,boxWidth,boxHeight,mobile,
     visibleSource:{left:left/width,top:top/height,right:(left+boxWidth)/width,bottom:(top+boxHeight)/height}};
 }

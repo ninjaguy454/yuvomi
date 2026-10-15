@@ -91,7 +91,7 @@
   "approvedPreviewSha256": "3fd197cb744870e741ae34722abb1b12ced2fc75e37f17e9b313048344388bff",
   "integrationNotes": [
     "Six selected WebP derivatives copied unchanged; source JPEG remains in isolated review evidence.",
-    "Production shell uses the approved 50% 52% cover camera and maximum stage aspect2.1; ordinary app scrolling reveals lower artwork in wide/shallow windows. Mobile retains full painting.",
+    "Production shell uses the approved 50% 52% cover camera and maximum stage aspect2.1; ordinary app scrolling reveals lower artwork in wide/shallow windows. Mobile uses the same viewport-filling cover camera, cropping horizontally in portrait.",
     "Registered masked clouds and synthetic visible-sky illumination; no observed strike, chimney, lights or blizzard is asserted.",
     "Cards retain their existing fills, content, typography, transforms and controls; bounded artwork appears only on a narrow decorative rim.",
     "The readable linked credit is an app-scrollport footer at every screen size, keeping it clear of card controls and fixed navigation."

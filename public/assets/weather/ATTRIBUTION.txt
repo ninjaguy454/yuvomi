@@ -21,7 +21,8 @@ were added to Cole's partly hidden inn.
 Production shell adaptation: desktop uses the approved 50% 52% cover camera.
 The art stage retains a maximum aspect of2.1. In very wide or shallow windows,
 normal app scrolling reveals the lower artwork without moving card targets.
-Mobile shows the full painting. All grades and the original sky mask share the
-same camera, including the scroll offset used to select visible illumination.
+Mobile fills its viewport with the same cover camera, cropping horizontally in
+portrait. All grades and the original sky mask share the same camera, including
+the scroll offset used to select visible illumination.
 The readable linked credit sits in the existing app scrollport footer at every
 screen size, keeping it clear of task controls and fixed navigation.

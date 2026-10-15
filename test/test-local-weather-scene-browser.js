@@ -84,8 +84,9 @@ test('real card CSS keeps fills, content, bounds and controls while registered w
     for(const [width,height]of [[3440,1080],[2048,667],[390,844]]){
       await page.setViewport({width,height});await page.waitForFunction(width=>window.testScene.getStats().artCamera?.boxWidth===width,{},width);
       const g=await page.evaluate(()=>window.testScene.getStats().artCamera);
-      assert.equal(g.fit,width<=700?'contain':'cover');
-      assert.ok([[.5,.215],[.46,.65],[.30,.765],[.58,.835]].every(([x,y])=>x*g.width-g.left>=0&&x*g.width-g.left<=g.boxWidth&&y*g.height-g.top>=0&&y*g.height-g.top<=g.boxHeight));
+      assert.equal(g.fit,'cover');
+      if(width<=700)assert.ok(g.width>=g.boxWidth&&g.height>=g.boxHeight,'portrait painting covers the whole viewport');
+      else assert.ok([[.5,.215],[.46,.65],[.30,.765],[.58,.835]].every(([x,y])=>x*g.width-g.left>=0&&x*g.width-g.left<=g.boxWidth&&y*g.height-g.top>=0&&y*g.height-g.top<=g.boxHeight));
       if(width>700){
         const pan=await page.evaluate(()=>{const host=document.querySelector('.app-content'),height=window.testScene.getStats().artCamera.boxHeight-innerHeight;host.scrollTop=height;return{wanted:height,actual:host.scrollTop};});
         assert.ok(pan.actual>=pan.wanted-1,'approved wide artwork can be revealed by ordinary app scrolling');

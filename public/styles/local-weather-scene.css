@@ -35,7 +35,7 @@ html[data-local-weather-scene] :is(.wall-dashboard__connection,.wall-dashboard__
 .local-weather-snow-catch{position:absolute;top:0;width:26px;height:6px;pointer-events:none}
 .local-weather-snow-catch:before{content:"";position:absolute;inset:0;clip-path:polygon(0 55%,12% 25%,28% 33%,42% 0,58% 25%,76% 14%,87% 38%,100% 47%,91% 91%,62% 100%,35% 90%,8% 100%);background:radial-gradient(ellipse at 35% 20%,#fff 0 24%,#e7f1f8 64%,#b6cddd)}
 .local-weather-snow-fragment{position:absolute;width:2px;height:3px;background:#f9ffff;clip-path:polygon(40% 0,100% 28%,73% 100%,0 66%);opacity:0;pointer-events:none}
-@media(max-width:700px){.local-weather-scene{height:100dvh}.local-weather-art{height:auto;aspect-ratio:1600/1042;object-fit:contain;object-position:0% 0%}.local-weather-credit{font-size:11px;line-height:16px}}
+@media(max-width:700px){.local-weather-scene{height:100dvh}.local-weather-credit{font-size:11px;line-height:16px}}
 @media(prefers-reduced-motion:reduce){.local-weather-cloud-strip{will-change:auto}}
 @media(prefers-reduced-transparency:reduce){.local-weather-card-rim,.local-weather-sky-viewport,.local-weather-atmosphere{display:none!important}html[data-local-weather-scene] .app-content,html[data-local-weather-scene][data-named-theme] .app-content{background-color:var(--color-bg)}.local-weather-credit{background:#10212d}}
 @media(forced-colors:active){.local-weather-scene,.local-weather-card-rim{display:none!important}.local-weather-credit{background:Canvas;color:LinkText;border-color:CanvasText}html[data-local-weather-scene] .app-content,html[data-local-weather-scene][data-named-theme] .app-content{background-color:Canvas}}

@@ -57,6 +57,9 @@ test.after(async () => {
   report.permissionsUnchanged = db.prepare('SELECT permissions_json FROM household_devices WHERE id=?').get(device.id).permissions_json === storedPermissions;
   db.close();
   if (output) { mkdirSync(output, { recursive: true }); writeFileSync(join(output, 'weather-postdeploy-browser.json'), JSON.stringify(report, null, 2) + '\n'); }
+  assert.equal(report.settingsUnchanged, true, 'Weather correction cannot change household settings');
+  assert.equal(report.permissionsUnchanged, true, 'Weather correction cannot change device grants');
+  assert.deepEqual(report.errors, [], 'actual app has no runtime errors');
 });
 async function setServerClock(value) {
   await new Promise((resolve,reject) => {

@@ -105,6 +105,7 @@ const APP_SHELL = [
   '/utils/availability-calendar.js',
   '/utils/task-live.js',
   '/utils/task-state.js',
+  '/utils/task-status-recovery.js',
   '/utils/task-subtask-queue.js',
   '/utils/task-card-subtasks.js',
   '/utils/activity-schedule.js',

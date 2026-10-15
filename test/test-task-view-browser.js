@@ -287,6 +287,18 @@ async function mounted(mode = 'list', viewport = { width: 1100, height: 800 }, p
 }
 const frames = page => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 
+test('leaving the Tasks view stops automatic top-level status recovery',async()=>{
+  const page=await mounted();try{
+    fixture.tasks=[taskRow(1,{subtasks:[]})];await refresh(page);fixture.uncertainStatus=true;
+    await page.click('[data-action="toggle-status"][data-id="1"]');
+    for(let retry=0;retry<100&&fixture.writes.length<2;retry++)await new Promise(resolve=>setTimeout(resolve,20));
+    assert.equal(fixture.writes.length,2,'one original and one exact recovery attempt');
+    await page.evaluate(()=>window.stopTasks());const before=fixture.writes.length;fixture.uncertainStatus=false;
+    await new Promise(resolve=>setTimeout(resolve,1200));
+    assert.equal(fixture.writes.length,before,'an unmounted view must never dispatch another recovery write');
+  }finally{await page.close();}
+});
+
 for (const mode of ['list', 'kanban']) for (const width of [320, 1100]) for (const theme of ['light', 'dark']) {
   test(`countdown card ${mode} ${width}px ${theme} keeps due metadata readable with approval controls`, async () => {
     const page = await mounted(mode, { width, height: 950, isMobile: width < 640, hasTouch: width < 640 });
@@ -524,7 +536,7 @@ for (const mode of ['list', 'kanban']) for (const width of (mode === 'list' ? [3
       await page.click('[data-approval-cancel]');
       await page.waitForFunction(() => !document.querySelector('#device-task-approval'));
       assert.equal(await page.evaluate(async () => (await import('/utils/device-context.js')).isDevicePrincipal()), true);
-      // A failed ordinary completion appends a recovery control to the same
+      // A failed ordinary completion appends automatic recovery feedback to the same
       // row. It also needs reading width after metadata moves to its own line.
       fixture.uncertainStatus = true; fixture.holdNext = true;
       await page.click('.task-card[data-task-id="1"] [data-action="toggle-subtask"][data-id="103"]');
@@ -534,7 +546,8 @@ for (const mode of ['list', 'kanban']) for (const width of (mode === 'list' ? [3
         return { width: box.width, right: box.right, rowRight: row.right, text: node.textContent };
       });
       assert.ok(pending.width >= 140 && pending.right <= pending.rowRight + 1, `readable recovery feedback: ${JSON.stringify(pending)}`);
-      assert.match(pending.text, /Not confirmed.*Check status/);
+      assert.match(pending.text, /Checking automatically/);
+      assert.equal(await page.$('.subtask-item__pending button'),null);
     } finally { await page.close(); }
   });
 }

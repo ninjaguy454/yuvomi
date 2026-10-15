@@ -1504,6 +1504,8 @@ function taskQuery() {
 }
 
 const taskPageLoaders = new WeakMap();
+const taskPageOperations = new WeakMap();
+const taskStatusContext = (container, options = {}) => ({ ...options, signal: taskPageOperations.get(container)?.signal });
 const taskStartRefreshers = new WeakMap();
 function updateTaskStartRefresh(container, visibility) {
   let refresher = taskStartRefreshers.get(container);
@@ -1550,13 +1552,8 @@ function patchCardSubtaskFeedback(list, task, pending, queue, recheck = () => {}
       let saving = row.querySelector('.subtask-item__pending');
       if (intent?.uncertain && !saving) {
         saving = document.createElement('span'); saving.className = 'subtask-item__pending text-muted text-sm';
-        saving.setAttribute('role', 'status'); saving.textContent = 'Not confirmed. ';
-        const check = document.createElement('button'); check.type = 'button'; check.className = 'btn btn--ghost btn--sm'; check.textContent = 'Check status';
-        check.dataset.focusKey = `check-subtask-${child.id}`;
-        check.setAttribute('aria-label', `Check unconfirmed status: ${child.title}`);
-        check.addEventListener('click', async event => { event.stopPropagation(); check.disabled = true;
-          try { await recheck(); } catch { /* connection notice retains the read failure */ } finally { check.disabled = false; } });
-        saving.appendChild(check); row.appendChild(saving);
+        saving.setAttribute('role', 'status'); saving.textContent = 'Connection interrupted. Checking automatically…';
+        row.appendChild(saving);
       } else if (!intent?.uncertain) saving?.remove();
       const points = row.querySelector('.subtask-item__points');
       patchTaskPointsBadge(points, taskCompletionPoints(child),taskScoringLabel(child,state.currentUserId));
@@ -1652,7 +1649,7 @@ function reconcileTaskListMarkup(listEl, html) {
   return retained;
 }
 async function loadTasks(container) {
-  if (!container || !container.isConnected) return;
+  if (!container || !container.isConnected || taskPageOperations.get(container)?.signal.aborted) return;
   persistAssignedToMe();
   let loader = taskPageLoaders.get(container);
   if (!loader) {
@@ -3173,7 +3170,7 @@ function statusForBoardDrop(task, section) {
  * das ging vorher nicht, weil die Spalte den Status SETZTE - eine erledigte
  * Aufgabe kam als offene zurück (#688).
  */
-async function moveTaskToColumn(before, column) {
+async function moveTaskToColumn(before, column, context) {
   if (['expired','skipped'].includes(column) && column!==before.status) throw new Error('Use the authorized lifecycle action from Task details.');
   if (isClosedOccurrence(before) && column !== before.status && column !== 'archived') throw new Error('This historical occurrence cannot be moved to active work.');
   const nextStatus = statusForBoardDrop(before, column);
@@ -3188,7 +3185,7 @@ async function moveTaskToColumn(before, column) {
     await setTaskArchived(before.id, false, before);
     before = (await api.get(`/tasks/${before.id}`)).data;
   }
-  if (before.status !== nextStatus) return changeTaskStatus(before, nextStatus);
+  if (before.status !== nextStatus) return changeTaskStatus(before, nextStatus, context);
 }
 
 /** Optimistisches Spiegelbild von moveTaskToColumn auf dem State-Objekt. */
@@ -3206,7 +3203,7 @@ function applyColumnLocally(task, column) {
 async function runColumnMove(task, column, container) {
   const before = structuredClone(task);
   try {
-    await moveTaskToColumn(before, column);
+    await moveTaskToColumn(before, column, taskStatusContext(container));
   } catch (err) {
     window.yuvomi.showToast(err.message, 'danger');
   }
@@ -4457,14 +4454,14 @@ function wireSwipeGestures(container) {
         const snapshot = taskSnapshot(taskId);
         if (!snapshot || !canToggleTask(snapshot)) { await loadTasks(container); return; }
         try {
-          const changed = await changeTaskStatus(snapshot, snapshot.status === 'done' ? 'in_progress' : 'done');
+          const changed = await changeTaskStatus(snapshot, snapshot.status === 'done' ? 'in_progress' : 'done', taskStatusContext(container));
           await loadTasks(container);
           if (changed?.data) {
             // Undo uses this action's saved result, so a later edit cannot be overwritten.
             const undoSnapshot = structuredClone(changed.data);
             const previousStatus = snapshot.status;
             window.yuvomi.showToast('Task status updated.', 'success', 5000, async () => {
-              try { await changeTaskStatus(undoSnapshot, previousStatus); }
+              try { await changeTaskStatus(undoSnapshot, previousStatus, taskStatusContext(container)); }
               catch (err) { window.yuvomi.showToast(err.message, 'danger'); }
               finally { await loadTasks(container); }
             });
@@ -5193,7 +5190,7 @@ function wireBulkActions(container) {
         const status = btn.dataset.status;
         for (const id of taskIds) {
           const task = taskSnapshot(id);
-          if (task && canToggleTask(task)) await changeTaskStatus(task, status);
+          if (task && canToggleTask(task)) await changeTaskStatus(task, status, taskStatusContext(container));
         }
         window.yuvomi.showToast(t('tasks.bulkStatusChanged'), 'success');
       } else if (action === 'bulk-archive') {
@@ -5328,7 +5325,7 @@ function wireTaskList(container) {
       if (!task || !canToggleTask(task)) return;
       target.disabled = true;
       try {
-        await changeTaskStatus(task, task.status === 'done' ? 'in_progress' : 'done',{gesture:e});
+        await changeTaskStatus(task, task.status === 'done' ? 'in_progress' : 'done',taskStatusContext(container,{gesture:e}));
       } catch (err) { window.yuvomi.showToast(err.message, 'danger'); }
       finally { target.disabled = false; }
       await loadTasks(container);
@@ -5688,6 +5685,9 @@ function wireTaskSearch(container) {
 }
 
 export async function render(container, { user }) {
+  taskPageOperations.get(container)?.abort();
+  const statusOperations = new AbortController();
+  taskPageOperations.set(container, statusOperations);
   state.offersOnly = new URLSearchParams(window.location.search).get('offers') === '1';
   if (state.offersOnly) state.filters = { status: [], priority: [], assigned_to: [], tags: [] };
   state.user = user ?? null;
@@ -5956,6 +5956,7 @@ export async function render(container, { user }) {
     } catch { /* Task existiert nicht oder kein Zugriff */ }
   }
   return () => {
+    statusOperations.abort();
     stopConnectionNotice();
     stopCountdowns();
     stopLive();

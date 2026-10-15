@@ -13,7 +13,7 @@ function fixture() {
   let drains = 0, forceReject = false;
   const queue = createSubtaskQueue({ getTask: () => task, getChild: id => task.subtasks.find(child => child.id === id),
     canDispatch: child => child.permissions?.complete !== false && child.supervision_action?.can_complete !== false,
-    send: (child, status) => new Promise((resolve, reject) => calls.push({ child, status, resolve, reject })),
+    send: (child, status, context) => new Promise((resolve, reject) => calls.push({ child, status, context, resolve, reject })),
     accept: snapshot => {
       accepted.push(snapshot);
       if (forceReject || snapshot.revision < task.revision) return false;
@@ -55,6 +55,18 @@ test('a pending child cannot enqueue a duplicate or opposite intent; published M
   const pending = f.queue.pending; pending.get(11).status = 'open'; pending.clear();
   assert.equal(f.queue.pending.get(11).status, 'done'); assert.equal(f.calls.length, 1);
   f.calls[0].resolve(f.snapshot(11)); await settle(); assert.equal(f.drains, 1);
+});
+
+test('automatic uncertainty blocks fresh sibling intents until recovery settles without rebasing unsent work',async()=>{
+  const f=fixture();f.queue.enqueue(11,'done');f.queue.enqueue(12,'done');
+  f.calls[0].context.onUncertain(Object.assign(new Error('Lost response'),{outcome:'unknown'}));
+  assert.equal(f.queue.blocked,true);assert.equal(f.queue.enqueue(13,'done'),false);
+  assert.deepEqual([...f.queue.pending.keys()],[11]);
+  const fresh=f.snapshot(11,{revision:18});f.external(fresh);
+  assert.equal(f.queue.blocked,true,'a live read cannot release the active recovery slot');
+  assert.equal(f.queue.enqueue(12,'done'),false);
+  f.calls[0].resolve(fresh);await settle();
+  assert.equal(f.calls.length,1);assert.equal(f.queue.busy,false);
 });
 
 test('last required acknowledgement cancels queued optional progress without sending it', async () => {

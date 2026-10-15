@@ -17,7 +17,11 @@ app.use('/api/v1',(req,res)=>{
   if(req.method==='PATCH'&&/\/tasks\/\d+\/status$/.test(req.path)){fixture.writes.push({path:req.path,body:req.body,res});return;}
   if(req.method==='POST'&&req.path.includes('/operations/')){fixture.writes.push({path:req.path,body:req.body,res});return;}
   if(req.path==='/auth/me')return res.json({user:{id:1},permissions:{},csrfToken:'fixture'});
-  if(req.path==='/tasks/1'){fixture.reads++;return res.json({data:fixture.task});}
+  if(req.path==='/tasks/1'){fixture.reads++;return fixture.failDetailRead?res.status(503).json({error:'Synthetic detail read unavailable'}):res.json({data:fixture.task});}
+  if(req.method==='GET'&&/^\/tasks\/\d+$/.test(req.path)){
+    fixture.reads++;const child=fixture.task.subtasks.find(row=>row.id===Number(req.path.split('/')[2]));
+    return res.json({data:child?{...child,parent_revision:fixture.task.revision}:null});
+  }
   res.json({data:[]});
 });
 test.before(async()=>{
@@ -29,7 +33,7 @@ test.after(async()=>{await browser?.close();server?.closeAllConnections();await 
 const selector=id=>`[data-subtask-id="${id}"] .detail-subtask__toggle`;
 async function mounted({mobile=false,optional=false,count=8,finalRequired=false,rotations,workflowOperations}={}){
   fixture={writes:[],reads:0,requests:[],task:{id:1,revision:9,title:'Morning routine',status:'open',assigned_to:1,created_by:1,points:2,documents:[],
-    permissions:{complete:true,edit:false,comment:false},subtasks:Array.from({length:count},(_,index)=>({id:index+2,revision:3,parent_revision:9,title:`Routine step ${index+1}`,
+    permissions:{complete:true,edit:false,comment:false},subtasks:Array.from({length:count},(_,index)=>({id:index+2,revision:3,parent_task_id:1,parent_revision:9,title:`Routine step ${index+1}`,
       status:'open',points:0,is_optional:optional&&index===0?1:0,skill_ids:[1],skills:[{id:1,name:'Independence'}],permissions:{complete:true}}))}};
   if(finalRequired){fixture.task.status='in_progress';fixture.task.subtasks.slice(0,-1).forEach(child=>child.status='done');}
   if(rotations)fixture.task.rotations=rotations;
@@ -49,11 +53,12 @@ async function writeAt(index=0){
   for(let retry=0;retry<100;retry++){if(fixture.writes[index])return fixture.writes[index];await new Promise(resolve=>setTimeout(resolve,20));}
   throw new Error(`Expected write ${index+1}; received ${fixture.writes.length}.`);
 }
-function acknowledge(write){
+function acknowledge(write,{lostResponse=false}={}){
   const id=Number(write.path.split('/')[2]);fixture.task.revision++;
   fixture.task.subtasks=fixture.task.subtasks.map(child=>({...child,parent_revision:fixture.task.revision,...(child.id===id?{status:write.body.status,revision:child.revision+1}:{})}));
   fixture.task.status=fixture.task.subtasks.filter(child=>!child.is_optional).every(child=>child.status==='done')?'done':'in_progress';
-  write.res.json({data:{...fixture.task.subtasks.find(child=>child.id===id),parent_task:fixture.task}});
+  if(lostResponse)write.res.status(502).send('Synthetic response lost after commit');
+  else write.res.json({data:{...fixture.task.subtasks.find(child=>child.id===id),parent_task:fixture.task}});
 }
 async function settled(page,id){await page.waitForFunction(sel=>{const button=document.querySelector(sel);return button&&button.getAttribute('aria-busy')!=='true'&&!button.disabled;},{timeout:5000},selector(id));}
 
@@ -235,25 +240,61 @@ test('touch scrolling begun over a subtask does not activate a completion',async
   }finally{await page.close();}
 });
 
-test('unknown response stays blocked after an unchanged read; Check status only reads and preserves keyboard focus',async()=>{
+test('a pre-commit connection failure recovers automatically with the original revisions and no Check status action',async()=>{
   const page=await mounted();try{
     await page.click(selector(2));const first=await writeAt();
     first.res.status(502).type('text').send('Bad Gateway');
-    await page.waitForSelector('[data-focus-key="check-unconfirmed-status"]');
-    await page.waitForFunction(()=>document.querySelector('[data-subtask-id="2"] .detail-subtask__toggle')?.getAttribute('aria-pressed')==='false');
+    const recovery=await writeAt(1);
+    assert.deepEqual(recovery.body,first.body,'recovery must never adopt newer revisions');
     assert.equal(await page.$eval(selector(2),button=>button.disabled),true);
-    const before=fixture.reads;
-    await page.focus('[data-focus-key="check-unconfirmed-status"]');await page.keyboard.press('Enter');
-    await page.waitForFunction(expected=>window.fixtureTask.revision===expected,{},fixture.task.revision);
-    for(let i=0;i<40&&fixture.reads===before;i++)await new Promise(resolve=>setTimeout(resolve,10));
-    assert.ok(fixture.reads>before);assert.equal(fixture.writes.length,1);
-    assert.equal(await page.evaluate(()=>document.activeElement?.dataset.focusKey),'check-unconfirmed-status');
-    assert.equal(await page.$eval(selector(2),button=>button.disabled),true);
-    fixture.task.revision++;fixture.task.subtasks[0].revision++;fixture.task.subtasks[0].status='done';
-    await page.waitForFunction(()=>!document.querySelector('[data-focus-key="check-unconfirmed-status"]')?.disabled);
-    await page.focus('[data-focus-key="check-unconfirmed-status"]');
-    await page.keyboard.press('Enter');await settled(page,2);
+    assert.equal(await page.$('[data-focus-key="check-unconfirmed-status"]'),null);
+    assert.equal(await page.$eval(selector(2),button=>button.getAttribute('aria-pressed')),'false','uncertainty displays canonical progress');
+    assert.match(await page.$eval('.task-detail-summary',node=>node.textContent),/Checking automatically/);
+    acknowledge(recovery);await settled(page,2);
     assert.equal(await page.$eval(selector(2),button=>button.getAttribute('aria-pressed')),'true');
-    assert.equal(fixture.writes.length,1);assert.equal(await page.$('[data-focus-key="check-unconfirmed-status"]'),null);
-  }catch(error){console.error('Unknown detail readback diagnostic',fixture.requests,await page.evaluate(()=>({text:document.body.innerText,toasts:window.toasts,revision:window.fixtureTask?.revision,focus:document.activeElement?.outerHTML})));throw error;}finally{await page.close();}
+    assert.equal(fixture.writes.length,2);assert.equal(await page.$('[data-focus-key="check-unconfirmed-status"]'),null);
+  }finally{await page.close();}
+});
+
+test('a saved top-level status acknowledges immediately even when secondary refresh is unavailable',async()=>{
+  const page=await mounted();try{
+    await page.select('.task-detail-status select','in_progress');const first=await writeAt();
+    fixture.failDetailRead=true;fixture.task.status='in_progress';fixture.task.revision++;
+    first.res.json({data:fixture.task});
+    await page.waitForFunction(()=>fixtureTask.status==='in_progress'&&!document.querySelector('.task-detail-status select').disabled,{timeout:2000});
+    assert.equal(fixture.writes.length,1);
+    assert.equal(await page.evaluate(()=>window.toasts.some(text=>/failed|unavailable|Internal server error/i.test(text))),false);
+  }finally{await page.close();}
+});
+
+test('a committed child with a lost response settles from its real parent projection without a second PATCH',async()=>{
+  const page=await mounted();try{
+    await page.click(selector(2));const first=await writeAt();await page.click(selector(3));
+    acknowledge(first,{lostResponse:true});await settled(page,2);
+    assert.equal(fixture.writes.length,1);assert.equal(await page.$eval(selector(2),button=>button.getAttribute('aria-pressed')),'true');
+    assert.equal(await page.$eval(selector(3),button=>button.getAttribute('aria-pressed')),'false','queued unsent work is canceled');
+    assert.equal(await page.$eval('.task-detail-status select',select=>select.value),'in_progress');
+  }finally{await page.close();}
+});
+
+test('closing Task details cancels automatic recovery before the next write',async()=>{
+  const page=await mounted();try{
+    await page.click(selector(2));const first=await writeAt();fixture.failDetailRead=true;
+    first.res.status(503).json({error:'Synthetic outage'});
+    await page.waitForFunction(()=>window.toasts.some(text=>/Checking this change automatically/.test(text)));
+    await page.evaluate(async()=>{await(await import('/components/detail-view.js')).closeDetailView({force:true});});
+    fixture.failDetailRead=false;await new Promise(resolve=>setTimeout(resolve,1200));
+    assert.equal(fixture.writes.length,1);
+  }finally{await page.close();}
+});
+
+test('temporary session expiry during recovery stops writes and never marks the child complete',async()=>{
+  const page=await mounted();try{
+    await page.click(selector(2));const first=await writeAt();fixture.failDetailRead=true;
+    first.res.status(503).json({error:'Synthetic outage'});
+    await page.waitForFunction(()=>window.toasts.some(text=>/Checking this change automatically/.test(text)));
+    await page.evaluate(()=>window.dispatchEvent(new CustomEvent('auth:expired')));
+    fixture.failDetailRead=false;await new Promise(resolve=>setTimeout(resolve,1200));
+    assert.equal(fixture.writes.length,1);assert.equal(fixture.task.subtasks[0].status,'open');
+  }finally{await page.close();}
 });

@@ -1245,7 +1245,8 @@ function statusSummaryNode(task, ctx) {
   select.addEventListener('change', async event => {
     const requested = select.value;
     select.value = task.status;
-    await ctx.runMutation(select, () => changeTaskStatus(task, requested,{gesture:event}));
+    await ctx.runMutation(select, () => changeTaskStatus(task, requested,{gesture:event,signal:ctx.personCardController.signal,
+      onUncertain:()=>{ctx.statusChecking=true;ctx.renderOperationState();}}));
     if (select.isConnected) select.value = task.status;
   });
   control.append(label, select);
@@ -1267,7 +1268,7 @@ function statusSummaryNode(task, ctx) {
       option.disabled = option.value === 'open' ? !canTask(task,'reset')
         : task.status === 'done' ? !canTask(task,'reopen') : !canTask(task,'complete');
     }
-    if (task.status === 'done') select.disabled = !canTask(task,'reopen') && !canTask(task,'reset');
+    if (task.status === 'done') select.disabled ||= !canTask(task,'reopen') && !canTask(task,'reset');
   }
   const priority = priorityNode(task.priority);
   if (priority) summary.appendChild(priority);
@@ -1301,13 +1302,10 @@ function statusSummaryNode(task, ctx) {
     saved.textContent = 'Step saved · refreshing Task details';
     summary.appendChild(saved);
   }
-  if ([...(ctx.pendingSubtasks?.values() || [])].some(intent => intent.uncertain)) {
-    const check = document.createElement('button'); check.type = 'button'; check.className = 'btn btn--ghost btn--sm';
-    check.textContent = 'Check unconfirmed status';
-    check.dataset.focusKey = 'check-unconfirmed-status';
-    check.addEventListener('click', async () => { check.disabled = true;
-      try { await ctx.refresh(); } catch { /* keep the unconfirmed state until a successful read */ } finally { check.disabled = false; } });
-    summary.appendChild(check);
+  if (ctx.statusChecking || [...(ctx.pendingSubtasks?.values() || [])].some(intent => intent.uncertain)) {
+    const checking = document.createElement('span'); checking.className = 'task-detail-progress'; checking.setAttribute('role','status');
+    checking.textContent = 'Connection interrupted. Checking automatically…';
+    summary.appendChild(checking);
   }
   const waiting = helperWaitingLabel(task, ctx.currentUserId);
   if (waiting) {
@@ -1712,6 +1710,7 @@ async function runTaskDetailMutation(ctx, button, operation, { subtask, status }
   // captures it. Keep that key, but never take focus away from a newer action.
   const focusKey = document.activeElement === button ? button.dataset.focusKey : null;
   ctx.busy = true;
+  ctx.sentLiveEpoch = ctx.liveSnapshotEpoch || 0;
   button.disabled = true;
   ctx.loader?.invalidate();
   const beginPending = subtask ? () => {
@@ -1747,9 +1746,16 @@ async function runTaskDetailMutation(ctx, button, operation, { subtask, status }
         // Their reload must neither delay the checkbox nor report a saved
         // mutation as failed if that independent read fails.
         void Promise.resolve().then(() => ctx.onChanged()).catch(() => {});
-      } else { await ctx.refresh(); await ctx.onChanged(); }
+      } else {
+        const fresh = taskStatusResponseSnapshot(ctx.task, result);
+        if (fresh && ctx.acceptSnapshot) {
+          ctx.loader?.invalidate(); ctx.acceptSnapshot(fresh, 'ack');
+          void Promise.resolve().then(() => ctx.onChanged()).catch(() => {});
+        } else { await ctx.refresh(); await ctx.onChanged(); }
+      }
     }
   } catch (error) {
+    if (ctx.closed) return;
     if (subtask) { ctx.loader?.invalidate(); ctx.pendingSubtask = null; ctx.renderOperationState?.(); }
     window.yuvomi?.showToast(error.status === 409
       ? (error.data?.error || 'This Task changed. Review its current state before trying again.')
@@ -1761,10 +1767,11 @@ async function runTaskDetailMutation(ctx, button, operation, { subtask, status }
   } finally {
     if (subtask) ctx.pendingSubtask = null;
     ctx.busy = false;
+    ctx.statusChecking = false;
     // Reopening refreshes while busy too: repaint after clearing it so newly
     // permitted controls do not stay disabled until another live event.
     ctx.renderOperationState?.();
-    if (button.isConnected) button.disabled = false;
+    if (button.isConnected && !button.matches('.task-detail-status select, .detail-subtask__toggle')) button.disabled = false;
     if (!ctx.closed && focusKey && (!document.activeElement || document.activeElement === document.body)) {
       const target = document.querySelector('.detail-view__pane')?.querySelector(`[data-focus-key="${focusKey}"]`);
       if (target && !target.disabled) target.focus({ preventScroll: true });

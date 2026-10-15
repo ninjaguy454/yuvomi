@@ -4,6 +4,7 @@ export function createSubtaskQueue({ getTask, getChild, canDispatch = () => true
   const entries = new Map();
   let active = null, disposed = false, blocked = false, token = 0;
   let externalRevision = 0, drainNeeded = false;
+  const lifetime = new AbortController();
   const failure = (message, reason = 'queue_changed') => Object.assign(new Error(message), { reason, outcome: reason === 'queue_ack_missing' ? 'unknown' : 'rejected' });
   const projection = () => new Map([...entries].map(([id, item]) => [id, { id, status: item.readbackStatus || item.status, token: item.token, ...(item.uncertain ? { uncertain: true } : {}) }]));
   const publish = () => { if (!disposed) onPending(projection()); };
@@ -45,12 +46,17 @@ export function createSubtaskQueue({ getTask, getChild, canDispatch = () => true
       // Re-read canonical metadata, retaining the original action revision and
       // intent. Only an accepted own acknowledgement may update parentRevision.
       const child = { ...getChild(item.id), revision: item.childRevision, parent_revision: item.parentRevision };
-      const snapshot = await send(child, item.status,item.context);
+      const snapshot = await send(child, item.status, { ...item.context, parentTaskId: item.taskId, signal: lifetime.signal, onUncertain: error => {
+        if (disposed) return;
+        item.uncertain = true; blocked = true; item.readbackStatus = getChild(item.id)?.status || item.originalStatus;
+        cancelQueued(error, false); publish(); onUncertain(error);
+      } });
       if (disposed) return;
       if (!snapshot || Number(snapshot.id) !== item.taskId || !Number.isSafeInteger(snapshot.revision)
         || snapshot.revision < item.parentRevision)
         throw failure('The step may have saved, but its current Task details are unavailable.', 'queue_ack_missing');
       const accepted = accept(snapshot) === true;
+      item.uncertain = false; blocked = false;
       const current = getTask();
       if (!accepted || current?.revision !== snapshot.revision || externalRevision > snapshot.revision) {
         cancelQueued(failure('Newer Task changes arrived while saving. Review them before continuing.'));
@@ -99,7 +105,7 @@ export function createSubtaskQueue({ getTask, getChild, canDispatch = () => true
     invalidate(fresh) {
       if (disposed || !fresh || Number(fresh.id) !== Number(getTask()?.id) || !Number.isSafeInteger(fresh.revision)) return;
       externalRevision = Math.max(externalRevision, fresh.revision);
-      blocked = false;
+      blocked = !!active?.uncertain;
       for (const item of [...entries.values()]) if (item.uncertain) {
         const child = getChild(item.id);
         // An unchanged read can precede the original request finishing. It
@@ -128,7 +134,7 @@ export function createSubtaskQueue({ getTask, getChild, canDispatch = () => true
       }
       publish(); drain(); if (!active) void pump();
     },
-    dispose() { disposed = true; entries.clear(); active = null; },
+    dispose() { disposed = true; lifetime.abort(); entries.clear(); active = null; },
     get pending() { return projection(); },
     get busy() { return !disposed && (!!active || !!entries.size || blocked); },
     get blocked() { return !disposed && blocked; },

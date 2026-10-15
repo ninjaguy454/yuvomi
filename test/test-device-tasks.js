@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3-multiple-ciphers';
 import express from 'express';
+import {recoverTaskStatus} from '../public/utils/task-status-recovery.js';
 process.env.DB_PATH=':memory:';
 process.env.SESSION_SECRET||='device-task-test';
 const {ALL_MIGRATIONS,_setTestDatabase}=await import('../server/db.js');
@@ -172,6 +173,31 @@ test('canonical recurrence can generate follow-up work without granting device T
   status(id);assert.ok(d.prepare('SELECT id FROM tasks WHERE recurrence_origin_id=?').get(id));
   assert.throws(()=>assertTaskMutation(d,principal,null,{title:'New'},{operation:'create'}),/cannot create/);
   assert.equal(count('reward_ledger'),1);
+});
+
+for(const loss of ['before commit','after commit','commit races read'])test(`status recovery ${loss} awards and advances recurrence exactly once`,async()=>{
+  const id=seed('Synthetic recovery routine',kids[0],null,2);
+  d.prepare("UPDATE tasks SET is_recurring=1,recurrence_rule='FREQ=DAILY',start_date='2026-09-01',due_date='2026-09-01' WHERE id=?").run(id);
+  const task=deviceTaskDetail(d,principal,id),body={status:'done',...revisions(id)};
+  const sent=[];let calls=0;
+  const lost=()=>Object.assign(new Error('Synthetic lost response'),{status:0,outcome:'unknown'});
+  const result=await recoverTaskStatus({task,body,
+    write:async request=>{
+      sent.push(structuredClone(request));calls++;
+      if(calls===1){if(loss==='after commit')deviceTaskStatus(d,principal,id,request);throw lost();}
+      if(loss==='commit races read')deviceTaskStatus(d,principal,id,body);
+      try{return{data:deviceTaskStatus(d,principal,id,request)};}
+      catch(error){error.outcome='rejected';throw error;}
+    },read:async()=>({data:deviceTaskDetail(d,principal,id)}),wait:async()=>{}});
+  assert.equal(result.data.status,'done');assert.equal(sent.length,loss==='after commit'?1:2);
+  assert.ok(sent.every(request=>JSON.stringify(request)===JSON.stringify(body)));
+  assert.throws(()=>deviceTaskStatus(d,principal,id,body),/changed|revision/i,'a delayed original cannot repeat the completion');
+  assert.equal(count('reward_ledger'),1);assert.equal(count('reward_task_awards'),1);
+  assert.equal(count('tasks',`recurrence_origin_id=${id}`),1);
+  assert.equal(count('task_activity_events',`action_task_id=${id} AND event_type='completed'`),1);
+  assert.equal(d.prepare('SELECT user_id,delta,created_by FROM reward_ledger').get().user_id,kids[0]);
+  assert.equal(d.prepare('SELECT user_id,delta,created_by FROM reward_ledger').get().created_by,null);
+  assert.deepEqual(d.pragma('foreign_key_check'),[]);
 });
 
 test('opt-in device creation uses canonical validation, null human creator and explicit device provenance',()=>{

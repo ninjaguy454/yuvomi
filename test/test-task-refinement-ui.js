@@ -319,7 +319,7 @@ function pendingMutationHarness() {
     },
     async refresh() { reloaded++; }, onChanged() { changed++; },
   };
-  const button = { dataset: { focusKey: 'subtask-2' }, isConnected: true, disabled: false };
+  const button = { dataset: { focusKey: 'subtask-2' }, isConnected: true, disabled: false, matches: () => false };
   return { ...h, ctx, task, button, paints, errors, counts: () => ({ invalidated, reloaded, changed }) };
 }
 

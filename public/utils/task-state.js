@@ -2,6 +2,8 @@ import { api } from '/api.js';
 import { confirmOverModal } from '/components/modal.js';
 import { t } from '/i18n.js';
 import {captureCompletionSound,confirmCompletionSound} from '/utils/ui-sounds.js';
+import {authenticationSnapshot,sameAuthentication} from '/utils/device-context.js';
+import {recoverTaskStatus} from '/utils/task-status-recovery.js';
 
 import { actionableSubtasks, structuralSubtasks } from '/utils/task-progress.js';
 export { actionableSubtasks } from '/utils/task-progress.js';
@@ -47,7 +49,8 @@ export function taskStatusConfirmation(task, status) {
   return null;
 }
 
-export async function changeTaskStatus(task, status, { confirm: requestConfirmation = confirmOverModal, beforeRequest = () => {},gesture=null,soundTicket=null } = {}) {
+export async function changeTaskStatus(task, status, { confirm: requestConfirmation = confirmOverModal, beforeRequest = () => {},gesture=null,soundTicket=null,signal,parentTaskId,onUncertain=()=>{} } = {}) {
+  const authentication=authenticationSnapshot();
   const cue=status==='done'?(soundTicket||captureCompletionSound(gesture)):null;
   if (task.status === 'skipped') throw new Error('This occurrence was skipped and cannot be reopened or completed.');
   if (status === 'skipped') throw new Error('Use Skip this occurrence from Task details.');
@@ -62,9 +65,36 @@ export async function changeTaskStatus(task, status, { confirm: requestConfirmat
   // A pending projection starts only after confirmation, with the original
   // revision still attached to the write. Cancel never paints unsaved progress.
   beforeRequest();
-  const result=await api.patch(`/tasks/${task.id}/status`, body);
-  confirmCompletionSound(cue,result?.data?.status==='done');
-  return result;
+  const lifetime=new AbortController();
+  const stop=()=>lifetime.abort();
+  const endEvents=['auth:context-ending','auth:expired','auth:context-rejected','pagehide'];
+  signal?.addEventListener('abort',stop,{once:true});
+  if(signal?.aborted)stop();
+  for(const name of endEvents)window.addEventListener(name,stop);
+  try {
+    const result=await recoverTaskStatus({task,body,signal:lifetime.signal,isCurrent:()=>sameAuthentication(authentication),
+      write:(request,options)=>api.patch(`/tasks/${task.id}/status`,request,options),
+      read:async options=>{
+        // A queued checkbox already has access to this parent. Read that one
+        // canonical projection so progress, points and permissions settle
+        // together; production child GETs do not include their parent.
+        const response=await api.get(`/tasks/${parentTaskId||task.id}`,{...options,requireFresh:true});
+        if(!parentTaskId)return response;
+        const child=response.data?.subtasks?.find(row=>Number(row.id)===Number(task.id));
+        if(!child)throw Object.assign(new Error('This step is no longer available. Review the current Task.'),
+          {status:409,outcome:'rejected',data:{reason:'queue_changed'}});
+        return {data:{...child,parent_revision:response.data.revision,parent_task:response.data}};
+      },
+      onUncertain:error=>{
+        onUncertain(error);
+        window.yuvomi?.showToast('Connection interrupted. Checking this change automatically.','warning');
+      }});
+    confirmCompletionSound(cue,result?.data?.status==='done');
+    return result;
+  } finally {
+    signal?.removeEventListener('abort',stop);
+    for(const name of endEvents)window.removeEventListener(name,stop);
+  }
 }
 
 /** Reopening is an explicit lifecycle action, separate from marking work done. */

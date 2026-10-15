@@ -476,12 +476,16 @@ function finalizeFutureActionKeys(definition) {
   }
   return created;
 }
-function assertCompatibleFutureDefinition(req,task,series,definition,{capturedDirectIds=null}={}) {
+function assertCompatibleFutureDefinition(req,task,series,definition,{capturedDirectIds=null,deferRandomBinding=false}={}) {
   const before=effectiveSeriesScoringDefinition(db.get(),seriesDefinitionForGeneration(db.get(),series.series_id,series.occurrence.generation+1)).data;
   const assignmentIntent=!definition.binding&&(definition.task.assignment_mode??'fixed')==='fixed'&&Object.hasOwn(req.body,'direct_assignee_ids')
     ?{fields:{assigned_to:parseAssignedTo(req.body.direct_assignee_ids)}}:null;
   proposeDefinitionAssigneePolicies(db.get(),before,definition,{assignmentIntent,resolveRootDirectIds:()=>{
     if(capturedDirectIds!==null)return capturedDirectIds;
+    // Historical future authoring does not select a random performer for the
+    // settled occurrence. Materialization captures the actual future person.
+    const binding=definition.binding,activity=binding?.snapshot;
+    if(deferRandomBinding&&binding&&!binding.assignment_override_user_id&&['eligible_random','random'].includes(activity.assignment_policy||activity.assignment_strategy))return [];
     const resolved=scoringAssignmentIntent(task,req.body);return resolved.policyAssigned??resolved.assigned;
   }});
   assertSeriesDefinitionMutation(db.get(),req,task,before,definition,{futureOnly:true});
@@ -2915,7 +2919,7 @@ export function updateTaskDefinition(req, res) {
       }
       if(historicalSeriesOnly) {
         const definition=compatibleFutureDefinition(req,current,series,beforeDefinition,editedSubtasks);
-        assertCompatibleFutureDefinition(req,current,series,definition);
+        assertCompatibleFutureDefinition(req,current,series,definition,{deferRandomBinding:true});
         const createdActions=finalizeFutureActionKeys(definition);
         const revised=appendSeriesDefinition(db.get(),current.id,{expectedRevision:req.body.expected_series_revision,
           actorId:req.authUserId||req.session.userId,definition});

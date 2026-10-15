@@ -113,3 +113,23 @@ test('this-and-future ordered rotation edit captures the new direct performer de
   assert.deepEqual(latest(f).assignee_policy,readTaskAssigneePolicy(f.d,id));assert.deepEqual(latest(f).assignee_policy.direct_assignee_ids,[3]);assert.equal(latest(f).assignee_policy.max_assignees,1);
   assert.equal((await f.finish(id)).status,200);const next=f.d.prepare('SELECT id FROM tasks WHERE recurrence_origin_id=? AND parent_task_id IS NULL').get(id);assert.equal(readTaskAssigneePolicy(f.d,next.id).max_assignees,1);assert.equal(readTaskAssigneePolicy(f.d,next.id).direct_assignee_ids.length,1);
 });
+
+const randomTemplate=f=>Number(f.d.prepare("INSERT INTO activity_templates(name,title_template,category,assignment_policy,assignment_strategy,subject_required,allow_assignment_override) VALUES('Future random routine','Future random routine','school','eligible_random','eligible_round_robin',0,1)").run().lastInsertRowid);
+for(const override of [false,true])test(`historical random binding Save ${override?'retains a concrete scalar override':'defers the performer without requiring a forecast'}`,async t=>{
+  const f=await scoringFixture(t),made=await f.create({...recurrence,category:'school',activity_template_id:boundTemplate(f),assigned_to:[2],points:2}),id=made.data.id;
+  assert.equal(made.status,201,JSON.stringify(made));assert.equal((await f.finish(id)).status,200);
+  const template=randomTemplate(f);f.d.prepare("UPDATE task_categories SET max_assignees=1 WHERE key='school'").run();
+  const body={edit_scope:'future',activity_template_id:template,assigned_to:override?[3]:[]},old=history(f,id),snapshot=f.snapshot();
+  if(!override){const preview=await f.preview(id,body);assert.equal(preview.status,409,JSON.stringify(preview));assert.ok(preview.conditions.includes('random_assignment_unresolved'));assert.equal(f.snapshot(),snapshot);}
+  const saved=await f.edit(id,body);assert.equal(saved.status,200,JSON.stringify(saved));assert.equal(history(f,id),old);
+  const definition=latest(f);assert.equal(definition.assignee_policy.max_assignees,1);assert.equal(definition.binding.snapshot.assignee_policy.max_assignees,1);assert.deepEqual(definition.assignee_policy.direct_assignee_ids,override?[3]:[]);
+  const next=f.d.prepare('SELECT id FROM tasks WHERE recurrence_origin_id=? AND parent_task_id IS NULL').get(id),policy=readTaskAssigneePolicy(f.d,next.id);
+  assert.equal(policy.max_assignees,1);assert.equal(policy.direct_assignee_ids.length,1);assert.ok([1,2,3].includes(policy.direct_assignee_ids[0]));if(override)assert.deepEqual(policy.direct_assignee_ids,[3]);
+  const replaySnapshot=f.snapshot(),replay=await f.edit(id,body);assert.equal(replay.status,200,JSON.stringify(replay));assert.equal(f.snapshot(),replaySnapshot);assert.equal(history(f,id),old);
+});
+
+test('historical deferred random binding still requires assignment authority atomically',async t=>{
+  const f=await scoringFixture(t),made=await f.create({...recurrence,category:'school',activity_template_id:boundTemplate(f),assigned_to:[2]}),id=made.data.id;
+  assert.equal((await f.finish(id)).status,200);const template=randomTemplate(f);f.grant('edit_own','allow');f.grant('change_assignment','none');f.grant('reassign','none');
+  const snapshot=f.snapshot(),body={edit_scope:'future',activity_template_id:template,assigned_to:[]},denied=await f.edit(id,body,2);assert.equal(denied.status,403,JSON.stringify(denied));assert.equal(f.snapshot(),snapshot);
+});

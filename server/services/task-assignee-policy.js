@@ -41,6 +41,7 @@ export function taskDirectAssignmentSelection(d,task,body){
   const saved=task?readTaskAssigneePolicy(d,task.id):null,previous=saved?.direct_assignee_ids??visible;
   const explicit=Object.hasOwn(body,'direct_assignee_ids'),value=explicit?body.direct_assignee_ids:body.assigned_to;
   const selected=value===undefined?previous:[...new Set((Array.isArray(value)?value:value==null||value===''?[]:[value]).map(Number))];
+  if(task&&!explicit&&(body.assignment_mode??task.assignment_mode)==='round_robin'&&Array.isArray(value)&&!value.length)return {previous,selected:previous};
   return {previous,selected:saved&&!explicit&&samePeople(selected,visible)?previous:selected};
 }
 /** An unchanged full legacy editor payload is not an adoption/conversion. */
@@ -51,7 +52,7 @@ export function proposedTaskAssigneePolicy(d,task,body,{category=body.category??
   if(explicit&&(!Array.isArray(body.assigned_to)||!Array.isArray(body.direct_assignee_ids)||!samePeople(body.assigned_to,body.direct_assignee_ids)))
     throw new TaskAssigneePolicyError('Direct assignees must match the explicit assignment selection.');
   const rotationChanged=!!task&&(['assignment_mode','rotation_group','rotation_slot'].some(key=>body[key]!==undefined&&String(body[key]??'')!==String(task[key]??''))
-    ||body.rotation_user_ids!==undefined&&!samePeople(body.rotation_user_ids,d.prepare('SELECT user_id FROM task_rotation_members WHERE task_id=? ORDER BY sort_order').all(task.id).map(row=>row.user_id)));
+    ||body.rotation_user_ids!==undefined&&JSON.stringify(body.rotation_user_ids)!==JSON.stringify(d.prepare('SELECT user_id FROM task_rotation_members WHERE task_id=? ORDER BY sort_order').all(task.id).map(row=>row.user_id)));
   const selection=taskDirectAssignmentSelection(d,task,body);
   const ids=!task?directIds??selection.selected:rotationChanged&&(body.assignment_mode??task.assignment_mode)==='round_robin'&&directIds!==null?directIds:selection.selected;
   const changedCategory=!!task&&category!==task.category;

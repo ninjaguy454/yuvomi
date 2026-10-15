@@ -15,10 +15,12 @@ let browser,server,page,origin,serverLog='';const requests=[],errors=[];
 const api=(method,path,body)=>page.evaluate(async input=>(await import('/api.js')).api[input.method](input.path,input.body),{method,path,body});
 const press=async selector=>{await page.waitForSelector(selector,{visible:true});await page.focus(selector);await page.keyboard.press('Enter');};
 async function edit(id){
-  await page.evaluate(async id=>{await(await import('/components/modal.js')).closeModal({force:true});await(await import('/pages/tasks.js')).openTaskById(id,{user:window.yuvomi.user});},id);
+  await page.evaluate(async()=>{await(await import('/components/modal.js')).closeModal({force:true});});
+  await page.waitForSelector('#shared-modal-overlay',{hidden:true});
+  await page.evaluate(async id=>{await(await import('/pages/tasks.js')).openTaskById(id,{user:window.yuvomi.user});},id);
   await press('#detail-view-edit');await page.waitForSelector('#task-form');
 }
-const selected=()=>page.$$eval('#task-form input[name="task_assigned"]:checked',nodes=>nodes.map(node=>Number(node.value)));
+const selected=()=>page.$$eval('#task-form input[data-ms-input="task_assigned"]:checked',nodes=>nodes.map(node=>Number(node.value)));
 
 test.before(async()=>{
   const hash=await hashPassword('Synthetic-Count-Only!',4);
@@ -61,7 +63,7 @@ test('authentic future editor promotes child-only membership through preview and
   const task=(await api('post','/tasks',{title:'Future direct intent',category:'household',assigned_to:[2],points:0,scoring_mode:'whole_task',is_recurring:true,recurrence_rule:'FREQ=DAILY',due_date:'2026-11-01',subtasks:[{title:'Child',assigned_user_ids:[3]}]})).data;
   await edit(task.id);await press('#task-scoring-edit');await page.waitForFunction(()=>document.querySelector('#task-scoring-scope')?.value==='future_only'&&!document.querySelector('#task-submit-btn')?.disabled);
   assert.deepEqual(await selected(),[2]);
-  await page.$eval('input[name="task_assigned"][value="3"]',node=>node.click());assert.deepEqual(await selected(),[2,3]);
+  await page.$eval('input[data-ms-input="task_assigned"][value="3"]',node=>node.click());assert.deepEqual(await selected(),[2,3]);
   await press('#task-submit-btn');await page.waitForSelector('#task-scoring-confirm');
   const preview=requests.filter(request=>request.path.endsWith('/scoring-preview')).at(-1);assert.deepEqual(preview.body.future_patch.fields.assigned_to,[2,3]);
   await page.screenshot({path:join(output,'future-promotion-preview.png'),fullPage:true});

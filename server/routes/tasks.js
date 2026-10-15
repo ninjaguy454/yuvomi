@@ -302,8 +302,8 @@ function futureEditContext(req,task) {
 function assertFutureIndependentAssignmentIntent(req,task,state,stored,before,definition) {
   if(!Object.hasOwn(req.body.future_patch?.fields??{},'assigned_to')||definition.binding
     ||(definition.task.assignment_mode??'fixed')!=='fixed'
-    ||sameIdOrder(before.assigned_user_ids,definition.assigned_user_ids))return;
-  const d=db.get(),skills=definition.skill_ids,assigned=definition.assigned_user_ids;
+    ||sameIdOrder(before.assignee_policy?.direct_assignee_ids??before.assigned_user_ids,definition.assignee_policy?.direct_assignee_ids??definition.assigned_user_ids))return;
+  const d=db.get(),skills=definition.skill_ids,assigned=definition.assignee_policy?.direct_assignee_ids??definition.assigned_user_ids;
   // The central empty-list/no-requirement rule needs no future date proof.
   if(!skills.length||!assigned.length)return assertTaskSkillAssignments(d,skills,assigned);
   const asOfDate=todayInHouseholdZone(),canonicalUnchanged=!!stored&&definitionEqual(stored.data,definition);
@@ -367,7 +367,9 @@ function scoringAssignmentIntent(task,body) {
     next=[rotation[(index+slot)%rotation.length]];
   }
   const primary=body.assigned_to===undefined&&mode==='fixed'?task.assigned_to:next[0]??null;
-  return {assigned:next,primary,changed:!sameIdOrder(next,assigned)||primary!==task.assigned_to,binding:null,bindingChanged};
+  const direct=taskDirectAssignmentSelection(d,task,body),directChanged=!sameIdOrder(direct.previous,direct.selected);
+  if(mode==='fixed'&&directChanged)assertTaskSkillAssignments(d,taskSkillInput(body,task.id),direct.selected,body.due_date??task.due_date??todayInHouseholdZone(),{allowDelegation:!!task.parent_task_id});
+  return {assigned:next,primary,changed:directChanged||!sameIdOrder(next,assigned)||primary!==task.assigned_to,binding:null,bindingChanged};
 }
 
 function scoringActivitySnapshot(task,body,binding,existing=getTaskActivityBinding(db.get(),task.id)) {
@@ -2760,21 +2762,24 @@ export function updateTaskDefinition(req, res) {
     }
     const firstUid = req.body.assigned_to === undefined && assignmentMode === 'fixed'
       ? task.assigned_to : (userIds[0] ?? null);
+    const directSelection=taskDirectAssignmentSelection(db.get(),task,req.body);
+    const directChanged=!desiredActivityBinding&&!sameIdOrder(directSelection.previous,directSelection.selected);
+    const independentIds=directChanged?directSelection.selected:independentlyAssignedTaskMembers(task.id,userIds,assignedBefore,firstUid);
     if (!desiredActivityBinding && (!sameIdOrder(skillIds, skillsBefore) || !sameIdOrder(userIds, assignedBefore)
         || firstUid !== task.assigned_to || !sameIdOrder(rotationUserIds, rotationBefore)
-        || bindingChanged || due_date !== task.due_date)) {
+        || directChanged || bindingChanged || due_date !== task.due_date)) {
       assertTaskSkillAssignments(db.get(), skillIds,
         assignmentMode === 'round_robin' ? rotationUserIds
-          : independentlyAssignedTaskMembers(task.id, userIds, assignedBefore, firstUid),
+          : independentIds,
         due_date || todayInHouseholdZone(), {allowDelegation:!!task.parent_task_id});
     }
-    const performersChanged = !desiredActivityBinding && (!sameIdOrder(userIds, assignedBefore) || firstUid !== task.assigned_to);
+    const performersChanged = !desiredActivityBinding && (directChanged || !sameIdOrder(userIds, assignedBefore) || firstUid !== task.assigned_to);
     if (!historicalSeriesOnly && !bindingChanged && status !== 'done' && (taskWindowChanged || performersChanged)) {
       // Keep the occurrence's policy, including authored supervisor Tasks
       // without an Activity binding. Reapplying an Activity would advance its
       // rotation; validate the resulting people/window without rewriting work.
       assertTaskAssignmentAvailability(db.get(), task.id,
-        performersChanged ? independentlyAssignedTaskMembers(task.id, userIds, assignedBefore, firstUid) : null,
+        performersChanged ? independentIds : null,
         { task: { start_date, start_time, due_date, due_time, assigned_to: firstUid } });
     }
 

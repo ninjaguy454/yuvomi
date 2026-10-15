@@ -109,3 +109,28 @@ test('sparse rotation mode change does not promote child visibility',async t=>{
   const saved=await f.edit(id,{assignment_mode:'fixed',rotation_user_ids:[]});assert.equal(saved.status,200,JSON.stringify(saved));
   assert.deepEqual(direct(f,id),[2]);assert.deepEqual(visible(f,id),[2,3]);
 });
+
+test('grouped roster ordering refreshes direct metadata for the selected performer',async t=>{
+  const f=await scoringFixture(t),r=await f.create({category:'school',assigned_to:[2],assignment_mode:'round_robin',rotation_user_ids:[2,3],rotation_group:'review-order',rotation_slot:0,is_recurring:true,recurrence_rule:'FREQ=DAILY',due_date:'2026-11-01',scoring_mode:'whole_task'}),id=r.data.id;
+  assert.equal(r.status,201,JSON.stringify(r));
+  const body={rotation_user_ids:[3,2]},before=f.snapshot();assert.equal((await f.preview(id,body)).status,200);assert.equal(f.snapshot(),before);
+  const saved=await f.edit(id,body);assert.equal(saved.status,200,JSON.stringify(saved));assert.equal(f.row(id).assigned_to,3);assert.deepEqual(direct(f,id),[3]);
+});
+
+test('unchanged rotation editor placeholder preserves direct performers without assignment capabilities',async t=>{
+  const f=await scoringFixture(t),r=await f.create({category:'school',assigned_to:[2],assignment_mode:'round_robin',rotation_user_ids:[2,3],is_recurring:true,recurrence_rule:'FREQ=DAILY',due_date:'2026-11-01',scoring_mode:'whole_task'}),id=r.data.id;
+  const body={title:'Rotation editor title',assignment_mode:'round_robin',rotation_user_ids:[2,3],rotation_group:null,rotation_slot:0,assigned_to:[]};
+  f.grant('edit_own','allow');f.grant('change_assignment','none');f.grant('reassign','none');
+  assert.equal((await f.preview(id,body,2)).status,200);const saved=await f.edit(id,body,2);assert.equal(saved.status,200,JSON.stringify(saved));
+  assert.equal(f.row(id).assigned_to,2);assert.deepEqual(direct(f,id),[2]);
+});
+
+for(const scope of ['occurrence','future_only'])test(`explicit child-only promotion enforces root skills in ${scope} preview and save`,async t=>{
+  const f=await scoringFixture(t),skill=Number(f.d.prepare("INSERT INTO skills(name,minimum_age,age_promotion,created_by) VALUES('Review root qualification',0,'normal',1)").run().lastInsertRowid);
+  for(const [user,value] of [[1,'normal'],[2,'normal'],[3,'excluded']])f.d.prepare("INSERT INTO user_skill_proficiency(user_id,skill_id,proficiency,source,updated_by) VALUES(?,?,?,'manual',1)").run(user,skill,value);
+  const r=await f.create({category:'household',assigned_to:[2],skill_ids:[skill],subtasks:[{title:'Child',assigned_user_ids:[3]}],is_recurring:true,recurrence_rule:'FREQ=DAILY',due_date:'2026-11-01',scoring_mode:'whole_task'}),id=r.data.id;
+  assert.equal(r.status,201,JSON.stringify(r));
+  const body=scope==='future_only'?{edit_scope:scope,future_patch:{fields:{assigned_to:[2,3]}}}:{assigned_to:[2,3],direct_assignee_ids:[2,3]},before=f.snapshot();
+  for(const run of [()=>f.preview(id,body),()=>f.edit(id,body)]){const denied=await run();assert.equal(denied.status,400,JSON.stringify(denied));assert.equal(f.snapshot(),before);}
+  assert.deepEqual(direct(f,id),[2]);
+});

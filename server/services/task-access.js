@@ -331,6 +331,7 @@ function assertCurrentTaskMutation(d, actor, task, body, {operation}) {
   const changed = field => {
     if (body[field] === undefined) return false;
     if (field === 'assigned_to' || field === 'direct_assignee_ids') return assignmentChanged();
+    if (field === 'rotation_user_ids') return !equal(body[field],d.prepare('SELECT user_id FROM task_rotation_members WHERE task_id=? ORDER BY sort_order').all(task.id).map(row=>row.user_id));
     if (field === 'skill_ids') return !equal(ids(body[field]), ids(d.prepare('SELECT skill_id FROM task_skill_requirements WHERE task_id = ?').all(task.id).map(row => row.skill_id)));
     if (field === 'tags') return !equal(idsOrStrings(body[field]), idsOrStrings(d.prepare('SELECT tag FROM task_tags WHERE task_id = ?').all(task.id).map(row => row.tag)));
     if (field === 'location') return true;

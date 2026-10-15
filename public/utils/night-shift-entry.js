@@ -2,7 +2,7 @@ import {canAccessNavModule} from '/permissions.js';
 import {canEnterNightShift} from '/utils/night-shift-copy.js';
 
 /** Only the current Dashboard owns this hidden entry. No preference or data writes. */
-export function mountNightShiftEntry(container,{signal}={}){
+export function mountNightShiftEntry(container,{signal,user}={}){
   const events=new AbortController();let button=null,active=null,opening=null,disposed=false;
   const allowed=()=>!disposed&&container.isConnected&&canEnterNightShift({theme:document.documentElement.dataset.namedTheme,pathname:location.pathname,wallMode:document.documentElement.hasAttribute('data-wall-mode'),editing:!!container.querySelector('.dashboard-overview__header--editing'),dashboardAccess:canAccessNavModule('dashboard')});
   function close(){opening?.abort();opening=null;active?.destroy();active=null;}
@@ -12,7 +12,7 @@ export function mountNightShiftEntry(container,{signal}={}){
     try{
       const {openNightShiftConsole}=await import('/components/night-shift-console.js');
       if(action.signal.aborted||!allowed())return;
-      const handle=await openNightShiftConsole({signal:action.signal,returnFocus:()=>button,onClose:()=>{if(opening===action)opening=null;active=null;button?.removeAttribute('aria-busy');}});
+      const handle=await openNightShiftConsole({signal:action.signal,user,returnFocus:()=>button,onClose:()=>{if(opening===action)opening=null;active=null;button?.removeAttribute('aria-busy');}});
       if(action.signal.aborted||!allowed()){handle?.destroy();return;}
       active=handle;
     }catch(error){if(!action.signal.aborted)console.warn('[Night Shift]',error.message);}

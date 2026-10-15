@@ -145,6 +145,25 @@ test('scream synthesis is deterministic and has no downloaded audio',()=>{
 });
 
 import {canEnterNightShift} from '../public/utils/night-shift-copy.js';
+import {nightShiftSettings,nightShiftSettingsKey} from '../public/utils/night-shift-copy.js';
+
+test('new game defaults enable sound and visuals while preserving explicit local mute, Gentle and zero volume',()=>{
+  assert.deepEqual(nightShiftSettings(null),{sound:true,gentle:false,volume:15});
+  assert.deepEqual(nightShiftSettings('{"sound":false,"gentle":true,"volume":0}'),{sound:false,gentle:true,volume:0});
+  assert.deepEqual(nightShiftSettings('{"sound":true,"gentle":false,"volume":35}'),{sound:true,gentle:false,volume:35});
+});
+test('invalid game settings cannot inject values or exceed the existing volume limit',()=>{
+  assert.deepEqual(nightShiftSettings('invalid'),{sound:true,gentle:false,volume:15});
+  assert.deepEqual(nightShiftSettings('{"sound":"false","gentle":"true","volume":500}'),{sound:true,gentle:false,volume:35});
+  assert.deepEqual(nightShiftSettings('{"volume":-2}'),{sound:true,gentle:false,volume:0});
+});
+test('saved game choices are isolated by member or device without persisting authentication credentials',()=>{
+  const member=nightShiftSettingsKey({user:{id:1}}),device=nightShiftSettingsKey({principal:{kind:'device',id:1},device:{id:1}});
+  assert.notEqual(member,device);assert.notEqual(member,nightShiftSettingsKey({user:{id:2}}));
+  assert.equal(nightShiftSettingsKey({}),null);
+  assert.equal(nightShiftSettingsKey({temporary:{},device:{id:1}}),null);
+  assert.ok(!nightShiftSettingsKey({user:{id:1},authContext:'never-store-this'}).includes('never-store-this'));
+});
 test('hidden game eligibility requires the active Night Shift standard Dashboard and existing access',()=>{
   const context={theme:'night-shift',pathname:'/',wallMode:false,editing:false,dashboardAccess:true};
   assert.equal(canEnterNightShift(context),true);

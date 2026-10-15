@@ -3776,7 +3776,7 @@ export async function render(container, { user }) {
   `);
 
   const stopTaskCountdowns = bindTaskCountdowns(container);
-  const stopNightShift = mountNightShiftEntry(container, { signal: _fabController.signal });
+  const stopNightShift = mountNightShiftEntry(container, { signal: _fabController.signal, user });
   _countdownBindings.set(container, stopTaskCountdowns);
   _fabController.signal.addEventListener('abort', stopTaskCountdowns, { once: true });
 

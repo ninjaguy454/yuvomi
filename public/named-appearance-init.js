@@ -660,7 +660,7 @@ function wmoThemeCondition(code){
   if(!Number.isInteger(code))return null;
   if([0,1].includes(code))return'sunny';if([2,3,45,48].includes(code))return'cloudy';
   if([51,53,55,56,57,61,63,65,66,67,80,81,82].includes(code))return'rain';
-  if([71,73,75,77,85,86].includes(code))return'snow';if([95,96,99].includes(code))return'storm';return null;
+  if([71,73,75,77,85,86].includes(code))return'snow';if([95,96,97,99].includes(code))return'storm';return null;
 }
 function owmThemeCondition(code,icon){
   if(Number.isInteger(code)){if(code>=200&&code<300)return'storm';if(code>=300&&code<600)return'rain';if(code>=600&&code<700)return'snow';if(code===800||code===801)return'sunny';if(code>=700&&code<805)return'cloudy';}

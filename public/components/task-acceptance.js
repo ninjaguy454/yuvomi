@@ -7,7 +7,8 @@ import { memberLabel } from '/utils/member-label.js';
 import { getReadableTextColor } from '/utils/color.js';
 import { authenticationSnapshot, sameAuthentication } from '/utils/device-context.js';
 import { openChildModal, mountFooter, focusFirstField } from '/components/modal.js';
-import { createAcceptanceDraft, setAcceptanceHelpers, needsAcceptanceAllocation, lockAcceptancePayload } from '/utils/task-acceptance-draft.js';
+import { createAcceptanceDraft, setAcceptanceHelpers, needsAcceptanceAllocation, lockAcceptancePayload,acceptanceAssigneeLimitExceeded } from '/utils/task-acceptance-draft.js';
+import {assigneePolicyLabel} from '/utils/task-assignee-policy.js';
 
 /** One server-authorized acceptance; all choices stay local until confirmation. */
 export async function acceptOpenTask(task) {
@@ -47,13 +48,14 @@ export async function acceptOpenTask(task) {
     } else {
       const p = draft.projection;
       content = `<h3 class="task-acceptance__title" title="${esc(p.task.title)}">${esc(p.task.title)}</h3>${message ? `<p role="status">${esc(message)}</p>` : ''}`;
+      if(p.assignee_policy)content+=`<p class="form-hint">${esc(assigneePolicyLabel(p.assignee_policy,t))}</p><p data-acceptance-count-error role="status"></p>`;
       if (stage === 'people') {
         content += `<fieldset class="task-acceptance__primaries"><legend>${esc(t('tasks.acceptWho'))}</legend><div class="task-acceptance__choices">${p.primary_candidates.map(member => choice(member,'primary',(selectingPrimary ?? draft.primary) === Number(member.id))).join('')}</div></fieldset>`;
         if (selectingPrimary !== null) content += `<p role="status">${esc(t('common.loading'))}</p>`;
         else if (draft.primary) {
           content += `<fieldset class="task-acceptance__helpers"><legend>${esc(t('tasks.acceptHelpers'))}</legend>`;
           if (p.can_add_helpers) content += `<div class="task-acceptance__choices">${p.coassignee_candidates.filter(member => Number(member.id) !== draft.primary).map(member => choice(member,'helper',draft.helpers.includes(Number(member.id)))).join('')}</div>`;
-          else content += `<p data-acceptance-helper-unavailable>${esc(t('tasks.acceptHelpersUnavailable'))}</p>${document.querySelector('[data-device-login]') ? button('signin', t('tasks.acceptSignIn')) : ''}`;
+          else content += p.available_assignee_slots===0?`<p data-acceptance-helper-unavailable>${esc(assigneePolicyLabel(p.assignee_policy,t))}</p>`:`<p data-acceptance-helper-unavailable>${esc(t('tasks.acceptHelpersUnavailable'))}</p>${document.querySelector('[data-device-login]') ? button('signin', t('tasks.acceptSignIn')) : ''}`;
           content += '</fieldset>';
         }
         actions += button('next', t('common.next'), true) + button('confirm', t('tasks.acceptConfirm'), true);
@@ -106,7 +108,10 @@ export async function acceptOpenTask(task) {
     // step must not intercept Enter when this screen can confirm directly.
     next.classList.toggle('btn--primary', !next.hidden);
     confirm.classList.toggle('btn--primary', !confirm.hidden);
-    confirm.disabled = busy || !draft.primary || selectingPrimary !== null;
+    const excess=acceptanceAssigneeLimitExceeded(draft);
+    const countError=modal.panel.querySelector('[data-acceptance-count-error]');if(countError)countError.textContent=excess?t('tasks.assigneeLimitExceeded',{count:draft.projection.assignee_policy.max_assignees}):'';
+    next.disabled=busy||excess||selectingPrimary!==null;
+    confirm.disabled = busy || !draft.primary || selectingPrimary !== null || excess;
   }
   function clearAllocation() {
     allocationScope?.abort(); allocationScope = null;

@@ -305,6 +305,10 @@
         "optionCalendarBirthdaysHint": "Bez zaznaczenia urodziny nie pojawiają się na tym kaflu - w kalendarzu zostają."
     },
     "tasks": {
+        "categoryAssigneeLimit": "Limit przypisanych osób",
+        "assigneeNoLimit": "Bez limitu",
+        "assigneeExisting": "Obecne przypisania pozostają bez zmian, dopóki nie zmienisz kategorii lub osób.",
+        "assigneeLimitExceeded": "Limit przypisanych osób w tej kategorii wynosi {{count}}. Wybierz mniej osób lub zmień kategorię.",
         "scoringNoNext": "The next occurrence is not yet available.",
         "scoringEnded": "The recurrence schedule has ended.",
         "scoringTargetPreserved": "The existing next occurrence is preserved and will not be overwritten.",

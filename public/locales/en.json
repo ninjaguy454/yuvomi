@@ -293,6 +293,10 @@
         "optionCalendarBirthdaysHint": "Unchecked, birthdays stay out of this tile - the calendar still shows them."
     },
     "tasks": {
+        "categoryAssigneeLimit": "Assignee limit",
+        "assigneeNoLimit": "No limit",
+        "assigneeExisting": "Existing assignments stay unchanged until you change the category or people.",
+        "assigneeLimitExceeded": "The category assignee limit is {{count}}. Select fewer people or change the category.",
         "scoringNoNext": "The next occurrence is not yet available.",
         "scoringEnded": "The recurrence schedule has ended.",
         "scoringTargetPreserved": "The existing next occurrence is preserved and will not be overwritten.",

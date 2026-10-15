@@ -293,6 +293,10 @@
         "optionCalendarBirthdaysHint": "チェックを外すと、このタイルに誕生日は表示されません。カレンダーには残ります。"
     },
     "tasks": {
+        "categoryAssigneeLimit": "担当者数の上限",
+        "assigneeNoLimit": "上限なし",
+        "assigneeExisting": "カテゴリまたは担当者を変更するまで、既存の割り当ては変わりません。",
+        "assigneeLimitExceeded": "このカテゴリの担当者数の上限は{{count}}人です。担当者を減らすか、カテゴリを変更してください。",
         "scoringNoNext": "The next occurrence is not yet available.",
         "scoringEnded": "The recurrence schedule has ended.",
         "scoringTargetPreserved": "The existing next occurrence is preserved and will not be overwritten.",

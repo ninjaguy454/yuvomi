@@ -293,6 +293,10 @@
         "optionCalendarBirthdaysHint": "Χωρίς επιλογή τα γενέθλια λείπουν από αυτό το πλακίδιο, στο ημερολόγιο παραμένουν."
     },
     "tasks": {
+        "categoryAssigneeLimit": "Όριο ανατεθειμένων ατόμων",
+        "assigneeNoLimit": "Χωρίς όριο",
+        "assigneeExisting": "Οι υπάρχουσες αναθέσεις παραμένουν ίδιες μέχρι να αλλάξετε την κατηγορία ή τα άτομα.",
+        "assigneeLimitExceeded": "Το όριο ατόμων αυτής της κατηγορίας είναι {{count}}. Επιλέξτε λιγότερα άτομα ή αλλάξτε κατηγορία.",
         "scoringNoNext": "The next occurrence is not yet available.",
         "scoringEnded": "The recurrence schedule has ended.",
         "scoringTargetPreserved": "The existing next occurrence is preserved and will not be overwritten.",

@@ -293,6 +293,10 @@
         "optionCalendarBirthdaysHint": "Senza spunta i compleanni restano fuori da questa scheda; nel calendario ci sono ancora."
     },
     "tasks": {
+        "categoryAssigneeLimit": "Limite di persone assegnate",
+        "assigneeNoLimit": "Nessun limite",
+        "assigneeExisting": "Le assegnazioni esistenti restano invariate finché non cambi la categoria o le persone.",
+        "assigneeLimitExceeded": "Questa categoria consente al massimo {{count}} persone. Seleziona meno persone o cambia categoria.",
         "scoringNoNext": "The next occurrence is not yet available.",
         "scoringEnded": "The recurrence schedule has ended.",
         "scoringTargetPreserved": "The existing next occurrence is preserved and will not be overwritten.",

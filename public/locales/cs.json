@@ -293,6 +293,10 @@
         "optionCalendarBirthdaysHint": "Bez zaškrtnutí narozeniny z této dlaždice zmizí, v kalendáři zůstanou."
     },
     "tasks": {
+        "categoryAssigneeLimit": "Limit přiřazených osob",
+        "assigneeNoLimit": "Bez omezení",
+        "assigneeExisting": "Stávající přiřazení zůstanou beze změny, dokud nezměníte kategorii nebo osoby.",
+        "assigneeLimitExceeded": "Limit přiřazených osob v této kategorii je {{count}}. Vyberte méně osob nebo změňte kategorii.",
         "scoringNoNext": "The next occurrence is not yet available.",
         "scoringEnded": "The recurrence schedule has ended.",
         "scoringTargetPreserved": "The existing next occurrence is preserved and will not be overwritten.",

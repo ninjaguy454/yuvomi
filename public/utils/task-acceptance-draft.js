@@ -39,8 +39,10 @@ export function acceptancePayload(draft) {
 }
 
 export function lockAcceptancePayload(draft) {
+  if(acceptanceAssigneeLimitExceeded(draft))throw new Error('The selected people exceed the category assignee limit.');
   // Keep this object verbatim on uncertain network retries. Editing requires a
   // fresh projection and a new deliberate confirmation, never a reused key.
   if (!draft.submission) draft.submission = acceptancePayload(draft);
   return structuredClone(draft.submission);
 }
+export function acceptanceAssigneeLimitExceeded(draft){const slots=draft.projection.available_assignee_slots;return slots!=null&&draft.helpers.length>slots;}

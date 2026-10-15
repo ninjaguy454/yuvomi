@@ -305,6 +305,10 @@
         "optionCalendarBirthdaysHint": "체크를 해제하면 이 타일에 생일이 표시되지 않습니다. 캘린더에는 그대로 남습니다."
     },
     "tasks": {
+        "categoryAssigneeLimit": "담당자 수 제한",
+        "assigneeNoLimit": "제한 없음",
+        "assigneeExisting": "카테고리나 담당자를 변경하기 전까지 기존 배정은 유지됩니다.",
+        "assigneeLimitExceeded": "이 카테고리의 담당자 수 제한은 {{count}}명입니다. 더 적은 인원을 선택하거나 카테고리를 변경하세요.",
         "scoringNoNext": "The next occurrence is not yet available.",
         "scoringEnded": "The recurrence schedule has ended.",
         "scoringTargetPreserved": "The existing next occurrence is preserved and will not be overwritten.",

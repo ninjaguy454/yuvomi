@@ -293,6 +293,10 @@
         "optionCalendarBirthdaysHint": "Без позначки дні народження не показуються в цій картці, у календарі вони залишаються."
     },
     "tasks": {
+        "categoryAssigneeLimit": "Ліміт призначених виконавців",
+        "assigneeNoLimit": "Без обмежень",
+        "assigneeExisting": "Поточні призначення зберігаються, доки ви не зміните категорію або виконавців.",
+        "assigneeLimitExceeded": "Ліміт виконавців у цій категорії — {{count}}. Виберіть менше людей або змініть категорію.",
         "scoringNoNext": "The next occurrence is not yet available.",
         "scoringEnded": "The recurrence schedule has ended.",
         "scoringTargetPreserved": "The existing next occurrence is preserved and will not be overwritten.",

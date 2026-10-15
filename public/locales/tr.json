@@ -293,6 +293,10 @@
         "optionCalendarBirthdaysHint": "İşaret kaldırılınca doğum günleri bu kartta görünmez, takvimde kalmaya devam eder."
     },
     "tasks": {
+        "categoryAssigneeLimit": "Atanacak kişi sınırı",
+        "assigneeNoLimit": "Sınır yok",
+        "assigneeExisting": "Kategori veya kişileri değiştirene kadar mevcut atamalar korunur.",
+        "assigneeLimitExceeded": "Bu kategori için kişi sınırı {{count}}. Daha az kişi seçin veya kategoriyi değiştirin.",
         "scoringNoNext": "The next occurrence is not yet available.",
         "scoringEnded": "The recurrence schedule has ended.",
         "scoringTargetPreserved": "The existing next occurrence is preserved and will not be overwritten.",

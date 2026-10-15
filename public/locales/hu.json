@@ -293,6 +293,10 @@
         "optionCalendarBirthdaysHint": "Pipa nélkül a születésnapok kimaradnak ebből a csempéből, a naptárban továbbra is ott vannak."
     },
     "tasks": {
+        "categoryAssigneeLimit": "Hozzárendelt személyek korlátja",
+        "assigneeNoLimit": "Nincs korlát",
+        "assigneeExisting": "A meglévő hozzárendelések a kategória vagy a személyek módosításáig változatlanok maradnak.",
+        "assigneeLimitExceeded": "Ebben a kategóriában legfeljebb {{count}} személy rendelhető hozzá. Válasszon kevesebb személyt vagy másik kategóriát.",
         "scoringNoNext": "The next occurrence is not yet available.",
         "scoringEnded": "The recurrence schedule has ended.",
         "scoringTargetPreserved": "The existing next occurrence is preserved and will not be overwritten.",

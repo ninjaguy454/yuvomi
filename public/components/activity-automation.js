@@ -1,3 +1,4 @@
+import {assigneePolicyLabel} from '/utils/task-assignee-policy.js';
 import { renderPlaceSearch, bindPlaceSearch, saveSearchPlace } from '/components/place-search.js';
 import { memberLabel } from '/utils/member-label.js';
 import { canCapability, isPermAdmin } from '/permissions.js';
@@ -1514,6 +1515,7 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
       ${renderSubtaskEditor({ subtasks: activity?.checklist || [], skills: context.skills, template: true, canCreateSkill: canCapability('skills.manage') })}
     </fieldset>
     ${inputRow('Category', `<select class="input" name="category">${categoryOptions(context.categories, activity?.category || 'misc')}</select>`)}
+    <p class="form-hint" data-template-assignee-limit></p>
     <div class="grid grid--2">
       ${inputRow('Priority', `<select class="input" name="priority">${PRIORITIES().map(({ value, label }) => `<option value="${value}" ${(activity?.priority || 'none') === value ? 'selected' : ''}>${h(label)}</option>`).join('')}</select>`)}
       ${inputRow('Points', `<input class="input" type="number" name="points" min="0" max="${scoringMode == null ? 100000 : 10000}" step="1" inputmode="numeric" required value="${h(activity?.points ?? 0)}">`)}
@@ -1613,6 +1615,9 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
       const strategySelect = panel.querySelector('#automation-assignment-strategy');
       const fixed = panel.querySelector('#automation-fixed-user');
       const participantCount = panel.querySelector('#automation-participant-count');
+      const categorySelect=panel.querySelector('[name=category]'),countInput=panel.querySelector('[name=participant_count]');
+      const refreshAssigneeLimit=()=>{const policy=context.categories.find(row=>row.key===categorySelect.value),max=policy?.max_assignees??null;panel.querySelector('[data-template-assignee-limit]').textContent=assigneePolicyLabel({max_assignees:max},t);const changed=!editing||categorySelect.value!==activity.category||strategySelect.value!==(activity.assignment_policy||activity.assignment_strategy)||Number(countInput.value)!==Number(activity.participant_count||1);countInput.setCustomValidity(changed&&strategySelect.value==='rotating_multi'&&max!==null&&Number(countInput.value)>max?t('tasks.assigneeLimitExceeded',{count:max}):'');};
+      categorySelect.addEventListener('change',refreshAssigneeLimit);countInput.addEventListener('input',refreshAssigneeLimit);strategySelect.addEventListener('change',refreshAssigneeLimit);refreshAssigneeLimit();
       const rotationGroup = panel.querySelector('#automation-rotation-group');
       const refreshAssignment = () => {
         fixed.hidden = strategySelect.value !== 'fixed';

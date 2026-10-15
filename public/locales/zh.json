@@ -293,6 +293,10 @@
         "optionCalendarBirthdaysHint": "取消勾选后，此卡片不再显示生日，日历中仍会保留。"
     },
     "tasks": {
+        "categoryAssigneeLimit": "负责人数量上限",
+        "assigneeNoLimit": "不限制",
+        "assigneeExisting": "在更改类别或人员之前，现有分配保持不变。",
+        "assigneeLimitExceeded": "此类别最多可分配 {{count}} 人。请选择更少的人员或更改类别。",
         "scoringNoNext": "The next occurrence is not yet available.",
         "scoringEnded": "The recurrence schedule has ended.",
         "scoringTargetPreserved": "The existing next occurrence is preserved and will not be overwritten.",

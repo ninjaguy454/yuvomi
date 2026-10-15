@@ -17,6 +17,10 @@
   flex-direction: column;
   gap: var(--space-2);
 }
+.cat-assignee-form { display:flex; flex-wrap:wrap; align-items:flex-end; gap:var(--space-2); flex-basis:100%; }
+.cat-assignee-label { display:flex; flex-direction:column; gap:var(--space-1); font-size:var(--font-size-sm); min-width:0; }
+.cat-assignee-label input { width:10rem; max-width:100%; }
+.cat-add-form:has([data-new-assignee-limit]) { flex-wrap:wrap; }
 
 .cat-row {
   display: flex;

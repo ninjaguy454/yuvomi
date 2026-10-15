@@ -305,6 +305,10 @@
         "optionCalendarBirthdaysHint": "Ohne Haken bleiben Geburtstage aus dieser Kachel - im Kalender stehen sie weiter."
     },
     "tasks": {
+        "categoryAssigneeLimit": "Maximale Anzahl zugewiesener Personen",
+        "assigneeNoLimit": "Keine Begrenzung",
+        "assigneeExisting": "Bestehende Zuweisungen bleiben unverändert, bis du die Kategorie oder die Personen änderst.",
+        "assigneeLimitExceeded": "Diese Kategorie erlaubt höchstens {{count}} zugewiesene Personen. Wähle weniger Personen oder eine andere Kategorie.",
         "scoringNoNext": "Die nächste Wiederholung ist noch nicht verfügbar.",
         "scoringEnded": "Der Wiederholungsplan ist beendet.",
         "scoringTargetPreserved": "Die bestehende nächste Wiederholung bleibt erhalten und wird nicht überschrieben.",

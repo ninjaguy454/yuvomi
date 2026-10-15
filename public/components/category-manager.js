@@ -43,6 +43,7 @@ class CategoryManagerElement extends HTMLElement {
     this._basePath = '';
     this._groups = [{ key: '', labelKey: '', addLabelKey: 'common.add' }];
     this._supportsSub = false;
+    this._supportsAssigneeLimit = false;
     this._labelResolver = (item) => item.label ?? item.name; // Server liefert lokalisiertes `label`
     this._titleKey = 'category.manageTitle';
     this._hintKey = 'category.manageHint';
@@ -73,6 +74,7 @@ class CategoryManagerElement extends HTMLElement {
     this._basePath = opts.basePath;
     if (Array.isArray(opts.groups) && opts.groups.length) this._groups = opts.groups;
     this._supportsSub = !!opts.supportsSubcategories;
+    this._supportsAssigneeLimit = !!opts.supportsAssigneeLimit;
     if (typeof opts.labelResolver === 'function') this._labelResolver = opts.labelResolver;
     if (opts.titleKey) this._titleKey = opts.titleKey;
     if (opts.hintKey) this._hintKey = opts.hintKey;
@@ -153,6 +155,7 @@ class CategoryManagerElement extends HTMLElement {
           <input class="form-input" type="text" maxlength="60"
                  placeholder="${esc(t(this._addPlaceholderKey))}"
                  aria-label="${esc(t(this._addPlaceholderKey))}" />
+          ${this._supportsAssigneeLimit ? `<label class="cat-assignee-label">${esc(t('tasks.categoryAssigneeLimit'))}<input class="form-input" type="number" min="1" step="1" inputmode="numeric" data-new-assignee-limit placeholder="${esc(t('tasks.assigneeNoLimit'))}"></label>` : ''}
           <button type="submit" class="btn btn--primary">${esc(t(g.addLabelKey || 'common.add'))}</button>
         </form>
       </section>`;
@@ -388,6 +391,7 @@ class CategoryManagerElement extends HTMLElement {
             <i data-lucide="trash-2" class="icon-sm" aria-hidden="true"></i>
           </button>
         </div>
+        ${this._assigneeLimitHtml(cat)}
         ${this._colorStripHtml(cat)}
         ${this._subListHtml(cat, group)}
       </li>`;
@@ -480,6 +484,15 @@ class CategoryManagerElement extends HTMLElement {
       </ul>`;
   }
 
+  _assigneeLimitHtml(cat) {
+    if(!this._supportsAssigneeLimit)return '';
+    return `<form class="cat-assignee-form" data-key="${esc(this._keyOf(cat))}" novalidate><label class="cat-assignee-label">${esc(t('tasks.categoryAssigneeLimit'))}<input class="form-input" type="number" min="1" step="1" inputmode="numeric" value="${esc(cat.max_assignees??'')}" placeholder="${esc(t('tasks.assigneeNoLimit'))}"></label><button class="btn btn--secondary" type="submit">${esc(t('common.save'))}</button></form>`;
+  }
+  _assigneeLimitValue(input){if(input.validity?.badInput)throw Error(t('common.invalidInput'));const value=input.value.trim();if(value==='')return null;const n=Number(value);if(!Number.isSafeInteger(n)||n<1)throw Error(t('common.invalidInput'));return n;}
+  async _saveAssigneeLimit(form){
+    try{const res=await api.put(`${this._basePath}/${encodeURIComponent(form.dataset.key)}`,{max_assignees:this._assigneeLimitValue(form.querySelector('input'))});const idx=this._cats.findIndex(cat=>this._keyOf(cat)===form.dataset.key);if(idx>=0)this._cats[idx]=res.data;form.querySelector('input').value=res.data.max_assignees??'';window.yuvomi?.showToast(t('tasks.categoryAssigneeLimit'),'success');this._notifyChanged();}
+    catch(err){window.yuvomi?.showToast(this._errMsg(err),'danger');}
+  }
   _notifyChanged() {
     this.dispatchEvent(new CustomEvent('category-manager-changed', { bubbles: true }));
   }
@@ -503,6 +516,7 @@ class CategoryManagerElement extends HTMLElement {
 
   async _onSubmit(e) {
     e.preventDefault();
+    const policyForm=e.target.closest('.cat-assignee-form');if(policyForm){await this._saveAssigneeLimit(policyForm);return;}
     const subForm = e.target.closest('.cat-subadd-form');
     if (subForm) {
       const input = subForm.querySelector('input');
@@ -519,6 +533,7 @@ class CategoryManagerElement extends HTMLElement {
     const group = form.dataset.group;
     try {
       const body = { name };
+      if(this._supportsAssigneeLimit)body.max_assignees=this._assigneeLimitValue(form.querySelector('[data-new-assignee-limit]'));
       if (group) body.type = group;
       const res = await api.post(this._basePath, body);
       this._cats.push(res.data);

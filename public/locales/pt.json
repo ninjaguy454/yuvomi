@@ -293,6 +293,10 @@
         "optionCalendarBirthdaysHint": "Sem seleção, os aniversários ficam fora deste cartão; no calendário continuam."
     },
     "tasks": {
+        "categoryAssigneeLimit": "Limite de pessoas atribuídas",
+        "assigneeNoLimit": "Sem limite",
+        "assigneeExisting": "As atribuições existentes mantêm-se até alterar a categoria ou as pessoas.",
+        "assigneeLimitExceeded": "O limite de pessoas nesta categoria é {{count}}. Selecione menos pessoas ou altere a categoria.",
         "scoringNoNext": "The next occurrence is not yet available.",
         "scoringEnded": "The recurrence schedule has ended.",
         "scoringTargetPreserved": "The existing next occurrence is preserved and will not be overwritten.",

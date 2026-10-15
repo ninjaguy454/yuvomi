@@ -305,6 +305,10 @@
         "optionCalendarBirthdaysHint": "بدون تیک، تولدها در این کارت نمایش داده نمی‌شوند؛ در تقویم همچنان هستند."
     },
     "tasks": {
+        "categoryAssigneeLimit": "حداکثر افراد مسئول",
+        "assigneeNoLimit": "بدون محدودیت",
+        "assigneeExisting": "تخصیص‌های فعلی تا زمانی که دسته یا افراد را تغییر ندهید، بدون تغییر می‌مانند.",
+        "assigneeLimitExceeded": "حداکثر افراد مسئول در این دسته {{count}} است. افراد کمتری انتخاب کنید یا دسته را تغییر دهید.",
         "scoringNoNext": "The next occurrence is not yet available.",
         "scoringEnded": "The recurrence schedule has ended.",
         "scoringTargetPreserved": "The existing next occurrence is preserved and will not be overwritten.",

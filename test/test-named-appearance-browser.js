@@ -57,6 +57,24 @@ async function independentPreferences(named=true){
   prefs={color_theme:'neutral',heading_font:'default',named_appearance:named?{...defaultNamedAppearance(),theme:'coffee'}:null,ui_sounds:{version:1,mode:'pack',pack:'wood',volume:42}};
   const page=await browser.newPage();await page.goto(origin+'/fixture');await page.waitForFunction(()=>window.fixtureReady);return page;
 }
+test('catalog sample cards and every slot swatch retain canonical colors and labels',async()=>{
+  const page=await independentPreferences();
+  try{
+    const mismatches=await page.evaluate(async()=>{
+      const {NAMED_THEMES,CARD_SLOTS,cardColor,defaultNamedAppearance,resolveNamedAppearance}=await import('/utils/named-appearance.js');
+      const now=new Date(),instant=now.toISOString(),weather=resolveNamedAppearance({...defaultNamedAppearance(),theme:'local-weather'},now,{condition:'sunny',is_day:true,observed_at:instant,fetched_at:instant,expires_at:new Date(+now+60000).toISOString(),sunrise_at:null,sunset_at:null}).theme;
+      const problems=[],normalize=color=>{const node=document.createElement('span');node.style.backgroundColor=color;return node.style.backgroundColor;};
+      for(const theme of [...NAMED_THEMES,{...weather,id:'local-weather'}]){
+        const tile=document.querySelector(`[data-theme-choice="${theme.id}"]`),sample=cardColor(theme,'slot-01-v1');
+        for(const [property,value]of [['--tile-fill',sample.fill],['--tile-ink',sample.text],['--tile-edge',sample.edge]])if(tile.style.getPropertyValue(property)!==value)problems.push(theme.id+' '+property);
+        const swatches=[...tile.querySelectorAll('.named-theme-slots>span')];if(swatches.length!==13)problems.push(theme.id+' slot count');
+        CARD_SLOTS.forEach((slot,index)=>{const expected=cardColor(theme,slot),node=swatches[index];if(node.style.backgroundColor!==normalize(expected.fill)||node.style.borderColor!==normalize(expected.edge)||!node.title.endsWith(expected.name))problems.push(theme.id+' '+slot);});
+      }
+      return problems;
+    });
+    assert.deepEqual(mismatches,[],'view-only swatches keep the established card palette contract');
+  }finally{await page.close();}
+});
 test('failed theme save cannot undo a successfully saved mute or independent pack/volume',async()=>{
   const page=await independentPreferences();
   try{

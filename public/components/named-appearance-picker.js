@@ -1,13 +1,21 @@
 import {esc} from '/utils/html.js';
 import {t} from '/i18n.js';
-import {NAMED_THEMES,CARD_SLOTS,cardColor,defaultNamedAppearance,normalizeNamedAppearance,validateNamedAppearance,resolveNamedAppearance} from '/utils/named-appearance.js';
+import {NAMED_THEMES,CARD_SLOTS,cardColor,mixColors,readableColor,defaultNamedAppearance,normalizeNamedAppearance,validateNamedAppearance,resolveNamedAppearance} from '/utils/named-appearance.js';
 import {currentNamedTheme} from '/utils/named-appearance-runtime.js';
 
 const groups=[...new Set(NAMED_THEMES.map(theme=>theme.group))],fixed=id=>NAMED_THEMES.find(theme=>theme.id===id);
 const label=key=>t('namedAppearance.'+key);
 const option=(id,name,selected)=>`<option value="${esc(id)}"${id===selected?' selected':''}>${esc(name)}</option>`;
 function fixedOptions(selected,{seasons=false}={}){return(seasons?`<optgroup label="${esc(label('dynamic'))}">${option('seasons',label('seasons'),selected)}</optgroup>`:'')+groups.map(group=>`<optgroup label="${esc(group)}">${NAMED_THEMES.filter(theme=>theme.group===group).map(theme=>option(theme.id,theme.name,selected)).join('')}</optgroup>`).join('');}
-function tile(theme,selected){const p=cardColor(theme,'slot-01-v1'),style={'--tile-canvas':theme.canvas,'--tile-surface':theme.surface,'--tile-text':theme.text,'--tile-line':theme.line,'--tile-pattern':theme.pattern,'--tile-radius':theme.round+'px','--tile-font':theme.font,'--tile-fill':p.fill,'--tile-ink':p.text,'--tile-edge':p.edge};return`<button type="button" class="named-theme-tile" data-theme-choice="${theme.id}" data-focus-key="tile-${theme.id}" data-material="${theme.motif}" aria-pressed="${selected===theme.id}" style="${esc(Object.entries(style).map(([key,value])=>key+':'+value).join(';'))}"><span class="named-theme-name">${esc(theme.name)}</span><small>${esc(theme.identity)}</small><span class="named-theme-examples"><span class="named-example-card">${esc(label('task'))}<span class="named-example-points" aria-label="${esc(label('points'))}">5</span></span><span class="named-example-card">${esc(label('note'))}</span></span><span class="named-theme-slots" aria-label="${esc(label('slots'))}">${CARD_SLOTS.map((slot,index)=>{const c=cardColor(theme,slot);return`<span style="background:${c.fill};border-color:${c.edge}" title="${esc((index<12?label('slot')+' '+(index+1):label('neutral'))+' · '+c.name)}"></span>`;}).join('')}</span></button>`;}
+function tile(theme,selected){const p=cardColor(theme,'slot-01-v1'),style={'--tile-canvas':theme.canvas,'--tile-surface':theme.surface,'--tile-text':theme.text,'--tile-line':theme.line,'--tile-pattern':theme.pattern,'--tile-radius':theme.round+'px','--tile-font':theme.font,'--tile-fill':p.fill,'--tile-ink':p.text,'--tile-edge':p.edge};return`<button type="button" class="named-theme-tile" data-theme-choice="${theme.id}" data-focus-key="tile-${theme.id}" data-material="${theme.motif}" aria-pressed="${selected===theme.id}" style="${esc(Object.entries(style).map(([key,value])=>key+':'+value).join(';'))}"><span class="named-theme-name">${esc(theme.name)}</span><small>${esc(theme.identity)}</small><span class="named-theme-examples"><span class="named-example-card">${esc(label('task'))}<span class="named-example-points" aria-label="${esc(label('points'))}">5</span></span><span class="named-example-card">${esc(label('note'))}</span></span><span class="named-theme-slots" aria-label="${esc(label('slots'))}">${CARD_SLOTS.map((slot,index)=>{const c=tileSwatch(theme,slot,index);return`<span style="background:${c.fill};border-color:${c.edge}" title="${esc((index<12?label('slot')+' '+(index+1):label('neutral'))+' · '+c.name)}"></span>`;}).join('')}</span></button>`;}
+
+// Palette dots display no text or status roles. Keep the canonical fill/edge
+// formulas without deriving six unused contrast inks for every catalog dot.
+function tileSwatch(theme,slot,index){
+  const neutral=slot==='neutral-v1',raw=neutral?theme.accent:theme.slots[index];
+  const fill=neutral?theme.surface:mixColors(theme.kind==='dark'?'#0d1918':'#ffffff',raw,theme.kind==='dark'?.36:.48);
+  return{fill,edge:readableColor(raw,[fill,theme.surface],3),name:neutral?'Neutral':theme.slotNames[index]};
+}
 
 /** The same picker edits personal, Wall and device-owned configurations.
  * It never writes or applies appearance itself; its owning form supplies authority. */

@@ -41,7 +41,10 @@ Wide artwork uses the approved50%52% cover camera with stage aspect at most2.1.
 Very wide/shallow viewports can reveal lower artwork through normal app scrolling.
 Only decorative painting offset and a scroll tail are added; card positions,
 content, controls and stored colors are preserved. The sky mask and all grades use
-that same camera/visible window. Phones show the full painting. A readable linked
+that same camera/visible window. Phones use a viewport-filling cover crop, avoiding
+an intrinsic-aspect top strip and empty backing below. The first valid observation
+sets its solar grade immediately; later dawn/dusk grading still updates while the
+board stays open through the existing minute refresh. A readable linked
 NGA credit uses an app scrollport footer so it cannot intercept card controls.
 Reduced motion, reduced transparency, forced colors, foreground/lifecycle changes
 and disposal stop or remove appropriate decoration.

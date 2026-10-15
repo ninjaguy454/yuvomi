@@ -23,6 +23,26 @@ test('missing precipitation and wind remain unknown, with no invented rain, dire
   assert.equal(target.gust, 0);
 });
 
+test('phone camera covers portrait viewport with registered painting and mask geometry', async () => {
+  const { cameraGeometry } = await load(modelUrl);
+  for (const [width, height] of [[320,720], [390,844], [430,932]]) {
+    const g = cameraGeometry(width, height);
+    assert.equal(g.fit, 'cover');
+    assert.ok(g.width >= width && g.height >= height);
+    assert.ok(g.visibleSource.left >= 0 && g.visibleSource.right <= 1);
+    assert.ok(g.visibleSource.top >= 0 && g.visibleSource.bottom <= 1);
+  }
+});
+
+test('empty mount draw does not consume initialization of the first valid nighttime facts', async () => {
+  const { createSceneDynamics } = await load(modelUrl), d = createSceneDynamics();
+  const now = Date.parse('2026-10-15T01:08:00.000Z');
+  d.advance(0, 0, now);
+  d.update({condition:'sunny',is_day:false}, facts({phenomena:['clear'],precipitation:{kind:'none',intensity:null},solar:{is_day:false,sunrise_at:null,sunset_at:null}}));
+  assert.equal(d.advance(0, 0, now).daylight, 0, 'first observed nighttime paints night immediately');
+  assert.equal(d.pending(), false, 'clear first-night paint needs no corrective animation');
+});
+
 test('reported meteorological wind direction is projected consistently without raising a lower gust', async () => {
   const { deriveSceneTargets } = await load(modelUrl);
   const west = deriveSceneTargets(theme, facts({wind:{speed_mps:12,gust_mps:8,from_degrees:270}}), 0, 3);
@@ -89,15 +109,15 @@ test('CSS subpixel rounding retains the approved wide cover camera',async()=>{
   assert.equal(cameraGeometry(3440,1638.09375).fit,'cover');
 });
 
-test('registered camera preserves full painting on mobile and ultrawide, using approved desktop position', async () => {
+test('registered camera covers phones and preserves ultrawide fallback using approved desktop position', async () => {
   const { cameraGeometry }=await load(modelUrl);
   const desktop=cameraGeometry(1920,1080),mobile=cameraGeometry(390,844),wide=cameraGeometry(3440,1080);
   assert.equal(desktop.fit,'cover');
   assert.equal(desktop.left,(desktop.width-1920)*.5);
   assert.equal(desktop.top,(desktop.height-1080)*.52);
-  assert.equal(mobile.width,390);
-  assert.ok(Math.abs(mobile.height-390*1042/1600)<.001);
-  assert.equal(mobile.fit,'contain');
+  assert.ok(mobile.width>=390);
+  assert.ok(Math.abs(mobile.height-844)<.001);
+  assert.equal(mobile.fit,'cover');
   assert.equal(wide.fit,'contain');
   assert.ok(wide.visibleSource.left<=0 && wide.visibleSource.right>=1);
   assert.ok(wide.visibleSource.top<=0 && wide.visibleSource.bottom>=1);

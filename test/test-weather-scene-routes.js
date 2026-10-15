@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
+import {defaultNamedAppearance,resolveNamedAppearance} from '../public/utils/named-appearance.js';
+import {deriveSceneTargets} from '../public/utils/local-weather-scene/model.js';
 process.env.DB_PATH=':memory:';
 const {buildRouter}=await import('../server/routes/weather.js');
 const time=Date.parse('2026-10-14T12:00:00.000Z');
@@ -41,3 +43,38 @@ test('concurrent theme and scene share one pending fetch and expired scene canno
   await withRouter(async({read,seen})=>{const sceneRead=read('/scene');await started;const themeRead=read('/theme');release();const [scene,theme]=await Promise.all([sceneRead,themeRead]);assert.equal(seen.length,1);assert.deepEqual(scene.body.data.theme,theme.body.data);now+=90*60000;assert.deepEqual((await read('/scene')).body,{data:null});},{nowFn:()=>now,fetcher:async()=>{entered();await held;return{ok:true,json:async()=>om()};}});
 });
 test('scene uses the existing negative cache on provider failure',async()=>{await withRouter(async({read,seen})=>{assert.deepEqual((await read('/scene')).body,{data:null});assert.deepEqual((await read('/scene')).body,{data:null});assert.deepEqual((await read('/theme')).body,{data:null});assert.equal(seen.length,1);},{fetcher:async()=>({ok:false,status:503})});});
+
+test('household nighttime solar facts cross negative and fractional positive timezone offsets unchanged',async()=>{
+  for (const row of [
+    {offset:-14400,local:'2026-10-14T21:08',utc:'2026-10-15T01:08:00.000Z',day:'2026-10-14',rise:'2026-10-14T11:10:00.000Z',set:'2026-10-14T22:20:00.000Z'},
+    {offset:19800,local:'2026-10-15T01:38',utc:'2026-10-14T20:08:00.000Z',day:'2026-10-15',rise:'2026-10-15T01:40:00.000Z',set:'2026-10-15T12:50:00.000Z'}
+  ]) {
+    const payload=om(),clock=Date.parse(row.utc);payload.utc_offset_seconds=row.offset;
+    payload.current.time=row.local;payload.current.is_day=0;payload.current.weather_code=0;
+    payload.daily.time=[row.day];payload.daily.sunrise=[row.day+'T07:10'];payload.daily.sunset=[row.day+'T18:20'];
+    await withRouter(async({read})=>{
+      const {theme,scene}=(await read('/scene')).body.data;
+      assert.equal(theme.observed_at,row.utc);assert.equal(theme.sunrise_at,row.rise);assert.equal(theme.sunset_at,row.set);
+      assert.equal(theme.is_day,false);assert.deepEqual(scene.solar,{is_day:false,sunrise_at:row.rise,sunset_at:row.set});
+      for(const timeZone of ['Etc/UTC','America/New_York','Asia/Tokyo'])assert.equal(resolveNamedAppearance({...defaultNamedAppearance(),theme:'local-weather',timeZone},new Date(clock),theme).phase,'night');
+      assert.equal(deriveSceneTargets(theme,scene,clock).daylight,0);
+    },{payload,nowFn:()=>clock});
+  }
+});
+
+test('absent solar pair retains the provider reported nighttime fallback',async()=>{
+  const missing=om();missing.current.weather_code=0;missing.current.is_day=0;missing.daily.sunrise=[];missing.daily.sunset=[];
+  await withRouter(async({read})=>{const {theme,scene}=(await read('/scene')).body.data;assert.equal(theme.sunrise_at,null);assert.equal(theme.sunset_at,null);assert.equal(deriveSceneTargets(theme,scene,time).daylight,0);},{payload:missing});
+});
+
+test('OpenWeatherMap night icon and Unix solar times produce the same household nighttime scene',async()=>{
+  const clock=Date.parse('2026-10-15T01:08:00.000Z'),rise=Date.parse('2026-10-14T11:10:00.000Z'),set=Date.parse('2026-10-14T22:20:00.000Z');
+  const payload={dt:clock/1000,timezone:-14400,name:'Synthetic',main:{temp:14,feels_like:14,humidity:50},weather:[{id:800,icon:'01n'}],wind:{speed:0},sys:{sunrise:rise/1000,sunset:set/1000}};
+  await withRouter(async({read})=>{
+    const {theme,scene}=(await read('/scene')).body.data;
+    assert.equal(theme.is_day,false);assert.equal(theme.observed_at,new Date(clock).toISOString());
+    assert.equal(theme.sunrise_at,new Date(rise).toISOString());assert.equal(theme.sunset_at,new Date(set).toISOString());
+    assert.deepEqual(scene.solar,{is_day:false,sunrise_at:theme.sunrise_at,sunset_at:theme.sunset_at});
+    assert.equal(deriveSceneTargets(theme,scene,clock).daylight,0);
+  },{provider:'openweathermap',nowFn:()=>clock,fetcher:async url=>({ok:true,json:async()=>String(url).includes('/forecast?')?{list:[]}:payload})});
+});

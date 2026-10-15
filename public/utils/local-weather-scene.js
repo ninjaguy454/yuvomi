@@ -56,7 +56,7 @@ export function mountLocalWeatherScene({onFlash=()=>{}}={}) {
   function resize(){
     if(disposed)return;
     const rect=stage.getBoundingClientRect();geometry=cameraGeometry(rect.width||win.innerWidth,rect.height||win.innerHeight);
-    for(const image of art){image.style.objectFit=geometry.fit;image.style.objectPosition=geometry.mobile?'0% 0%':'50% 52%';}
+    for(const image of art){image.style.objectFit=geometry.fit;image.style.objectPosition='50% 52%';}
     world.style.width=geometry.width+'px';world.style.height=geometry.height+'px';world.style.left=-geometry.left+'px';world.style.top=-geometry.top+'px';
     for(const tile of cloudTiles)tile.style.width=geometry.width+'px';
     const scale=Math.min(1,1280/geometry.boxWidth,800/geometry.boxHeight);

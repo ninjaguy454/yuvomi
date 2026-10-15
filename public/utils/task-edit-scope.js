@@ -72,7 +72,10 @@ const writable = (key, value) => value !== undefined && (key !== 'points' || val
 /** Sparse explicit intent over the authorized canonical BEFORE editor projection. */
 export function taskFuturePatch(definition, draft, rootIntent = []) {
   const fields = {}, actions = {}, intent = new Set(rootIntent);
-  for (const key of futureFields) if (intent.has(key) && writable(key,draft[key]) && JSON.stringify(comparable(key,draft[key])) !== JSON.stringify(comparable(key,definition.fields[key]))) fields[key] = key==='points'?point(draft[key]):draft[key];
+  for (const key of futureFields) {
+    const baseline=key==='assigned_to'?definition.fields.direct_assignee_ids??definition.fields[key]:definition.fields[key];
+    if (intent.has(key) && writable(key,draft[key]) && JSON.stringify(comparable(key,draft[key])) !== JSON.stringify(comparable(key,baseline))) fields[key] = key==='points'?point(draft[key]):draft[key];
+  }
   const original = new Map((definition.actions || []).map(action => [action.action_key,action]));
   const next = (draft.subtasks || []).filter(row => row.action_key || text(row.title));
   const update = [], add = [], order = [];

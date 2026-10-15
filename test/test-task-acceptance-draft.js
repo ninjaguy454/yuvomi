@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 const m = await import('../public/utils/task-acceptance-draft.js').catch(() => ({}));
 const projection = (children = true) => ({expected_revision:4,primary_user_id:1,can_add_helpers:true,coassignee_candidates:[{id:2},{id:3}],subtask_snapshot:children?[{id:10,revision:2},{id:11,revision:1}]:[],subtasks:children?[{id:10,allocatable:true,eligible_assignee_ids:[1,2,3]},{id:11,allocatable:false,eligible_assignee_ids:[]}]:[]});
+test('category helper count keeps the draft intact while preventing excess submission',()=>{const draft=m.createAcceptanceDraft({...projection(),assignee_policy:{max_assignees:2},available_assignee_slots:1},'count-op');m.setAcceptanceHelpers(draft,[2,3]);assert.equal(m.acceptanceAssigneeLimitExceeded(draft),true);assert.deepEqual(draft.helpers,[2,3]);assert.throws(()=>m.lockAcceptancePayload(draft));m.setAcceptanceHelpers(draft,[2]);assert.equal(m.acceptanceAssigneeLimitExceeded(draft),false);assert.deepEqual(m.lockAcceptancePayload(draft).coassignee_ids,[2]);});
 test('allocation screen requires both helpers and subtasks',()=>{
   assert.equal(typeof m.createAcceptanceDraft,'function');
   for(const children of [false,true]) for(const helpers of [false,true]){

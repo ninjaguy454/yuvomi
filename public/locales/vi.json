@@ -293,6 +293,10 @@
         "optionCalendarBirthdaysHint": "Nếu bỏ chọn, sinh nhật sẽ không xuất hiện trong thẻ này - trên lịch vẫn còn."
     },
     "tasks": {
+        "categoryAssigneeLimit": "Giới hạn người được giao",
+        "assigneeNoLimit": "Không giới hạn",
+        "assigneeExisting": "Các phân công hiện tại được giữ nguyên cho đến khi bạn đổi danh mục hoặc người được giao.",
+        "assigneeLimitExceeded": "Giới hạn người được giao cho danh mục này là {{count}}. Chọn ít người hơn hoặc đổi danh mục.",
         "scoringNoNext": "The next occurrence is not yet available.",
         "scoringEnded": "The recurrence schedule has ended.",
         "scoringTargetPreserved": "The existing next occurrence is preserved and will not be overwritten.",

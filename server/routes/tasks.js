@@ -1,4 +1,5 @@
 import {setTaskAssignments as setAssignments} from '../services/task-assignments.js';
+import {parseCategoryAssigneeLimit,categoryAssigneePolicy,assertAssigneeCount,proposedTaskAssigneePolicy,persistTaskAssigneePolicy,persistNewTaskAssignees,assigneePolicyProjection,readTaskAssigneePolicy,persistCapturedTaskAssignees,proposeDefinitionAssigneePolicies,proposedBoundTaskCategoryPolicy,taskDirectAssignmentSelection} from '../services/task-assignee-policy.js';
 import {isTripStep,tripTaskState,markTripTaskOverrides} from '../services/trip-task-state.js';
 import {attachTripTaskProjection} from '../services/trip-task-projection.js';
 import {retireTripTask,refreshTripStepReminders} from '../services/trip-tasks.js';
@@ -219,13 +220,22 @@ function assertScoringOwner(task,body) {
   if(body.scoring_mode!==undefined&&taskScoringRoot(db.get(),task.id)?.id!==task.id)
     throw new TaskStateError('Choose the scoring mode on the original executable Task.',{reason:'scoring_owner_required'},400);
 }
-function scoringMutationWire(body,edited) {
+function draftVisibilityAssignees(task,body,ids,edited){
+  if(!task||task.parent_task_id)return ids;
+  const enrolled=readTaskAssigneePolicy(db.get(),task.id)||proposedTaskAssigneePolicy(db.get(),task,body,{directIds:ids});if(!enrolled)return ids;
+  const derived=edited?edited.next.flatMap(child=>child.assignedUsers??(child.id?db.get().prepare('SELECT user_id FROM task_assignments WHERE task_id=?').all(child.id).map(row=>row.user_id):[]))
+    :db.get().prepare(`SELECT p.user_id FROM task_responsibilities p WHERE p.task_id=? AND p.role='participant' AND p.source='subtasks' AND p.status='active'
+      AND EXISTS(SELECT 1 FROM tasks c JOIN task_assignments a ON a.task_id=c.id WHERE c.parent_task_id=p.task_id AND c.archived_at IS NULL AND a.user_id=p.user_id)`).all(task.id).map(row=>row.user_id);
+  return [...new Set([...ids,...derived])];
+}
+function scoringMutationWire(body,edited,task=null) {
   const value=Object.fromEntries(['scoring_mode','points','assigned_to'].filter(key=>body[key]!==undefined).map(key=>[key,body[key]]));
-  if(value.assigned_to!==undefined)value.assigned_to=parseAssignedTo(value.assigned_to);
+  if(value.assigned_to!==undefined)value.assigned_to=draftVisibilityAssignees(task,body,parseAssignedTo(value.assigned_to),edited);
   if(edited)value.subtasks=edited.next.map(row=>({...(row.id?{id:row.id}:{}),title:row.title,points:row.points,...(row.assignedUsers===undefined?{}:{assigned_user_ids:row.assignedUsers})}));
   return value;
 }
 function attachScoring(task,viewerId,authorizedTaskIds,includeHistoricalSettlements=false) {
+  Object.assign(task,assigneePolicyProjection(db.get(),task.id));
   try {
     const allowed=includeHistoricalSettlements?authorizedScoringHistoryIds(task,viewerId,authorizedTaskIds):authorizedTaskIds;
     task.scoring=taskScoringSummary(db.get(),task.id,{viewerId,authorizedTaskIds:allowed});
@@ -278,6 +288,8 @@ function futureEditContext(req,task) {
     return fields;
   };
   const definition=proposedFutureSeriesDefinition(db.get(),req,task,before,req.body.future_patch??{}, {validateFields});
+  proposeDefinitionAssigneePolicies(db.get(),before,definition,{assignmentIntent:req.body.future_patch,
+    resolveRootDirectIds:definition.task.assignment_mode==='round_robin'?()=>seriesRotationAssignment(task,definition,{advance:true}).assigned_user_ids:null});
   if(!futureRootCapabilities(db.get(),req,task,definition).view)throw new TaskStateError('This future definition is unavailable.',{},404);
   assertSeriesDefinitionMutation(db.get(),req,task,before,definition,{futureOnly:true});
   validateFutureDefinitionWindows(req,task,definition);
@@ -291,8 +303,8 @@ function futureEditContext(req,task) {
 function assertFutureIndependentAssignmentIntent(req,task,state,stored,before,definition) {
   if(!Object.hasOwn(req.body.future_patch?.fields??{},'assigned_to')||definition.binding
     ||(definition.task.assignment_mode??'fixed')!=='fixed'
-    ||sameIdOrder(before.assigned_user_ids,definition.assigned_user_ids))return;
-  const d=db.get(),skills=definition.skill_ids,assigned=definition.assigned_user_ids;
+    ||sameIdOrder(before.assignee_policy?.direct_assignee_ids??before.assigned_user_ids,definition.assignee_policy?.direct_assignee_ids??definition.assigned_user_ids))return;
+  const d=db.get(),skills=definition.skill_ids,assigned=definition.assignee_policy?.direct_assignee_ids??definition.assigned_user_ids;
   // The central empty-list/no-requirement rule needs no future date proof.
   if(!skills.length||!assigned.length)return assertTaskSkillAssignments(d,skills,assigned);
   const asOfDate=todayInHouseholdZone(),canonicalUnchanged=!!stored&&definitionEqual(stored.data,definition);
@@ -337,8 +349,8 @@ function scoringAssignmentIntent(task,body) {
     // that later draw will choose, and must never consume the assignment cursor.
     if(!desired.assignmentOverrideUserId&&['eligible_random','random'].includes(activity.assignment_policy||activity.assignment_strategy))
       throw new TaskStateError('The proposed assignment is random. A recipient cannot be forecast before saving.',{reason:'scoring_projection_unavailable',conditions:['random_assignment_unresolved']});
-    const planned={...task,...Object.fromEntries(['start_date','start_time','due_date','due_time'].filter(key=>body[key]!==undefined).map(key=>[key,body[key]]))};
-    const resolved=previewTaskActivityBinding(d,{...desired,activitySnapshot:activity,task:planned,dateKey:planned.due_date||todayInHouseholdZone()}).resolution;
+    const planned={...task,...Object.fromEntries(['category','start_date','start_time','due_date','due_time'].filter(key=>body[key]!==undefined).map(key=>[key,body[key]]))};
+    const resolved=previewTaskActivityBinding(d,{...desired,activitySnapshot:activity,assigneePolicy:categoryAssigneePolicy(d,planned.category),task:planned,dateKey:planned.due_date||todayInHouseholdZone()}).resolution;
     const participants=(resolved.participants?.length?resolved.participants:resolved.primary?[resolved.primary]:[]).map(member=>member.id);
     const childOwners=d.prepare("SELECT user_id FROM task_responsibilities WHERE task_id=? AND role='participant' AND source='subtasks' AND status='active' ORDER BY user_id").all(task.id).map(row=>row.user_id);
     const next=[...new Set([...participants,...childOwners])],primary=resolved.primary?.id??null;
@@ -356,7 +368,9 @@ function scoringAssignmentIntent(task,body) {
     next=[rotation[(index+slot)%rotation.length]];
   }
   const primary=body.assigned_to===undefined&&mode==='fixed'?task.assigned_to:next[0]??null;
-  return {assigned:next,primary,changed:!sameIdOrder(next,assigned)||primary!==task.assigned_to,binding:null,bindingChanged};
+  const direct=taskDirectAssignmentSelection(d,task,body),directChanged=!sameIdOrder(direct.previous,direct.selected);
+  if(mode==='fixed'&&directChanged)assertTaskSkillAssignments(d,taskSkillInput(body,task.id),direct.selected,body.due_date??task.due_date??todayInHouseholdZone(),{allowDelegation:!!task.parent_task_id});
+  return {assigned:next,primary,changed:directChanged||!sameIdOrder(next,assigned)||primary!==task.assigned_to,binding:null,bindingChanged};
 }
 
 function scoringActivitySnapshot(task,body,binding,existing=getTaskActivityBinding(db.get(),task.id)) {
@@ -462,8 +476,18 @@ function finalizeFutureActionKeys(definition) {
   }
   return created;
 }
-function assertCompatibleFutureDefinition(req,task,series,definition) {
+function assertCompatibleFutureDefinition(req,task,series,definition,{capturedDirectIds=null,deferRandomBinding=false}={}) {
   const before=effectiveSeriesScoringDefinition(db.get(),seriesDefinitionForGeneration(db.get(),series.series_id,series.occurrence.generation+1)).data;
+  const assignmentIntent=!definition.binding&&(definition.task.assignment_mode??'fixed')==='fixed'&&Object.hasOwn(req.body,'direct_assignee_ids')
+    ?{fields:{assigned_to:parseAssignedTo(req.body.direct_assignee_ids)}}:null;
+  proposeDefinitionAssigneePolicies(db.get(),before,definition,{assignmentIntent,resolveRootDirectIds:()=>{
+    if(capturedDirectIds!==null)return capturedDirectIds;
+    // Historical future authoring does not select a random performer for the
+    // settled occurrence. Materialization captures the actual future person.
+    const binding=definition.binding,activity=binding?.snapshot;
+    if(deferRandomBinding&&binding&&!binding.assignment_override_user_id&&['eligible_random','random'].includes(activity.assignment_policy||activity.assignment_strategy))return [];
+    const resolved=scoringAssignmentIntent(task,req.body);return resolved.policyAssigned??resolved.assigned;
+  }});
   assertSeriesDefinitionMutation(db.get(),req,task,before,definition,{futureOnly:true});
   if(!futureRootCapabilities(db.get(),req,task,definition).view)throw new TaskStateError('This future definition is unavailable.',{},404);
   validateFutureDefinitionWindows(req,task,definition);
@@ -759,6 +783,7 @@ function futureEditProjection(req,task,definition,state) {
   const fields=Object.fromEntries(['title','description','points','scoring_mode','visibility','priority','category','start_date','start_time','due_date','due_time','due_date_offset_days','is_recurring','recurrence_rule','recurrence_from_completion','expiration_policy','locked','countdown','assignment_mode','rotation_group','rotation_slot'].map(key=>[key,definition.task[key]]));
   fields.card_color_choice=definition.task.card_color_policy;
   fields.assigned_to=definition.assigned_user_ids;fields.skill_ids=definition.skill_ids;fields.tags=definition.tags;
+  fields.assignee_policy=definition.assignee_policy??null;fields.direct_assignee_ids=definition.assignee_policy?.direct_assignee_ids??null;
   fields.rotation_user_ids=definition.rotation_user_ids;fields.rotation_bindings=parseRotationBindings(definition.task.rotation_bindings_json);
   return {task_id:task.id,effective_generation:state.occurrence.generation+1,review_required:!!definition.task.scoring_review_required,permissions:futureRootCapabilities(db.get(),req,task,definition),fields,
     actions:definition.subtasks.filter(a=>futureActionCapabilities(db.get(),req,task,a).view).map(action=>({action_key:action.action_key,
@@ -807,7 +832,7 @@ function setArchived(taskId, archived) {
 /** Verwaltbare Kategorien aus der DB (nach sort_order). */
 function loadTaskCategories() {
   return db.get().prepare(
-    'SELECT key, name, label_key, sort_order FROM task_categories ORDER BY sort_order ASC, key ASC'
+    'SELECT key, name, label_key, sort_order, max_assignees FROM task_categories ORDER BY sort_order ASC, key ASC'
   ).all();
 }
 
@@ -818,7 +843,7 @@ function validTaskCategoryKeys() {
 
 /** Anzahl Aufgaben, die eine Kategorie referenzieren (Guard vor dem Löschen). */
 function taskCategoryInUseCount(key) {
-  return db.get().prepare('SELECT COUNT(*) AS n FROM tasks WHERE category = ?').get(key).n;
+  return ['tasks','activity_templates','workflow_templates'].reduce((count,table)=>count+db.get().prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE category=?`).get(key).n,0);
 }
 
 /**
@@ -943,6 +968,8 @@ function taskSkillInput(body, existingTaskId = null, activityTemplateId = null) 
 }
 
 function independentlyAssignedTaskMembers(taskId, userIds, previousUserIds, primaryUserId) {
+  const direct=readTaskAssigneePolicy(db.get(),taskId);
+  if(direct)return userIds.filter(id=>direct.direct_assignee_ids.includes(id)||!previousUserIds.includes(id)||id===primaryUserId);
   const derived = new Set(db.get().prepare(`SELECT user_id FROM task_responsibilities
     WHERE task_id = ? AND role = 'participant' AND source = 'subtasks'
       AND status IN ('active', 'fulfilled')`).all(taskId).map((row) => Number(row.user_id)));
@@ -1067,7 +1094,11 @@ function applyEditedSubtasks(task, edited, actorId) {
       parent_task_id,created_by,visibility,sort_order,start_time,is_optional,points) VALUES(?,?,'open',?,?,?,?,?,?,?,?,?,?)`)
       .run(child.title,task.category,task.start_date,task.due_date,task.due_time,task.id,actorId,task.visibility,order,task.start_time,child.isOptional,child.points).lastInsertRowid);assignNewTaskCardColor(db.get(),id,{inheritFrom:task.id});}
     if(!sameIdOrder(loadTaskSkillIds(db.get(),id),child.skillIds))setTaskSkills(db.get(),id,child.skillIds);
+    if(!child.id&&child.assignedUsers===undefined)persistNewTaskAssignees(db.get(),id,[]);
     if(child.assignedUsers!==undefined) {
+      const old=child.id?db.get().prepare('SELECT * FROM tasks WHERE id=?').get(id):null;
+      const proposal=proposedTaskAssigneePolicy(db.get(),old,{assigned_to:child.assignedUsers},{category:old?.category??task.category});
+      if(proposal)persistTaskAssigneePolicy(db.get(),id,proposal,proposal.direct_assignee_ids);
       assertTaskSkillAssignments(db.get(),child.skillIds,child.assignedUsers,task.due_date||todayInHouseholdZone(),{allowDelegation:true});
       assertTaskAssignmentAvailability(db.get(),id,child.assignedUsers);
       db.get().prepare('UPDATE tasks SET assigned_to=? WHERE id=?').run(child.assignedUsers[0]??null,id);
@@ -1172,7 +1203,7 @@ function sameTaskActivityBinding(a, b) {
     && Number(a.assignmentOverrideUserId ?? a.assignment_override_user_id ?? 0) === Number(b.assignmentOverrideUserId ?? b.assignment_override_user_id ?? 0);
 }
 
-function validateTaskActivityBindingRequest(binding, dateKey, { allowInactive = false, task = null, activitySnapshot = null } = {}) {
+function validateTaskActivityBindingRequest(binding, dateKey, { allowInactive = false, task = null, activitySnapshot = null,assigneePolicy=undefined } = {}) {
   if (!binding) return null;
   try {
     previewTaskActivityBinding(db.get(), {
@@ -1183,10 +1214,11 @@ function validateTaskActivityBindingRequest(binding, dateKey, { allowInactive = 
       task,
       allowInactive,
       activitySnapshot,
+      assigneePolicy,
     });
     return null;
   } catch (err) {
-    if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
+    if(err.reason==='category_assignee_limit')throw err;
     return err.message;
   }
 }
@@ -1487,6 +1519,7 @@ export function hydrateTask(task, me, supervisionViews = new Map(), starts = nul
   const offer=taskOfferState(db.get(),me,task,{starts});
   addAssignedUsers(task);
   task.subtasks=loadSubtasks(task.id,me,supervisionViews);
+  for(const child of task.subtasks)Object.assign(child,assigneePolicyProjection(db.get(),child.id));
   if(task.parent_task_id)task.parent_revision=db.get().prepare('SELECT revision FROM tasks WHERE id=?').get(task.parent_task_id)?.revision;
   attachTags([task]);attachTaskCapabilities(db.get(),me,[task]);attachTaskSupervision(db.get(),[task],me,supervisionViews);
   Object.assign(task,seriesMetadata(db.get(),task.id));
@@ -1848,6 +1881,7 @@ router.delete('/tags/:tag', (req, res) => {
 // POST /api/v1/tasks/categories  Body: { name } → { data: TaskCategory }
 router.post('/categories', (req, res) => {
   try {
+    const maxAssignees=Object.hasOwn(req.body,'max_assignees')?parseCategoryAssigneeLimit(req.body.max_assignees):null;
     const vName = v.str(req.body.name, 'Name', { max: v.MAX_SHORT });
     if (vName.error) return res.status(400).json({ error: vName.error, code: 400 });
 
@@ -1859,10 +1893,10 @@ router.post('/categories', (req, res) => {
     const maxOrder = db.get().prepare('SELECT COALESCE(MAX(sort_order), -1) AS m FROM task_categories').get().m;
     const key = uniqueKey(db.get(), 'task_categories', vName.value);
     db.get().prepare(
-      'INSERT INTO task_categories (key, name, label_key, sort_order) VALUES (?, ?, NULL, ?)'
-    ).run(key, vName.value, maxOrder + 1);
+      'INSERT INTO task_categories (key, name, label_key, sort_order, max_assignees) VALUES (?, ?, NULL, ?, ?)'
+    ).run(key, vName.value, maxOrder + 1,maxAssignees);
 
-    const cat = db.get().prepare('SELECT key, name, label_key, sort_order FROM task_categories WHERE key = ?').get(key);
+    const cat = db.get().prepare('SELECT key, name, label_key, sort_order, max_assignees FROM task_categories WHERE key = ?').get(key);
     res.status(201).json({ data: cat });
   } catch (err) {
     if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
@@ -1892,16 +1926,19 @@ router.put('/categories/:key', (req, res) => {
     const cat = db.get().prepare('SELECT * FROM task_categories WHERE key = ?').get(req.params.key);
     if (!cat) return res.status(404).json({ error: 'Category not found.', code: 404 });
 
-    const vName = v.str(req.body.name, 'Name', { max: v.MAX_SHORT });
+    const maxAssignees=Object.hasOwn(req.body,'max_assignees')?parseCategoryAssigneeLimit(req.body.max_assignees):cat.max_assignees;
+    const rename=Object.hasOwn(req.body,'name');
+    if(!rename&&!Object.hasOwn(req.body,'max_assignees'))return res.status(400).json({error:'Choose a name or assignee limit.',code:400});
+    const vName = rename?v.str(req.body.name, 'Name', { max: v.MAX_SHORT }):{value:cat.name};
     if (vName.error) return res.status(400).json({ error: vName.error, code: 400 });
 
     const conflict = db.get().prepare(`
       SELECT key FROM task_categories WHERE COALESCE(name, key) = ? COLLATE NOCASE AND key != ?
     `).get(vName.value, cat.key);
-    if (conflict) return res.status(409).json({ error: 'Category already exists.', code: 409, reason: 'category_exists' });
+    if (rename&&conflict) return res.status(409).json({ error: 'Category already exists.', code: 409, reason: 'category_exists' });
 
-    db.get().prepare('UPDATE task_categories SET name = ?, label_key = NULL WHERE key = ?').run(vName.value, cat.key);
-    const updated = db.get().prepare('SELECT key, name, label_key, sort_order FROM task_categories WHERE key = ?').get(cat.key);
+    db.get().prepare('UPDATE task_categories SET name=?, label_key=?, max_assignees=? WHERE key=?').run(vName.value,rename?null:cat.label_key,maxAssignees,cat.key);
+    const updated = db.get().prepare('SELECT key, name, label_key, sort_order, max_assignees FROM task_categories WHERE key = ?').get(cat.key);
     res.json({ data: updated });
   } catch (err) {
     if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
@@ -2268,7 +2305,7 @@ export function createTaskDefinition(req, res) {
     if (activityBinding && parent_task_id) {
       return res.status(400).json({ error: 'Activity templates can only be attached to top-level tasks.', code: 400 });
     }
-    const bindingError = validateTaskActivityBindingRequest(activityBinding, due_date || todayInHouseholdZone(), { task: { start_date, start_time, due_date, due_time } });
+    const bindingError = validateTaskActivityBindingRequest(activityBinding, due_date || todayInHouseholdZone(), { task: { category,start_date, start_time, due_date, due_time } });
     if (bindingError) return res.status(400).json({ error: bindingError, code: 400 });
 
     const taskLocation = req.body.location === undefined
@@ -2311,6 +2348,7 @@ export function createTaskDefinition(req, res) {
       ? [rotationUserIds[activeRotationPosition]]
       : requestedUserIds;
     const firstUid = userIds[0] ?? null;
+    if(!activityBinding)proposedTaskAssigneePolicy(db.get(),null,req.body,{category,directIds:userIds});
     if (!activityBinding) assertTaskSkillAssignments(db.get(), skillIds,
       assignmentMode === 'round_robin' ? rotationUserIds : userIds, due_date || todayInHouseholdZone(), {allowDelegation:!!parent_task_id});
 
@@ -2379,6 +2417,7 @@ export function createTaskDefinition(req, res) {
       );
       assignNewTaskCardColor(db.get(),result.lastInsertRowid,req.body.card_color_choice?{choice:req.body.card_color_choice}:parent_task_id?{inheritFrom:parent_task_id}:{});
       setAssignments(db.get(), result.lastInsertRowid, userIds);
+      if(!activityBinding)persistNewTaskAssignees(db.get(),result.lastInsertRowid,userIds);
       authoredRotationFields.set(Number(result.lastInsertRowid),{title,description});
       db.get().prepare('UPDATE tasks SET rotation_bindings_json=? WHERE id=?').run(JSON.stringify(rotationBindings),result.lastInsertRowid);
       setTaskSkills(db.get(), result.lastInsertRowid, skillIds);
@@ -2404,6 +2443,7 @@ export function createTaskDefinition(req, res) {
           const childId = Number(insertChild.run(child.title, category, req.authUserId || req.session.userId,
             result.lastInsertRowid, start_date, due_date, due_time, visibility, start_time, child.isOptional ?? 0, child.points ?? 0).lastInsertRowid);
           assignNewTaskCardColor(db.get(),childId,{inheritFrom:result.lastInsertRowid});
+          persistNewTaskAssignees(db.get(),childId,child.assignedUsers??[]);
           authoredRotationFields.set(childId,{title:child.title});
           setTaskSkills(db.get(), childId, child.skillIds);
           if(child.templateItemId)db.get().prepare('UPDATE tasks SET activity_template_checklist_item_id=? WHERE id=?').run(child.templateItemId,childId);
@@ -2497,6 +2537,9 @@ router.post('/:id/scoring-preview',(req,res)=>{
         if(series)assertSeriesEdit(db.get(),req,task,series,req.body.expected_series_revision);
         else if(scope==='future')assertSeriesEdit(db.get(),req,task,series,req.body.expected_series_revision);
         const edited=editedSubtasksInput(task,req.body,req,{definitionOnly:historical});
+        if(!getTaskActivityBinding(db.get(),task.id)&&!req.body.activity_template_id)proposedTaskAssigneePolicy(db.get(),task,req.body,{directIds:scoringAssignmentIntent(task,req.body).assigned});
+        const currentBinding=getTaskActivityBinding(db.get(),task.id);if(currentBinding&&sameTaskActivityBinding(parseTaskActivityBinding(req.body,currentBinding).binding,currentBinding))proposedBoundTaskCategoryPolicy(db.get(),task,req.body,readTaskActivityDefinition(db.get(),task.id),currentBinding);
+        for(const child of edited?.next||[]){const previous=child.id?db.get().prepare('SELECT * FROM tasks WHERE id=?').get(child.id):null;proposedTaskAssigneePolicy(db.get(),previous,child.assignedUsers===undefined?{}:{assigned_to:child.assignedUsers},{category:previous?.category??req.body.category??task.category,directIds:child.assignedUsers??[]});}
         assertScoringProgressIntent(task,req.body,edited);
         let proposed;
         if(series){
@@ -2509,9 +2552,9 @@ router.post('/:id/scoring-preview',(req,res)=>{
           if(historical)preview=previewFutureDefinitions(req,task,before,proposed,{scope,viewerId,authorizedTaskIds});
         }
         if(!historical){
-        const wire=scoringMutationWire(req.body,edited);
+        const wire=scoringMutationWire(req.body,edited,task);
         const assignment=scoringAssignmentIntent(task,req.body);
-        if(assignment.changed||assignment.bindingChanged)wire.assigned_to=assignment.assigned;
+        if(assignment.changed||assignment.bindingChanged)wire.assigned_to=draftVisibilityAssignees(task,req.body,assignment.assigned,edited);
         // A full editor sends [] for policy-managed assignments. When Save
         // preserves current responsibility, that placeholder is not a removal.
         else if(!Object.hasOwn(req.body,'assigned_to')||!parseAssignedTo(req.body.assigned_to).length)delete wire.assigned_to;
@@ -2648,7 +2691,7 @@ export function updateTaskDefinition(req, res) {
     }
     if (bindingChanged && desiredActivityBinding) {
       const bindingError = validateTaskActivityBindingRequest(desiredActivityBinding, due_date || todayInHouseholdZone(), {
-        task: { start_date, start_time, due_date, due_time },
+        task: { category,start_date, start_time, due_date, due_time },assigneePolicy:categoryAssigneePolicy(db.get(),category),
         activitySnapshot:existingActivityBinding?.activity_template_id===desiredActivityBinding.activityTemplateId
           ? {...readTaskActivityDefinition(db.get(),task.id),required_skill_ids:skillIds}:null });
       if (bindingError) return res.status(400).json({ error: bindingError, code: 400 });
@@ -2728,21 +2771,24 @@ export function updateTaskDefinition(req, res) {
     }
     const firstUid = req.body.assigned_to === undefined && assignmentMode === 'fixed'
       ? task.assigned_to : (userIds[0] ?? null);
+    const directSelection=taskDirectAssignmentSelection(db.get(),task,req.body);
+    const directChanged=!desiredActivityBinding&&!sameIdOrder(directSelection.previous,directSelection.selected);
+    const independentIds=directChanged?directSelection.selected:independentlyAssignedTaskMembers(task.id,userIds,assignedBefore,firstUid);
     if (!desiredActivityBinding && (!sameIdOrder(skillIds, skillsBefore) || !sameIdOrder(userIds, assignedBefore)
         || firstUid !== task.assigned_to || !sameIdOrder(rotationUserIds, rotationBefore)
-        || bindingChanged || due_date !== task.due_date)) {
+        || directChanged || bindingChanged || due_date !== task.due_date)) {
       assertTaskSkillAssignments(db.get(), skillIds,
         assignmentMode === 'round_robin' ? rotationUserIds
-          : independentlyAssignedTaskMembers(task.id, userIds, assignedBefore, firstUid),
+          : independentIds,
         due_date || todayInHouseholdZone(), {allowDelegation:!!task.parent_task_id});
     }
-    const performersChanged = !desiredActivityBinding && (!sameIdOrder(userIds, assignedBefore) || firstUid !== task.assigned_to);
+    const performersChanged = !desiredActivityBinding && (directChanged || !sameIdOrder(userIds, assignedBefore) || firstUid !== task.assigned_to);
     if (!historicalSeriesOnly && !bindingChanged && status !== 'done' && (taskWindowChanged || performersChanged)) {
       // Keep the occurrence's policy, including authored supervisor Tasks
       // without an Activity binding. Reapplying an Activity would advance its
       // rotation; validate the resulting people/window without rewriting work.
       assertTaskAssignmentAvailability(db.get(), task.id,
-        performersChanged ? independentlyAssignedTaskMembers(task.id, userIds, assignedBefore, firstUid) : null,
+        performersChanged ? independentIds : null,
         { task: { start_date, start_time, due_date, due_time, assigned_to: firstUid } });
     }
 
@@ -2813,8 +2859,9 @@ export function updateTaskDefinition(req, res) {
       // ein Kind die Aufgabe einfach seinem Geschwister zu, und die Sperre
       // haette den Fall nicht gehalten, um den es hier geht.
       const me = req.authUserId || req.session.userId;
-      const othersBefore = assignedBefore.filter((id) => id !== me);
-      const othersAfter  = userIds.filter((id) => id !== me);
+      const direct=taskDirectAssignmentSelection(db.get(),task,req.body);
+      const othersBefore = direct.previous.filter((id) => id !== me);
+      const othersAfter  = direct.selected.filter((id) => id !== me);
       if (othersBefore.length !== othersAfter.length
           || othersBefore.some((id) => !othersAfter.includes(id))) touchesDefinition = true;
 
@@ -2833,7 +2880,8 @@ export function updateTaskDefinition(req, res) {
         ||child.points!==Number(currentChildren[index]?.points||0)
         ||child.assignedUsers!==undefined&&!sameIdOrder(child.assignedUsers,db.get().prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(child.id).map(row=>row.user_id))
         ||!sameIdOrder(child.skillIds,loadTaskSkillIds(db.get(),child.id))));
-    const definitionChanged=req.body.card_color_choice!==undefined||Object.entries(definitionFields).some(([key,value])=>!sameFieldValue(value,task[key]))
+    const countProposal=!desiredActivityBinding?proposedTaskAssigneePolicy(db.get(),task,req.body,{category,directIds:userIds}):!bindingChanged?proposedBoundTaskCategoryPolicy(db.get(),task,req.body,readTaskActivityDefinition(db.get(),task.id),existingActivityBinding):null;
+    const definitionChanged=!!countProposal||req.body.card_color_choice!==undefined||Object.entries(definitionFields).some(([key,value])=>!sameFieldValue(value,task[key]))
       ||childrenChanged||bindingChanged||!sameIdOrder(skillIds,skillsBefore)
       ||!sameIdOrder(userIds,assignedBefore)||!sameIdOrder(rotationUserIds,rotationBefore)
       ||req.body.tags!==undefined&&tagsKey(normalizeTags(req.body.tags))!==tagsKey(tagsBefore)
@@ -2871,7 +2919,7 @@ export function updateTaskDefinition(req, res) {
       }
       if(historicalSeriesOnly) {
         const definition=compatibleFutureDefinition(req,current,series,beforeDefinition,editedSubtasks);
-        assertCompatibleFutureDefinition(req,current,series,definition);
+        assertCompatibleFutureDefinition(req,current,series,definition,{deferRandomBinding:true});
         const createdActions=finalizeFutureActionKeys(definition);
         const revised=appendSeriesDefinition(db.get(),current.id,{expectedRevision:req.body.expected_series_revision,
           actorId:req.authUserId||req.session.userId,definition});
@@ -2893,7 +2941,9 @@ export function updateTaskDefinition(req, res) {
             definition:enriched,effectiveGeneration:series.occurrence.generation+1});
         }
       }
-      assertTaskScoringMutation(db.get(),current.id,scoringMutationWire(req.body,editedSubtasks),{scope:editScope});
+      assertTaskScoringMutation(db.get(),current.id,scoringMutationWire(req.body,editedSubtasks,current),{scope:editScope});
+      const proposal=!desiredActivityBinding?proposedTaskAssigneePolicy(db.get(),current,req.body,{category,directIds:userIds}):!bindingChanged?proposedBoundTaskCategoryPolicy(db.get(),current,req.body,readTaskActivityDefinition(db.get(),current.id),existingActivityBinding):null;
+      if(proposal)persistTaskAssigneePolicy(db.get(),current.id,proposal,proposal.direct_assignee_ids);
       assertTaskWindowAction(db.get(),current.id);
       if(tripTaskState(db.get(),current.id)&&(is_recurring||desiredActivityBinding||rotationBindings.length))
         throw new TaskStateError('Trip work uses an ordinary one-off Task. Manage its schedule in Trips.',{},400);
@@ -2951,6 +3001,7 @@ export function updateTaskDefinition(req, res) {
             activityTemplateId: desiredActivityBinding.activityTemplateId,
             subjectUserId: desiredActivityBinding.subjectUserId,
             assignmentOverrideUserId: desiredActivityBinding.assignmentOverrideUserId,
+            adoptAssigneePolicy: true,
             commitRotation: true,
             dateKey: due_date || todayInHouseholdZone(),
             activitySnapshot:existingActivityBinding?.activity_template_id===desiredActivityBinding.activityTemplateId
@@ -2985,7 +3036,7 @@ export function updateTaskDefinition(req, res) {
           const definition=normalizeSeriesSchedule(captureSeriesDefinition(db.get(),task.id),series.occurrence);
           const colorBase=seriesDefinitionForGeneration(db.get(),series.series_id,series.occurrence.generation+1)?.data||series.definition.data;
           preserveFutureCardColorPolicies(definition,colorBase,req.body.card_color_choice);
-          assertCompatibleFutureDefinition(req,current,series,definition);
+          assertCompatibleFutureDefinition(req,current,series,definition,{capturedDirectIds:definition.assignee_policy?.direct_assignee_ids??null});
           const revised=appendSeriesDefinition(db.get(),task.id,{expectedRevision:req.body.expected_series_revision,
             actorId:req.authUserId||req.session.userId,definition});
           const occurrence=recordOccurrenceDefinition(db.get(),task.id,{definitionId:revised.definition.id,
@@ -3337,6 +3388,7 @@ function spawnRecurrenceFollowupSingle(task, {expirationAnchor=false}={}) {
     registerRecurrenceOccurrence(db.get(),Number(newTask.lastInsertRowid),{predecessorId:task.id});
     db.get().prepare('UPDATE tasks SET rotation_bindings_json=? WHERE id=?').run(task.rotation_bindings_json||'[]',newTask.lastInsertRowid);
     setAssignments(db.get(), newTask.lastInsertRowid, followupAssignments);
+    persistCapturedTaskAssignees(db.get(),newTask.lastInsertRowid,definition.assignee_policy,followupAssignments,{rotating:task.assignment_mode==='round_robin'});
     setRotationMembers(db.get(), newTask.lastInsertRowid, task.assignment_mode === 'round_robin' ? rotationUserIds : []);
     setTags(db.get(), newTask.lastInsertRowid, existingTags);
     setTaskSkills(db.get(), newTask.lastInsertRowid,definition.skill_ids);
@@ -3370,6 +3422,7 @@ function spawnRecurrenceFollowupSingle(task, {expirationAnchor=false}={}) {
       assignNewTaskCardColor(db.get(),newSub.lastInsertRowid,childColor?{choice:childColor}:{inheritFrom:newTask.lastInsertRowid});
       registerSeriesAction(db.get(),Number(newSub.lastInsertRowid),Number(newTask.lastInsertRowid),savedSub.action_key);
       setAssignments(db.get(), newSub.lastInsertRowid, subAssignments);
+      persistCapturedTaskAssignees(db.get(),newSub.lastInsertRowid,savedSub.assignee_policy,subAssignments);
       setTags(db.get(), newSub.lastInsertRowid, subTags);
       setTaskSkills(db.get(),newSub.lastInsertRowid,savedSub.skill_ids);
       notifyTaskAssignments(db.get(), Number(newSub.lastInsertRowid));

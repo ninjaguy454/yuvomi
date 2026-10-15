@@ -1,4 +1,5 @@
 import { memberLabel } from '/utils/member-label.js';
+import {assigneePolicyLabel} from '/utils/task-assignee-policy.js';
 import { openTaskPersonCard, taskPersonInitials } from '/components/task-person-card.js';
 import { claimTask } from '/components/device-task-claim.js';
 import { approveDeviceTask, canApproveDeviceTask } from '/components/device-approval.js';
@@ -729,7 +730,7 @@ function taskDetailDefinitionKey(task) {
   const fields = ['title', 'description', 'tags', 'documents', 'priority', 'start_date', 'start_time', 'due_date', 'due_time',
     'expiration_policy', 'expired_at', 'archived_at', 'recurrence_rule', 'recurrence_from_completion', 'is_recurring',
     'category', 'required_skills', 'skill_ids', 'skills', 'skill_eligibility', 'location', 'assigned_to', 'assigned_users', 'assigned_name', 'assigned_color', 'assigned_avatar',
-    'locked', 'visibility', 'countdown', 'action_link', 'permissions'];
+    'locked', 'visibility', 'countdown', 'action_link', 'permissions','assignee_policy','direct_assignee_ids'];
   return JSON.stringify(Object.fromEntries(Object.entries(task).filter(([key]) => fields.includes(key) || key.startsWith('activity_') && key !== 'activity_assignment_state')));
 }
 
@@ -1349,6 +1350,7 @@ function metadataNode(task, ctx, reminders) {
     ['After expiration', task.expiration_policy === 'expire_incomplete' && task.is_recurring ? task.recurrence_from_completion ? 'Repeat from completion pauses until this occurrence is reopened and completed.' : 'The next occurrence keeps its scheduled date and time.' : null],
     [recurrence?.label || 'Repeats', recurrence?.node || recurrence?.value],
     [t('tasks.categoryLabel'), task.category && task.category !== FALLBACK_CATEGORY ? catLabel(task.category, ctx.categories) : null],
+    [t('tasks.categoryAssigneeLimit'), task.assignee_policy?assigneePolicyLabel(task.assignee_policy,t):null],
     ['Required skills', taskSkillSummary(task, ctx)],
     [t('tasks.locationLabel'), taskLocationNode(task, ctx)],
     ['Availability / Presence', presenceSummary(task)],

@@ -1,4 +1,5 @@
 import {assignNewTaskCardColor} from './task-card-colors.js';
+import {persistNewTaskAssignees,updateCapturedDirectAssignees} from './task-assignee-policy.js';
 import {assertCycleMealWrite,cycleForMeal} from './meal-cycle-guards.js';
 import {mealDishPortionSummary,recipeIngredientsForPortions} from './meal-dishes.js';
 import {actorPermissions} from '../permissions.js';
@@ -409,6 +410,7 @@ function taskDescription(meal, role) {
 }
 
 function setTaskAssignment(database, taskId, resolution, role) {
+  updateCapturedDirectAssignees(database,taskId,resolution?.assignment?.user_id?[Number(resolution.assignment.user_id)]:[]);
   const previousIds = database.prepare('SELECT user_id FROM task_assignments WHERE task_id = ?').all(taskId).map((row) => row.user_id);
   const assignment = resolution?.assignment || null;
   database.prepare('DELETE FROM task_assignments WHERE task_id = ?').run(taskId);
@@ -582,6 +584,7 @@ function ensureMealExecution(database, mealId, actorId, settings = getSettings(d
         );
         const taskId = Number(taskInfo.lastInsertRowid);
         assignNewTaskCardColor(database,taskId);
+        persistNewTaskAssignees(database,taskId,assignment?.user_id?[Number(assignment.user_id)]:[]);
         setTaskAssignment(database, taskId, resolution, role);
         insertOutput.run(
           snapshot.id, meal.id, role, outputKey, taskId, assignment?.user_id || null,

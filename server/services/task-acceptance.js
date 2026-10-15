@@ -7,6 +7,7 @@ import {acceptanceAuthority,assertAcceptanceMember,authorizedAcceptanceChildren,
 import {assertTaskRevision,recordTaskActivity} from './task-lifecycle.js';
 import {claimTask,assertTaskAssignmentAvailability} from './assignment-responsibilities.js';
 import {setTaskAssignments} from './task-assignments.js';
+import {readTaskAssigneePolicy,categoryAssigneePolicy,assertAssigneeCount,persistTaskAssigneePolicy} from './task-assignee-policy.js';
 import {reconcileTaskSupervision,inspectTaskSupervision} from './task-supervision.js';
 import {notifyTaskClaim,notifyTaskAssignments} from './notification-events.js';
 import {markTodoOutbound} from './caldav-todo-outbound.js';
@@ -52,6 +53,8 @@ export function acceptTask(d,principal,taskId,body){
     if(!device&&body.primary_user_id!==undefined&&body.primary_user_id!==primary)throw acceptanceError('Accept this Task as your signed-in account.',403,'primary_not_self');
     if(body.coassignee_ids.includes(primary))throw acceptanceError('The primary recipient cannot also be a co-assignee.',400,'invalid_request');
     const selected=[primary,...body.coassignee_ids];for(const member of selected)assertAcceptanceMember(d,p,task,member);
+    const savedPolicy=readTaskAssigneePolicy(d,taskId),countPolicy=categoryAssigneePolicy(d,task.category);
+    const direct=[...new Set([...(savedPolicy?.direct_assignee_ids||[]),...selected])];assertAssigneeCount(countPolicy,direct);
     const children=authorizedAcceptanceChildren(d,p,task),snapshot=children.map(c=>({id:c.id,revision:c.revision})).sort((a,b)=>a.id-b.id);
     if(JSON.stringify(snapshot)!==JSON.stringify([...body.subtask_snapshot].sort((a,b)=>a.id-b.id)))throw acceptanceError('The subtasks changed. Reload the Task before accepting.',409,'stale_subtasks');
     if(body.subtask_assignments.some(row=>row.user_id!==null)&&!body.coassignee_ids.length)throw acceptanceError('Subtask allocation is available when accepting with co-assignees.',400,'invalid_request');
@@ -70,10 +73,12 @@ export function acceptTask(d,principal,taskId,body){
     else d.prepare('UPDATE tasks SET assigned_to=? WHERE id=?').run(primary,taskId);
     const existing=d.prepare('SELECT user_id FROM task_assignments WHERE task_id=?').all(taskId).map(r=>r.user_id);
     setTaskAssignments(d,taskId,[...new Set([...existing,...selected])]);
+    persistTaskAssigneePolicy(d,taskId,countPolicy,direct);
     responsibility(d,taskId,primary,'primary');for(const member of selected)responsibility(d,taskId,member,'participant');
     for(const {child,userId} of allocations){
       d.prepare('UPDATE tasks SET assigned_to=? WHERE id=?').run(userId,child.id);
       setTaskAssignments(d,child.id,[userId]);
+      persistTaskAssigneePolicy(d,child.id,categoryAssigneePolicy(d,child.category),[userId]);
       markTodoOutbound('tasks',child,d.prepare('SELECT * FROM tasks WHERE id=?').get(child.id));
     }
     reconcileTaskSupervision(d,taskId,{actorId:actor});

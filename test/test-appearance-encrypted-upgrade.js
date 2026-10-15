@@ -14,11 +14,12 @@ const {ALL_MIGRATIONS}=await import('../server/db.js');
 const candidateVersion=Math.max(...ALL_MIGRATIONS.map(migration=>migration.version));
 function open(file){const d=new Database(file);d.pragma("cipher='sqlcipher'");d.pragma(`key="x'${Buffer.from(key,'utf8').toString('hex')}'"`);d.pragma('foreign_keys=ON');return d;}
 function snapshot(d){
-  const tables=d.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all();
+  const tables=d.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all()
+    .filter(row=>!['task_assignee_policies','task_direct_assignees'].includes(row.name));
   return Object.fromEntries(tables.map(({name})=>{
     const rows=d.prepare(`SELECT * FROM "${name}"`).all().filter(row=>name!=='schema_migrations'||row.version<=10058);
     const values=rows.map(row=>{
-      const fields=Object.entries(row).filter(([field])=>!['card_color','card_color_choice','card_color_slot'].includes(field));
+      const fields=Object.entries(row).filter(([field])=>!['card_color','card_color_choice','card_color_slot','max_assignees'].includes(field));
       return JSON.stringify(Object.fromEntries(fields.sort(([a],[b])=>a.localeCompare(b))));
     });
     return[name,values.sort()];
@@ -46,6 +47,11 @@ test('encrypted10058 upgrade, reopen and old/new backup restore conserve every e
   const db=await import('../server/db.js?synthetic-appearance-upgrade=1');let current=db.get();
   assert.equal(db.currentVersion(),candidateVersion);assert.equal(current.prepare('SELECT count(*) n FROM schema_migrations').get().n,ALL_MIGRATIONS.length);
   assert.deepEqual(snapshot(current),before,'upgrade neither recolors nor rewrites existing rows');
+  // Later additive policy schema is checked separately, without masking any
+  // historical row changes in this Appearance conservation projection.
+  assert.equal(current.prepare('SELECT count(*) n FROM task_assignee_policies').get().n,0);
+  assert.equal(current.prepare('SELECT count(*) n FROM task_direct_assignees').get().n,0);
+  assert.ok(current.prepare('SELECT max_assignees FROM task_categories').all().every(row=>row.max_assignees===null));
   assert.deepEqual(current.prepare('SELECT card_color,card_color_choice FROM tasks ORDER BY id').all(),[{card_color:null,card_color_choice:null},{card_color:null,card_color_choice:null}]);
   assert.deepEqual(current.prepare('SELECT color,card_color_slot FROM notes WHERE id=1').get(),{color:'#123456',card_color_slot:null});
   await db.backupToFile(newBackup);encrypted(newBackup);

@@ -293,6 +293,10 @@
         "optionCalendarBirthdaysHint": "Без галочки дни рождения не показываются в этой карточке, в календаре они остаются."
     },
     "tasks": {
+        "categoryAssigneeLimit": "Лимит назначенных исполнителей",
+        "assigneeNoLimit": "Без ограничений",
+        "assigneeExisting": "Текущие назначения сохраняются, пока вы не измените категорию или исполнителей.",
+        "assigneeLimitExceeded": "Лимит исполнителей в этой категории — {{count}}. Выберите меньше людей или измените категорию.",
         "scoringNoNext": "The next occurrence is not yet available.",
         "scoringEnded": "The recurrence schedule has ended.",
         "scoringTargetPreserved": "The existing next occurrence is preserved and will not be overwritten.",

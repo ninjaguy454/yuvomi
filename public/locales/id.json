@@ -305,6 +305,10 @@
         "optionCalendarBirthdaysHint": "Tanpa centang, ulang tahun tidak muncul di kartu ini - di kalender tetap ada."
     },
     "tasks": {
+        "categoryAssigneeLimit": "Batas orang yang ditugaskan",
+        "assigneeNoLimit": "Tanpa batas",
+        "assigneeExisting": "Penugasan yang ada tetap sama sampai Anda mengubah kategori atau orangnya.",
+        "assigneeLimitExceeded": "Batas orang yang ditugaskan untuk kategori ini adalah {{count}}. Pilih lebih sedikit orang atau ubah kategorinya.",
         "scoringNoNext": "The next occurrence is not yet available.",
         "scoringEnded": "The recurrence schedule has ended.",
         "scoringTargetPreserved": "The existing next occurrence is preserved and will not be overwritten.",

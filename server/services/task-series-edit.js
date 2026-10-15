@@ -1,3 +1,4 @@
+import {persistCapturedTaskAssignees} from './task-assignee-policy.js';
 /** Transactional reconciliation of already materialized series occurrences.
  * The existing recurrence generator remains the only generator. */
 import {assignNewTaskCardColor} from './task-card-colors.js';
@@ -34,6 +35,9 @@ export function sameSeriesBindingPolicy(left,right,{includeRequirements=false}={
       if(includeRequirements)value.snapshot.required_skill_ids=[...value.snapshot.required_skill_ids].sort((a,b)=>a-b);
       else delete value.snapshot.required_skill_ids;
       delete value.snapshot.checklist;delete value.snapshot.rotation_rendering;
+      // readTaskActivityDefinition adds the bound subject as runtime context.
+      // The binding's subject_user_id already owns that authored selection.
+      delete value.snapshot.subject_user_id;
     }
     return value;
   };
@@ -205,7 +209,8 @@ export function assertSeriesDefinitionMutation(d,actor,task,before,after,{future
       requireCapability(capabilities,'change_required_skills');
     if(!same(old.tags,newValue.tags))requireCapability(capabilities,'change_category_tags');
     const dynamicAssignment=old.binding&&newValue.binding||old.task?.assignment_mode==='round_robin'&&newValue.task?.assignment_mode==='round_robin';
-    if(!dynamicAssignment&&!same(old.assigned_user_ids,newValue.assigned_user_ids)||!same(old.rotation_user_ids,newValue.rotation_user_ids)) {
+    const directChanged=!same(old.assignee_policy?.direct_assignee_ids??old.assigned_user_ids,newValue.assignee_policy?.direct_assignee_ids??newValue.assigned_user_ids);
+    if(!dynamicAssignment&&(!same(old.assigned_user_ids,newValue.assigned_user_ids)||directChanged)||!same(old.rotation_user_ids,newValue.rotation_user_ids)) {
       requireCapability(capabilities,'change_assignment');requireCapability(capabilities,'reassign');
     }
   };
@@ -298,6 +303,7 @@ function reconcileOccurrence(d,task,definition,window,actor) {
   const assigned=retainBinding?(task.assigned_to?[task.assigned_to,...actualAssigned.filter(id=>id!==task.assigned_to)]:actualAssigned)
     :seriesRotationAssignment(task,data).assigned_user_ids;
   const body={...fields,assigned_to:assigned,skill_ids:data.skill_ids,tags:data.tags,subtasks:[]};
+  persistCapturedTaskAssignees(d,task.id,data.assignee_policy,assigned,{rotating:fields.assignment_mode==='round_robin'});
   assertTaskMutation(d,actor,task,body,{operation:'update'});
   const capabilities=taskCapabilities(d,actor,task);
   if(!capabilities.edit||!capabilities.change_dates)throw new TaskStateError('This future occurrence cannot be edited with your permissions.',{},403);
@@ -337,6 +343,7 @@ function reconcileOccurrence(d,task,definition,window,actor) {
       VALUES(${ACTION_FIELDS.map(()=>'?').join(',')},'open',?,?)`).run(...ACTION_FIELDS.map(key=>value[key]??null),task.id,creator).lastInsertRowid);assignNewTaskCardColor(d,id,action.task.card_color_policy?{choice:action.task.card_color_policy}:{inheritFrom:task.id});}
     registerSeriesAction(d,id,task.id,action.action_key);
     assignments(d,id,action.assigned_user_ids);setTaskSkills(d,id,action.skill_ids);setTags(d,id,action.tags);
+    persistCapturedTaskAssignees(d,id,action.assignee_policy,action.assigned_user_ids);
   }
   // A pristine bound target already consumed its turn. Preserve that actual
   // assignment when its policy is unchanged, then re-evaluate supervision

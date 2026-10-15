@@ -305,6 +305,10 @@
         "optionCalendarBirthdaysHint": "Kapag hindi nakatsek, hindi lumalabas ang mga kaarawan sa tile na ito - nasa kalendaryo pa rin sila."
     },
     "tasks": {
+        "categoryAssigneeLimit": "Limitasyon ng mga nakatalaga",
+        "assigneeNoLimit": "Walang limitasyon",
+        "assigneeExisting": "Mananatili ang kasalukuyang mga nakatalaga hanggang baguhin mo ang kategorya o mga tao.",
+        "assigneeLimitExceeded": "Ang limitasyon ng mga nakatalaga sa kategoryang ito ay {{count}}. Pumili ng mas kaunting tao o baguhin ang kategorya.",
         "scoringNoNext": "The next occurrence is not yet available.",
         "scoringEnded": "The recurrence schedule has ended.",
         "scoringTargetPreserved": "The existing next occurrence is preserved and will not be overwritten.",

@@ -293,6 +293,10 @@
         "optionCalendarBirthdaysHint": "Utan bock hålls födelsedagar utanför den här rutan - i kalendern står de kvar."
     },
     "tasks": {
+        "categoryAssigneeLimit": "Gräns för tilldelade personer",
+        "assigneeNoLimit": "Ingen gräns",
+        "assigneeExisting": "Befintliga tilldelningar behålls tills du ändrar kategorin eller personerna.",
+        "assigneeLimitExceeded": "Den här kategorin tillåter högst {{count}} personer. Välj färre personer eller byt kategori.",
         "scoringNoNext": "The next occurrence is not yet available.",
         "scoringEnded": "The recurrence schedule has ended.",
         "scoringTargetPreserved": "The existing next occurrence is preserved and will not be overwritten.",

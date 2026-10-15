@@ -10,6 +10,7 @@ import { taskScopeWhere, taskStartProjection } from './task-scope.js';
 import {listTaskOffers,taskOfferState} from './task-offers.js';
 import { taskWindowAncestors } from './task-window.js';
 import { taskScoringSummary } from './task-scoring.js';
+import {assigneePolicyProjection} from './task-assignee-policy.js';
 
 const fail = (message, status=403) => {throw Object.assign(new Error(message),{status,code:status});};
 const pick = (value, keys) => Object.fromEntries(keys.filter(key=>value[key]!==undefined).map(key=>[key,value[key]]));
@@ -41,6 +42,7 @@ function project(d,principal,row,cache=new Map(),seen=new Set()) {
   if(seen.has(row.id))return null;
   seen.add(row.id);
   const out=pick(row,keys);
+  Object.assign(out,assigneePolicyProjection(d,row.id));
   out.assigned_users=assignees(d,row).map(member);
   out.assigned_name=out.assigned_users.find(user=>user.id===row.assigned_to)?.display_name || out.assigned_users[0]?.display_name || null;
   out.effective_assignee_id=row.assigned_to ?? out.assigned_users[0]?.id ?? null;

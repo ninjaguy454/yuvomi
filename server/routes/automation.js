@@ -244,6 +244,9 @@ function normalizeActivityInput(d, body, existing = null) {
   });
   if(scoringMode==null&&checklist.some(item=>item.points>0))throw new Error('Choose Whole task or Each subtask before configuring subtask points.');
 
+  const participantCount=intOrNull(body.participant_count ?? existing?.participant_count ?? 1,{min:1,max:50});
+  if(!existing||category!==existing.category||assignmentStrategy!==(existing.assignment_policy||existing.assignment_strategy)||participantCount!==existing.participant_count)
+    assertActivityAssigneePolicy(categoryAssigneePolicy(d,category),{participant_count:participantCount},{strategy:assignmentStrategy});
   return {
     rotationBindings: normalizeRotationBindings(d, body.rotation_bindings ?? existing?.rotation_bindings ?? []),
     name,
@@ -260,7 +263,7 @@ function normalizeActivityInput(d, body, existing = null) {
     legacyAssignmentStrategy: ['subject_skill', 'eligible_round_robin', 'fixed'].includes(assignmentStrategy)
       ? assignmentStrategy : 'eligible_round_robin',
     allowAssignmentOverride: bool(body.allow_assignment_override, existing ? !!existing.allow_assignment_override : true),
-    participantCount: intOrNull(body.participant_count ?? existing?.participant_count ?? 1, { min: 1, max: 50 }),
+    participantCount,
     rotationGroup: text(body.rotation_group ?? existing?.rotation_group, { max: 100 }),
     subjectRequired,
     fixedUserId: assignmentStrategy === 'fixed' ? fixedUserId : null,
@@ -686,6 +689,7 @@ function variableCandidate(input, id) {
 }
 
 function expressionErrorResponse(res, error, extra = {}) {
+  if(error.reason==='category_assignee_limit')return res.status(400).json({error:error.message,code:400,...error.details,...extra});
   if (error.status === 403 || error.status === 404) return res.status(error.status).json({ error: error.message, code: error.status });
   const missing = error.code === 'missing_input';
   return res.status(missing ? 422 : 400).json({ error: error.message, code: missing ? 422 : 400,
@@ -1441,7 +1445,7 @@ router.get('/admin/activity-templates', requireCapability('activities.view'), (r
       ...rotationPickerData(d, req),
       skills: d.prepare('SELECT * FROM skills WHERE active = 1 ORDER BY name COLLATE NOCASE').all(),
       members: householdMembers(d),
-      categories: d.prepare('SELECT key, name, label_key FROM task_categories ORDER BY sort_order, key').all(),
+      categories: d.prepare('SELECT key, name, label_key, max_assignees FROM task_categories ORDER BY sort_order, key').all(),
       variables: householdVariableRows(d).filter((variable) => variable.active),
       context: SYSTEM_CONTEXT_VARIABLES,
       places: d.prepare('SELECT * FROM places ORDER BY active DESC, name COLLATE NOCASE, id').all(),
@@ -1483,7 +1487,7 @@ router.post('/admin/activity-templates', requireCapability('activities.create'),
     })();
     res.status(201).json({ data: getActivityTemplate(d, id) });
   } catch (err) {
-    res.status(err.status || 400).json({ error: err.message, code: err.status || 400 });
+    res.status(err.status || 400).json({ error: err.message, code: err.status || 400, ...(err.reason==='category_assignee_limit'?err.details:{}) });
   }
 });
 
@@ -1522,7 +1526,7 @@ router.put('/admin/activity-templates/:id', requireCapability('activities.edit')
     })();
     res.json({ data: getActivityTemplate(d, existing.id) });
   } catch (err) {
-    res.status(err.status || 400).json({ error: err.message, code: err.status || 400 });
+    res.status(err.status || 400).json({ error: err.message, code: err.status || 400, ...(err.reason==='category_assignee_limit'?err.details:{}) });
   }
 });
 
@@ -1636,3 +1640,4 @@ router.delete('/admin/workflow-templates/:id', requireCapability('workflows.edit
 });
 
 export default router;
+import {assertActivityAssigneePolicy,categoryAssigneePolicy} from '../services/task-assignee-policy.js';

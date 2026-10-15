@@ -1,4 +1,5 @@
 import { renderPlaceSearch, bindPlaceSearch } from '/components/place-search.js';
+import {taskDirectAssigneeIds,wireTaskAssigneePolicy} from '/utils/task-assignee-policy.js';
 import { memberLabel } from '/utils/member-label.js';
 import { renderTaskCountdown, bindTaskCountdowns } from '/utils/task-countdown.js';
 import { tripTaskDeadline } from '/utils/trip-task-deadline.js';
@@ -1036,7 +1037,7 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
   const presetStartDate = task.start_date;
   const presetDueDate = task.due_date;
 
-  const selectedIds = task?.assigned_users?.map((u) => u.id) ?? (task?.assigned_to ? [task.assigned_to] : []);
+  const selectedIds = taskDirectAssigneeIds(task);
   const rotationIds = task?.rotation_user_ids ?? [];
   const assignmentMode = task?.assignment_mode || 'fixed';
   const rotationGroup = task?.rotation_group || '';
@@ -1089,6 +1090,7 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
           <select class="input" id="task-category" name="category">
             ${categoryOptions}
           </select>
+          <p class="task-field-hint" data-task-assignee-limit></p>
         </div>
 
         ${renderTaskScoringControls(task, isEdit)}
@@ -2346,6 +2348,8 @@ function wireTaskForm(panel, {
 
   applyTaskFormPermissions(panel, task, { skills, subtasks,colorPicker });
   bindTaskScoringForm(form, taskFormControls.get(form));
+  const countControls=taskFormControls.get(form);
+  countControls.assigneePolicy=wireTaskAssigneePolicy(form,{task:()=>countControls.scoringScope==='future_only'&&countControls.futureDefinition?{...task,...countControls.futureDefinition.fields,assigned_users:(countControls.futureDefinition.fields.assigned_to||[]).map(id=>({id}))}:task,categories:state.categories,getIds:()=>getSelectedUserIds(form,'task_assigned'),managed:()=>!!Number(form.querySelector('#task-activity-template')?.value),rotating:()=>form.querySelector('#task-assignment-mode')?.value==='round_robin',rebasing:()=>countControls.rebasing,t});
   if (task) {
     const controls = taskFormControls.get(form);
     controls.editBaseline = readTaskEditState(form, controls);
@@ -2438,6 +2442,7 @@ function applyScoringFormSnapshot(form, controls, snapshot) {
   controls.refreshAssignment?.();
   controls.rootIntent=new Set(snapshot.intent);controls.modeTouched=snapshot.modeTouched;
   controls.rebasing=false;
+  controls.assigneePolicy?.update();
 }
 
 async function changeTaskScoringScope(form, controls, scope) {
@@ -2458,7 +2463,7 @@ async function changeTaskScoringScope(form, controls, scope) {
       controls.futureDefinition=definition;
       const fields=definition.fields;
       const future=controls.scopeSnapshots.get('future_only') || { fields:Object.fromEntries(Object.entries(scoringFormFields).map(([id,key])=>[id,key==='rotation_slot'?Number(fields[key]||0)+1:fields[key]])),
-        mode:fields.scoring_mode,assigned:fields.assigned_to||[],skills:fields.skill_ids||[],subtasks:definition.actions.map(action=>({...action.fields,action_key:action.action_key,permissions:action.permissions})),
+        mode:fields.scoring_mode,assigned:fields.direct_assignee_ids??fields.assigned_to??[],skills:fields.skill_ids||[],subtasks:definition.actions.map(action=>({...action.fields,action_key:action.action_key,permissions:action.permissions})),
         rotationIds:fields.rotation_user_ids||[],bindings:fields.rotation_bindings||[],tags:fields.tags||[],recurrence:fields,intent:[],modeTouched:false };
       applyScoringFormSnapshot(form,controls,future);
       const permissions=definition.permissions;
@@ -2722,6 +2727,7 @@ function openTaskCategoryManager(container) {
       manager.addEventListener('category-manager-changed', onChanged);
       manager.configure({
         basePath: '/tasks/categories',
+        supportsAssigneeLimit: true,
         groups: [{ key: '', addLabelKey: 'tasks.addCategory' }],
         labelResolver: (item) => (item.label_key ? t(item.label_key) : (item.name || item.key)),
         titleKey: 'tasks.manageCategories',
@@ -3040,6 +3046,8 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
   }
 
   const permittedBody=permittedTaskBody(body,controls?.originalTask);
+  if(!managedActivity&&assignmentMode==='fixed'&&Array.isArray(permittedBody.assigned_to))permittedBody.direct_assignee_ids=[...permittedBody.assigned_to];
+  const countError=controls?.assigneePolicy?.validate();if(countError){resetSubmit(countError);return;}
   if(taskId && controls?.editBaseline && hasTaskScoringChanges(controls.editBaseline.definition,readTaskEditState(form,controls).definition)) {
     if(body.status && body.status!==controls.originalTask.status){resetSubmit(t('tasks.scoringSeparate'));return;}
     try { if(!await confirmTaskScoringPreview(form,controls,permittedBody)){submitBtn.disabled=false;submitBtn.textContent=originalLabel;return;} }

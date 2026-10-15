@@ -3,6 +3,7 @@
  * bootstrap or advance an occurrence. */
 import { backfillRecurrenceProvenance, registerRecurrenceOccurrence, registerRecurrenceAction,peekRewardOccurrenceProvenance } from './task-recurrence-frontier.js';
 import {taskCardColorPolicy} from './task-card-colors.js';
+import {readTaskAssigneePolicy} from './task-assignee-policy.js';
 import {normalizeCardColorChoice} from '../../public/utils/card-colors.js';
 import { addCalendarDays } from './activity-schedule.js';
 import { nextDueAfterCompletion, nextDueAfterExpiration, nextOccurrenceAfter, parseRRule } from './recurrence.js';
@@ -153,9 +154,11 @@ export function registerSeriesAction(d,taskId,occurrenceTaskId,actionKey) {
 }
 
 function extras(d,id) {
+  const assignee_policy=readTaskAssigneePolicy(d,id);
   const assignments=d.prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(id).map(row=>row.user_id);
   const primary=d.prepare('SELECT assigned_to FROM tasks WHERE id=?').get(id)?.assigned_to;
   return {
+    ...(assignee_policy?{assignee_policy}:{}),
     assigned_user_ids:primary?[primary,...assignments.filter(userId=>userId!==primary)]:assignments,
     skill_ids:d.prepare('SELECT skill_id FROM task_skill_requirements WHERE task_id=? ORDER BY sort_order,skill_id').all(id).map(row=>row.skill_id),
     tags:d.prepare('SELECT tag FROM task_tags WHERE task_id=? ORDER BY tag COLLATE NOCASE').all(id).map(row=>row.tag),

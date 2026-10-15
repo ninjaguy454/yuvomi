@@ -1,4 +1,5 @@
 import {assignNewTaskCardColor} from '../services/task-card-colors.js';
+import {persistNewTaskAssignees} from '../services/task-assignee-policy.js';
 /**
  * Modul: MCP-Tools
  * Zweck: Tool-Set für den internen MCP-Endpoint in zwei bewusst getrennten Schichten:
@@ -146,6 +147,7 @@ function createTask(db, actorId, args) {
   // Tags mitschreiben (#586). normalizeTags nimmt Array wie kommaseparierten
   // String - ein LLM-Client schickt mal das eine, mal das andere.
   assignNewTaskCardColor(db,result.lastInsertRowid);
+  persistNewTaskAssignees(db,result.lastInsertRowid,[]);
   const tags = setTags(db, result.lastInsertRowid, args.tags ?? []);
 
   const task = db.prepare(

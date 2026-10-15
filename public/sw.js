@@ -18,7 +18,7 @@
 const APP_RELEASE   = '2.54.0-kitchen.5';
 
 // Release Kanban available-height groups and bottom horizontal scrolling.
-const CACHE_VERSION = `${APP_RELEASE}-vidamia.88`;
+const CACHE_VERSION = `${APP_RELEASE}-vidamia.89`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;
@@ -48,6 +48,7 @@ const API_CACHE_WHITELIST = ['/calendar', '/tasks', '/shopping', '/meals', '/con
 
 // App-Shell: sofort benötigt für ersten Render
 const APP_SHELL = [
+  '/utils/task-assignee-policy.js',
   '/utils/night-shift-entry.js',
   '/utils/night-shift-game.js',
   '/utils/night-shift-scream.js',

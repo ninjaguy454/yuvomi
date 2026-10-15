@@ -1,4 +1,5 @@
 import {assignNewTaskCardColor} from './task-card-colors.js';
+import {persistNewTaskAssignees} from './task-assignee-policy.js';
 /**
  * Activity Template checklist definitions are authoring-time data. When an
  * Activity creates a Task, these rows are copied into ordinary Task subtasks;
@@ -78,6 +79,7 @@ export function materializeActivityChecklist(d, {
       item.is_optional ? 1 : 0,
     ).lastInsertRowid);
     assignNewTaskCardColor(d,taskId,{inheritFrom:parent.id});
+    persistNewTaskAssignees(d,taskId,[]);
     setTaskSkills(d, taskId, item.skill_ids || item.skills?.map((skill) => skill.id) || []);
     if (sourceItemId) d.prepare(`INSERT INTO task_activity_events(task_id,action_task_id,actor_user_id,event_type,details_json)
       VALUES(?,?,?,'template_action_created',?)`).run(parent.id, taskId, createdBy || parent.created_by,

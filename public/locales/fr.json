@@ -293,6 +293,10 @@
         "optionCalendarBirthdaysHint": "Sans la coche, les anniversaires n'apparaissent pas dans cette carte - le calendrier les garde."
     },
     "tasks": {
+        "categoryAssigneeLimit": "Nombre maximal de personnes assignées",
+        "assigneeNoLimit": "Sans limite",
+        "assigneeExisting": "Les assignations existantes sont conservées tant que vous ne changez pas la catégorie ou les personnes.",
+        "assigneeLimitExceeded": "Cette catégorie autorise au maximum {{count}} personnes. Sélectionnez moins de personnes ou changez de catégorie.",
         "scoringNoNext": "The next occurrence is not yet available.",
         "scoringEnded": "The recurrence schedule has ended.",
         "scoringTargetPreserved": "The existing next occurrence is preserved and will not be overwritten.",

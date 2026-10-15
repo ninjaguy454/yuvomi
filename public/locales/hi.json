@@ -293,6 +293,10 @@
         "optionCalendarBirthdaysHint": "बिना निशान के जन्मदिन इस टाइल में नहीं दिखते - कैलेंडर में वे बने रहते हैं।"
     },
     "tasks": {
+        "categoryAssigneeLimit": "असाइन किए गए लोगों की सीमा",
+        "assigneeNoLimit": "कोई सीमा नहीं",
+        "assigneeExisting": "जब तक आप श्रेणी या लोगों को नहीं बदलते, मौजूदा असाइनमेंट नहीं बदलेंगे।",
+        "assigneeLimitExceeded": "इस श्रेणी में असाइन किए गए लोगों की सीमा {{count}} है। कम लोग चुनें या श्रेणी बदलें।",
         "scoringNoNext": "The next occurrence is not yet available.",
         "scoringEnded": "The recurrence schedule has ended.",
         "scoringTargetPreserved": "The existing next occurrence is preserved and will not be overwritten.",

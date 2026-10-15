@@ -293,6 +293,10 @@
         "optionCalendarBirthdaysHint": "Zonder vinkje blijven verjaardagen weg uit deze tegel - in de agenda staan ze nog."
     },
     "tasks": {
+        "categoryAssigneeLimit": "Maximum aantal toegewezen personen",
+        "assigneeNoLimit": "Geen limiet",
+        "assigneeExisting": "Bestaande toewijzingen blijven ongewijzigd totdat je de categorie of personen wijzigt.",
+        "assigneeLimitExceeded": "Deze categorie staat maximaal {{count}} personen toe. Selecteer minder personen of wijzig de categorie.",
         "scoringNoNext": "The next occurrence is not yet available.",
         "scoringEnded": "The recurrence schedule has ended.",
         "scoringTargetPreserved": "The existing next occurrence is preserved and will not be overwritten.",

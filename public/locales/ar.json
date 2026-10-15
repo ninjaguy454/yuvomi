@@ -293,6 +293,10 @@
         "optionCalendarBirthdaysHint": "بدون تحديد تختفي أعياد الميلاد من هذه البطاقة، وتبقى في التقويم."
     },
     "tasks": {
+        "categoryAssigneeLimit": "الحد الأقصى للمكلّفين",
+        "assigneeNoLimit": "بلا حد",
+        "assigneeExisting": "تبقى التكليفات الحالية كما هي حتى تغيّر الفئة أو الأشخاص.",
+        "assigneeLimitExceeded": "الحد الأقصى للمكلّفين في هذه الفئة هو {{count}}. اختر أشخاصًا أقل أو غيّر الفئة.",
         "scoringNoNext": "The next occurrence is not yet available.",
         "scoringEnded": "The recurrence schedule has ended.",
         "scoringTargetPreserved": "The existing next occurrence is preserved and will not be overwritten.",

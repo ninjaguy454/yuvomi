@@ -1,3 +1,4 @@
+import {persistNewTaskAssignees,assertActivityAssigneePolicy,categoryAssigneePolicy} from './task-assignee-policy.js';
 import {assignNewTaskCardColor} from './task-card-colors.js';
 import { reconcileTaskSupervision, assertTaskSupervisionAssignee } from './task-supervision.js';
 /**
@@ -263,6 +264,7 @@ export function resolveActivityTemplate(d, activityId, { inputs = {}, subjectUse
   assignmentOverrideUserId = null, task = null, actorId = null } = {}) {
   const activity = getActivityTemplate(d, activityId);
   if (!activity?.active) throw new Error('Activity template not found.');
+  assertActivityAssigneePolicy(categoryAssigneePolicy(d,activity.category),activity,{strategy:assignmentOverrideUserId?'fixed':activity.assignment_policy??activity.assignment_strategy});
   const subject = subjectUserId == null ? null : userById(d, subjectUserId);
   if (subjectUserId != null && !subject) throw new Error('Choose a household member.');
   if (activity.subject_required && !subject) throw Object.assign(new Error('Choose a household member first.'), { code: 'missing_input' });
@@ -469,6 +471,7 @@ export function previewWorkflow(d, workflowId, {
           },
         });
         const stepVariables = workflow.rotation_bindings.length ? resolveWorkflowVariables(d, workflow, inputs, activitySubject?.id || resolution.primary?.id || subjectUserId, rotations, actorId) : resolvedVariables;
+        assertActivityAssigneePolicy(categoryAssigneePolicy(d,activity.category),activity,{...resolution,strategy:assignment.policy??resolution.strategy});
         const ownBindings = activity.rotation_bindings || [];
         const previewContexts = [...Object.entries(rotations).map(([purpose_key, occurrence]) => ({purpose_key,occurrence})),
           ...ownBindings.map(binding => {
@@ -560,6 +563,7 @@ function insertTask(d, {
     dueDateOffsetDays,
   );
   const taskId = Number(result.lastInsertRowid);
+  persistNewTaskAssignees(d,taskId,assignedTo?[assignedTo]:[]);
   if(scoringMode!=='legacy')d.prepare('UPDATE tasks SET scoring_mode=? WHERE id=?').run(scoringMode,taskId);
   assignNewTaskCardColor(d,taskId,parentTaskId?{inheritFrom:parentTaskId}:{});
   setTags(d, taskId, tags);

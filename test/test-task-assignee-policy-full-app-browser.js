@@ -90,3 +90,17 @@ test('authentic historical compatibility edit preserves direct intent and comple
   await api('put','/tasks/'+child.id,{assigned_to:[],expected_revision:current.revision,expected_parent_revision:parent.revision});
   assert.deepEqual(d.prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(next.id).map(row=>row.user_id),[2,3]);assert.equal(awards(),earned);assert.deepEqual(errors,[]);
 });
+
+test('authentic older-client future title edit retains the canonical captured cap',{timeout:90000},async()=>{
+  await api('put','/tasks/categories/school',{max_assignees:null});
+  const made=(await api('post','/tasks',{title:'Older client future cap',category:'school',assigned_to:[2],points:0,scoring_mode:'whole_task',is_recurring:true,recurrence_rule:'FREQ=DAILY',due_date:'2026-11-01',subtasks:[{title:'Visibility-only child',assigned_user_ids:[3]}]})).data;
+  await api('put','/tasks/categories/school',{max_assignees:1});
+  for(const people of [[1],[2]]){const current=(await api('get','/tasks/'+made.id)).data;await api('put','/tasks/'+made.id,{assigned_to:people,direct_assignee_ids:people,expected_revision:current.revision,expected_series_revision:current.recurrence_series_revision});}
+  const current=(await api('get','/tasks/'+made.id)).data;assert.equal(readTaskAssigneePolicy(d,made.id).max_assignees,1);
+  await api('patch',`/tasks/${made.id}/status`,{status:'done',complete_remaining:true,expected_revision:current.revision});
+  const task=(await api('get','/tasks/'+made.id)).data,old=d.prepare('SELECT * FROM tasks WHERE id=?').get(made.id);
+  const body={edit_scope:'future',title:'Older client title only',assigned_to:[2,3],expected_revision:task.revision,expected_series_revision:task.recurrence_series_revision};
+  await api('post',`/tasks/${task.id}/scoring-preview`,body);await api('put','/tasks/'+task.id,body);
+  const definition=d.prepare('SELECT definition_json FROM task_recurrence_definitions WHERE series_id=? ORDER BY id DESC LIMIT 1').get(task.recurrence_series_id);
+  assert.equal(JSON.parse(definition.definition_json).assignee_policy.max_assignees,null);assert.deepEqual(d.prepare('SELECT * FROM tasks WHERE id=?').get(task.id),old);assert.deepEqual(errors,[]);
+});

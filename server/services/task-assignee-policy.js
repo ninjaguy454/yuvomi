@@ -84,7 +84,7 @@ export function proposeDefinitionAssigneePolicies(d,before,after,{assignmentInte
     const assignmentField=row===after?'assigned_to':'assigned_user_ids',explicit=Object.hasOwn(fields,assignmentField),selected=explicit?fields[assignmentField]:ids;
     const previous=old?.assignee_policy?.direct_assignee_ids??old?.assigned_user_ids??[];
     if(old&&old.task.category===category&&(explicit?samePeople(previous,selected):samePeople(old.assigned_user_ids||[],ids))){
-      if(explicit){if(old.assignee_policy)row.assignee_policy=structuredClone(old.assignee_policy);else delete row.assignee_policy;}
+      if(old.assignee_policy)row.assignee_policy=structuredClone(old.assignee_policy);else delete row.assignee_policy;
       continue;
     }
     const direct=explicit?selected:old?.assignee_policy&&samePeople(old.assigned_user_ids||[],ids)?previous:ids;

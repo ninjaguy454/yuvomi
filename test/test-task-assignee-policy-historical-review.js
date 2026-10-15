@@ -53,3 +53,21 @@ test('historical full-body promotion still enforces the current category cap',as
   const before=f.snapshot(),body={edit_scope:'future',assigned_to:[2,3],direct_assignee_ids:[2,3]};
   for(const run of [()=>f.preview(id,body),()=>f.edit(id,body)]){const denied=await run();assert.equal(denied.status,400,JSON.stringify(denied));assert.equal(denied.reason,'category_assignee_limit');assert.equal(f.snapshot(),before);}
 });
+
+for(const legacy of [false,true])for(const echo of [false,true])test(`historical ${echo?'visibility echo':'sparse title'} preserves ${legacy?'missing legacy':'captured uncapped'} future policy`,async t=>{
+  const f=await scoringFixture(t),made=await f.create({...recurrence,category:'school',assigned_to:[2],subtasks:[{title:'Child',assigned_user_ids:[3]}]}),id=made.data.id;
+  if(legacy)for(const row of f.d.prepare('SELECT id,definition_json FROM task_recurrence_definitions').all()){
+    const definition=JSON.parse(row.definition_json);delete definition.assignee_policy;for(const child of definition.subtasks)delete child.assignee_policy;
+    f.d.prepare('UPDATE task_recurrence_definitions SET definition_json=? WHERE id=?').run(JSON.stringify(definition),row.id);
+  }
+  f.d.prepare("UPDATE task_categories SET max_assignees=1 WHERE key='school'").run();
+  for(const people of [[1],[2]])assert.equal((await f.edit(id,{assigned_to:people,direct_assignee_ids:people})).status,200);
+  assert.equal((await f.finish(id)).status,200);
+  const beforeDefinition=latest(f),old=history(f,id),before=f.snapshot(),body={edit_scope:'future',title:'Unrelated future title',...(echo?{assigned_to:[2,3]}:{})};
+  const preview=await f.preview(id,body);assert.equal(preview.status,200,JSON.stringify(preview));assert.equal(f.snapshot(),before);
+  const saved=await f.edit(id,body);assert.equal(saved.status,200,JSON.stringify(saved));
+  const after=latest(f);assert.equal(Object.hasOwn(after,'assignee_policy'),!legacy);assert.deepEqual(after.assignee_policy,beforeDefinition.assignee_policy);
+  assert.deepEqual(after.subtasks.map(child=>child.assignee_policy),beforeDefinition.subtasks.map(child=>child.assignee_policy));assert.equal(history(f,id),old);
+  const next=f.d.prepare('SELECT id FROM tasks WHERE recurrence_origin_id=? AND parent_task_id IS NULL').get(id),policy=readTaskAssigneePolicy(f.d,next.id);
+  if(legacy)assert.equal(policy,null);else assert.equal(policy.max_assignees,null);
+});

@@ -1,4 +1,4 @@
-import {cameraGeometry,chooseVisibleSkyPoint,createSceneDynamics,wrap} from './local-weather-scene/model.js';
+import {cameraGeometry,chooseVisibleSkyPoint,createSceneDynamics,deriveNightSky,createSkyStars,wrap} from './local-weather-scene/model.js';
 import {CARD_SELECTOR,createCardMaterials} from './local-weather-scene/materials.js';
 
 const ASSET='/assets/weather/cole-';
@@ -16,7 +16,7 @@ export function mountLocalWeatherScene({onFlash=()=>{}}={}) {
   }
   let disposed=false,raf=null,lastFrameAt=0,frameDue=0,time=0,geometry=null,frame=null,materials=null,resizeObserver=null;
   let focused=typeof doc.hasFocus==='function'?doc.hasFocus():true,parked=false,activeFlash=null,nextFlashAt=null,previousFlash=null,lastFlashAt=-Infinity,flashSerial=0;
-  let maskPixels=null,canvasWidth=1,canvasHeight=1,canvasDirty=false,panOffset=0;
+  let maskPixels=null,canvasWidth=1,canvasHeight=1,canvasDirty=false,panOffset=0,starCount=0;
   const listeners=[],art=[],cloudTiles=[],drawTimes=[],frameIntervals=[],flashes=[];
   const stats={frames:0,callbacks:0,canvasUpdates:0,skyUpdates:0,particles:0,maxParticles:160};
   const dynamics=createSceneDynamics();
@@ -33,7 +33,8 @@ export function mountLocalWeatherScene({onFlash=()=>{}}={}) {
   const maskCanvas=doc.createElement('canvas');maskCanvas.width=96;maskCanvas.height=63;
   const maskContext=maskCanvas.getContext?.('2d',{willReadFrequently:true}),maskImage=doc.createElement('img');
   const skyViewport=element('div','local-weather-sky-viewport'),world=element('div','local-weather-sky-world'),strip=element('div','local-weather-cloud-strip'),glow=element('div','local-weather-sky-glow');
-  skyViewport.append(world);world.append(strip,glow);
+  const nightWash=element('div','local-weather-night-wash'),stars=element('div','local-weather-stars');
+  skyViewport.append(world);world.append(nightWash,stars,strip,glow);
   for(const grade of ['clear-night','clear-day','snow-night','snow-day']){
     const image=element('img','local-weather-art');image.alt='';image.draggable=false;image.dataset.grade=grade;
     image.width=1600;image.height=1042;image.decoding='async';image.src=ASSET+grade+'.webp';art.push(image);stage.append(image);listen(image,'load',resize);
@@ -118,6 +119,7 @@ export function mountLocalWeatherScene({onFlash=()=>{}}={}) {
     stage.dataset.phase=day<.25?'night':day>.75?'day':'twilight';stage.dataset.rich=String(frame.rich);
     stage.style.backgroundColor='rgb('+[29+(101-29)*day,42+(94-42)*day,48+(78-48)*day].map(Math.round).join(',')+')';
     strip.style.opacity=frame.clouds.toFixed(4);strip.style.filter='brightness('+(.55+day*.45).toFixed(3)+')';
+    const nightSky=deriveNightSky(frame);nightWash.style.opacity=nightSky.darkness.toFixed(4);stars.style.opacity=nightSky.stars.toFixed(4);
   }
   function draw(t,still,dt){
     if(disposed)return;
@@ -159,7 +161,15 @@ export function mountLocalWeatherScene({onFlash=()=>{}}={}) {
   }
   listen(maskImage,'load',()=>{
     if(disposed||!maskContext)return;
-    try{maskContext.drawImage(maskImage,0,0,96,63);maskPixels=maskContext.getImageData(0,0,96,63).data;}catch{maskPixels=null;}
+    try{
+      maskContext.drawImage(maskImage,0,0,96,63);maskPixels=maskContext.getImageData(0,0,96,63).data;
+      if(typeof doc.createElementNS==='function'){
+        const points=createSkyStars(maskPixels),svg=doc.createElementNS('http://www.w3.org/2000/svg','svg');
+        svg.setAttribute('viewBox','0 0 1600 1042');svg.setAttribute('preserveAspectRatio','none');svg.setAttribute('aria-hidden','true');svg.setAttribute('focusable','false');
+        for(const point of points){const circle=doc.createElementNS('http://www.w3.org/2000/svg','circle');circle.setAttribute('cx',String(point.x*1600));circle.setAttribute('cy',String(point.y*1042));circle.setAttribute('r',String(point.radius));circle.setAttribute('fill','#e9f3ff');circle.setAttribute('fill-opacity',String(point.opacity));svg.append(circle);}
+        stars.replaceChildren(svg);starCount=points.length;
+      }
+    }catch{maskPixels=null;stars.replaceChildren();starCount=0;}
   });maskImage.src=ASSET+'sky-mask.webp';
   listen(stylesheet,'load',resize);
   listen(win,'resize',resize);
@@ -184,12 +194,13 @@ export function mountLocalWeatherScene({onFlash=()=>{}}={}) {
       for(const remove of listeners)remove();listeners.length=0;
       stage.remove();credit.remove();scrollTail.remove();stylesheet.remove();doc.documentElement?.removeAttribute('data-local-weather-scene');
       for(const image of [...art,...cloudTiles,maskImage])image.removeAttribute('src');art.length=0;cloudTiles.length=0;maskPixels=null;previousFlash=null;geometry=null;
+      stars.replaceChildren();starCount=0;
       canvas.width=1;canvas.height=1;maskCanvas.width=1;maskCanvas.height=1;particles.length=0;flashes.length=0;stats.particles=0;
     },
     getStats(){
       const materialStats=materials?.getStats()||{materialFaces:0,observerCount:0},sorted=[...drawTimes].sort((a,b)=>a-b);
       return {...stats,...materialStats,disposed,rafActive:raf!==null,listenerCount:listeners.length,observerCount:materialStats.observerCount+Number(!!resizeObserver),artCamera:geometry?{...geometry,visibleSource:{...geometry.visibleSource}}:null,
-        scene:frame?{...frame,wind:frame.wind?{...frame.wind}:null}:null,skyPickerReady:!!maskPixels,flashes:flashes.map(value=>({...value})),flashActive:!!activeFlash,flashAlpha:Number(glow.style.opacity)||0,nextFlashAt,
+        scene:frame?{...frame,wind:frame.wind?{...frame.wind}:null}:null,skyPickerReady:!!maskPixels,skyStars:starCount,starOpacity:Number(stars.style.opacity)||0,nightSkyDarkness:Number(nightWash.style.opacity)||0,flashes:flashes.map(value=>({...value})),flashActive:!!activeFlash,flashAlpha:Number(glow.style.opacity)||0,nextFlashAt,
         drawMs:[...drawTimes],frameIntervals:[...frameIntervals],p95DrawMs:sorted[Math.floor(sorted.length*.95)]||0,fpsTarget:30,
         canvas:{width:canvas.width,height:canvas.height,bytes:canvas.width*canvas.height*4},smokeAnchor:null,windowLights:false};
     }

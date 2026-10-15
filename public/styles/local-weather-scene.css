@@ -9,6 +9,9 @@
 .local-weather-art[data-grade="snow-day"]{z-index:3}
 .local-weather-sky-viewport{z-index:4;overflow:hidden}
 .local-weather-sky-world{position:absolute;mask-image:url('/assets/weather/cole-sky-mask.webp');mask-size:100% 100%;mask-mode:luminance;mask-repeat:no-repeat;pointer-events:none}
+.local-weather-night-wash,.local-weather-stars{position:absolute;inset:0;opacity:0;pointer-events:none}
+.local-weather-night-wash{background:linear-gradient(#071324,#112239 85%)}
+.local-weather-stars svg{display:block;width:100%;height:100%;max-width:none;pointer-events:none}
 .local-weather-cloud-strip{position:absolute;inset:0 auto 0 0;display:flex;width:400%;height:100%;will-change:transform;pointer-events:none}
 .local-weather-cloud-tile{flex:none;height:100%;max-width:none;pointer-events:none}
 .local-weather-sky-glow{position:absolute;inset:0;opacity:0;pointer-events:none}

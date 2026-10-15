@@ -99,6 +99,10 @@ async function pageFor(kind, viewport, clock = now) {
   catch (error) { console.error('WEATHER_FIXTURE_LOAD_FAILURE', await page.evaluate(() => ({ url: location.href, text: document.body.innerText.slice(0,1500) }))); await context.close(); throw error; }
   await page.waitForSelector('.local-weather-scene');
   await page.waitForFunction(() => [...document.querySelectorAll('.local-weather-art')].every(image => image.complete && image.naturalWidth));
+  await page.waitForFunction(() => [...document.querySelectorAll('.activity-card')].every(node => {
+    for(let parent=node;parent;parent=parent.parentElement)if(Number(getComputedStyle(parent).opacity)<.999)return false;
+    return true;
+  }));
   return { page, context };
 }
 async function sample(page, kind) {
@@ -107,6 +111,7 @@ async function sample(page, kind) {
     const stage = document.querySelector('.local-weather-scene'), art = stage.querySelector('[data-grade="clear-night"]'), r = art.getBoundingClientRect();
     return { kind, clock: new Date().toISOString(), envelope, firstFacts: window.weatherFirstFacts, namedTheme: document.documentElement.dataset.namedTheme, phase: stage.dataset.phase,
       grades: Object.fromEntries([...stage.querySelectorAll('.local-weather-art')].map(image => [image.dataset.grade, Number(image.style.opacity)])),
+      sky: {darkness:Number(stage.querySelector('.local-weather-night-wash')?.style.opacity)||0,stars:Number(stage.querySelector('.local-weather-stars')?.style.opacity)||0,starCount:stage.querySelectorAll('.local-weather-stars circle').length},
       image: { x: r.x, y: r.y, width: r.width, height: r.height, bottom: r.bottom, objectFit: getComputedStyle(art).objectFit },
       viewport: { width: innerWidth, height: innerHeight },
       shell: ['.app-shell', '.app-content'].map(selector => { const css = getComputedStyle(document.querySelector(selector)); return { selector, background: css.backgroundColor, image: css.backgroundImage }; }) };
@@ -122,6 +127,7 @@ test('mounted idle Wall updates across sunset through its normal minute timer wi
     await page.waitForFunction(() => document.querySelector('.local-weather-scene').dataset.phase==='day');
     const before = await sample(page,'wall-before-sunset');
     assert.match(before.namedTheme,/-day$/);assert.equal(before.envelope.theme.is_day,true);
+    assert.equal(before.sky.darkness,0);assert.equal(before.sky.stars,0);
     await page.evaluate(next => {window.weatherOriginalStage=document.querySelector('.local-weather-scene');window.weatherFixtureNow=next;},afterSunset);
     const started = Date.now();
     await page.waitForFunction(() => document.documentElement.dataset.namedTheme.endsWith('-night')&&document.querySelector('.local-weather-scene').dataset.phase==='night', {timeout:70000,polling:250});
@@ -130,6 +136,7 @@ test('mounted idle Wall updates across sunset through its normal minute timer wi
     assert.equal(after.envelope.theme.is_day,true,'cached reported flag stays daytime; valid sunset drives the current phase');
     assert.equal(after.envelope.theme.observed_at,before.envelope.theme.observed_at);
     assert.match(after.namedTheme,/-night$/);assert.equal(after.phase,'night');
+    assert.ok(after.sky.darkness>.5&&after.sky.stars>.8);
     await capture(page,'wall-open-across-sunset');assert.deepEqual(report.errors,[]);
   } finally {await context.close();}
 });
@@ -147,6 +154,7 @@ test('reported Eastern nighttime reaches personal phone, Wall tablet and paired 
       assert.match(row.namedTheme, /-night$/); assert.equal(row.phase, 'night');
       assert.equal(row.firstFacts.phase, 'night', 'first valid night facts cannot paint a daytime frame');
       assert.equal(row.firstFacts.dayOpacity, 0);
+      assert.ok(row.sky.darkness>.5&&row.sky.stars>.8);assert.equal(row.sky.starCount,72);
       assert.ok(row.grades['clear-day'] < .25); assert.deepEqual(report.errors, []);
     } finally { await context.close(); }
   }

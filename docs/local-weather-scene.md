@@ -37,6 +37,13 @@ wetness/ice/snow accumulation and their decay are artwork, not measurements of a
 household pane, a blizzard or a strike. Thunder alone does not establish rain or
 a confirmed dry storm. No chimney or lights are invented in Cole's inn.
 
+The unchanged night derivative is complemented by a masked deep-blue sky wash
+and at most72static illustrative stars selected deterministically from verified
+sky-mask pixels. The wash fades with the same solar grade; stars sit beneath
+weather clouds, dim with cloud cover, and disappear in overcast, fog, precipitation
+and thunderstorms. They add no animation loop, are not observed astronomical
+positions, and leave the daytime painting, card colors and terrain treatment intact.
+
 Wide artwork uses the approved50%52% cover camera with stage aspect at most2.1.
 Very wide/shallow viewports can reveal lower artwork through normal app scrolling.
 Only decorative painting offset and a scroll tail are added; card positions,

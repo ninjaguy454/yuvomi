@@ -17,8 +17,8 @@
 
 const APP_RELEASE   = '2.54.0-kitchen.5';
 
-// Release task recovery, Night Shift fit/audio, Appearance speed and Weather night sky.
-const CACHE_VERSION = `${APP_RELEASE}-vidamia.87`;
+// Release Kanban available-height groups and bottom horizontal scrolling.
+const CACHE_VERSION = `${APP_RELEASE}-vidamia.88`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;

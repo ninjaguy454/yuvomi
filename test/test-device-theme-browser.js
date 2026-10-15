@@ -15,8 +15,15 @@ d.prepare('INSERT INTO sync_config(key,value) VALUES(?,?)').run('named_appearanc
 function fixture(name,theme,allow=true){const preferences=normalizeDevicePreferences(d,{});preferences.allow_theme_changes=allow;preferences.appearance.named_appearance={...defaultNamedAppearance(),theme};preferences.appearance.ui_sounds={version:1,mode:'off',pack:'wood',volume:15};const device=createDevice(d,{name,preferences},1),token='synthetic-browser-theme-'+device.id;d.prepare('INSERT INTO device_credentials(device_id,token_hash,context_key) VALUES(?,?,?)').run(device.id,deviceHash(token),'synthetic-browser-context-'+device.id);return{device,token};}
 const first=fixture('First review display','hanukkah'),second=fixture('Second review display','christmas',false);const old=JSON.parse(d.prepare('SELECT preferences_json FROM household_devices WHERE id=?').get(first.device.id).preferences_json);delete old.allow_theme_changes;d.prepare('UPDATE household_devices SET preferences_json=? WHERE id=?').run(JSON.stringify(old),first.device.id);
 let server,browser,origin;const errors=[];
-test.before(async()=>{server=fork(new URL('./helpers/note-board-full-app-server.mjs',import.meta.url),[],{env:{...process.env,PORT:'0'},windowsHide:true,stdio:['ignore','pipe','pipe','ipc']});let log='';for(const stream of[server.stdout,server.stderr])stream.on('data',data=>log=(log+data).slice(-4000));origin=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error(log)),30000);server.once('message',m=>{clearTimeout(timer);resolve(m.origin);});server.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code+log));});});browser=await puppeteer.launch({headless:true,executablePath:process.env.PUPPETEER_EXECUTABLE_PATH||(process.platform==='win32'?'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe':undefined)});});
-test.after(async()=>{await browser?.close();if(server?.exitCode===null){server.kill('SIGKILL');await new Promise(resolve=>server.once('exit',resolve));}d.close();});
+async function startServer(){
+  server=fork(new URL('./helpers/note-board-full-app-server.mjs',import.meta.url),[],{env:{...process.env,PORT:'0'},windowsHide:true,stdio:['ignore','pipe','pipe','ipc']});let log='';for(const stream of[server.stdout,server.stderr])stream.on('data',data=>log=(log+data).slice(-4000));origin=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error(log)),30000);server.once('message',m=>{clearTimeout(timer);resolve(m.origin);});server.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code+log));});});
+}
+async function stopServer(){
+  const active=server;server=null;
+  if(active?.exitCode===null&&active.signalCode===null){const exited=new Promise(resolve=>active.once('exit',resolve));active.kill('SIGKILL');await exited;}
+}
+test.before(async()=>{await startServer();browser=await puppeteer.launch({headless:true,executablePath:process.env.PUPPETEER_EXECUTABLE_PATH||(process.platform==='win32'?'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe':undefined)});});
+test.after(async()=>{await browser?.close();await stopServer();d.close();});
 const call=(page,method,path,body)=>page.evaluate(async({method,path,body})=>(await import('/api.js')).api[method](path,body),{method,path,body});
 async function pageFor(display,width=1280){const context=await browser.createBrowserContext(),page=await context.newPage();page.setDefaultTimeout(12000);await page.setViewport({width,height:1000});await page.emulateMediaFeatures([{name:'prefers-reduced-motion',value:'reduce'}]);page.on('pageerror',error=>errors.push(error.message));await page.evaluateOnNewDocument(paired=>{localStorage.setItem('yuvomi-locale','en');localStorage.setItem('yuvomi-lang','en');if(paired)localStorage.setItem('vidamia-paired-device','1');},!!display);if(display)await page.setCookie({name:'vidamia.device',value:display.token,url:origin,httpOnly:true});await page.goto(origin+(display?'/device':'/login'));return{page,context};}
 async function login(page){await page.waitForSelector('#username');await page.type('#username','reviewparent');await page.type('#password',password);await page.click('[type=submit]');await page.waitForSelector('.dashboard');}
@@ -220,6 +227,9 @@ test('rapid mobile dialog replacement cleans up its current parked owner while t
 });
 
 test('shared Appearance is in the utility regions with collapsed, mobile, keyboard and permission access',async()=>{
+  // Browser contexts share the server's per-IP API quota. Isolate this final
+  // multi-viewport scenario from the preceding scenarios' request budget.
+  await stopServer();await startServer();
   const display=fixture('Appearance placement review','fern'),{page,context}=await pageFor(display);
   try{
     await page.waitForSelector('[data-device-theme]');assert.equal(await page.$eval('.nav-sidebar [data-device-theme]',node=>node.closest('.nav-sidebar__footer-actions')!==null),true);assert.equal(await page.$eval('.nav-sidebar [data-device-theme]',node=>node.getAttribute('aria-label')),'Appearance');

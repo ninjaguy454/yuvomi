@@ -38,7 +38,7 @@ export function rewardTargets(d, taskId, actingUserId) {
   return taskRewardDefinition(d,taskId,{actingUserId})?.targets||[];
 }
 
-/** One award per occurrence, with the recipients frozen at the first award.
+/** One original award per occurrence, with recipients frozen at its first award.
  * The claim and every ledger row commit together, including through callers
  * outside the Task lifecycle. Regenerated rows share their original logical
  * series/date/action claim; reopening, deletion and retries cannot award twice. */
@@ -46,11 +46,13 @@ export function awardForCompletion(d, taskId, actingUserId) {
   return d.transaction(() => {
     const task = d.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
     if (!task || !Number.isInteger(task.points) || task.points < 0) return false;
+    if(task.parent_task_id && task.status!=='done')return false;
     if (taskWindowAncestors(d,taskId).some(row=>['expired','skipped'].includes(row.status))) return false;
     const provenance=rewardOccurrenceProvenance(d,taskId);
     if(provenance.retired)return false;
-    if(d.prepare(`SELECT 1 FROM task_scoring_settlements s WHERE logical_key=?
-      AND NOT EXISTS(SELECT 1 FROM task_scoring_settlement_releases r WHERE r.settlement_id=s.id)`).get(provenance.logicalKey))return false;
+    const settled=d.prepare(`SELECT s.* FROM task_scoring_settlements s WHERE logical_key=?
+      AND NOT EXISTS(SELECT 1 FROM task_scoring_settlement_releases r WHERE r.settlement_id=s.id) ORDER BY s.id DESC LIMIT 1`).get(provenance.logicalKey);
+    if(settled)return syncSubtaskAwardState(d,task,settled,true,actingUserId);
     const definition=taskRewardDefinition(d,task,{actingUserId});
     assertTaskScoringAward(d,definition);
     if(definition.outcome!=='earned'){
@@ -66,17 +68,56 @@ export function awardForCompletion(d, taskId, actingUserId) {
   }).immediate();
 }
 
-/** Compatibility export: reopening is operational state, never ledger erasure.
- * An administrator can make an explicit, reasoned adjustment when needed. */
-export function reverseTaskEarnings(_d, _taskId) {}
+/** Compensate the original subtask award; never erase an earn, release its
+ * occurrence claim, re-resolve recipients, or neutralize manual adjustments.
+ * The immutable settlement and intact original earn row prove each amount.
+ * Deletion detaches that earn's Task FK, so a reused Task ID cannot restore it. */
+function syncSubtaskAwardState(d,task,settlement,active,actingUserId){
+  if(!task.parent_task_id || settlement.task_id!==task.id || settlement.outcome!=='earned'
+    || active!== (task.status==='done') || !['open','in_progress','done'].includes(task.status))return false;
+  const claim=d.prepare('SELECT * FROM reward_task_awards WHERE task_id=?').get(task.id);
+  if(!claim || claim.retired_at || claim.logical_key!==settlement.logical_key)return false;
+  const previous=d.prepare('SELECT * FROM task_scoring_completion_events WHERE settlement_id=? ORDER BY sequence DESC LIMIT 1').get(settlement.id);
+  if(Boolean(previous?previous.active:1)===active)return false;
+  const frozen=new Map(JSON.parse(settlement.recipients_json).map(row=>[row.user_id,row.points]));
+  const original=d.prepare("SELECT id,user_id,delta FROM reward_ledger WHERE task_id=? AND type='earn' ORDER BY id").all(task.id);
+  const prior=active?JSON.parse(previous.entries_json):null;
+  const entries=[];
+  for(const earn of original){
+    if(!Number.isSafeInteger(earn.delta)||earn.delta<=0||frozen.get(earn.user_id)!==earn.delta)continue;
+    if(active&&!prior.some(row=>row.earn_ledger_id===earn.id&&row.user_id===earn.user_id&&row.delta===-earn.delta))continue;
+    const delta=active?earn.delta:-earn.delta;
+    const row=postLedger(d,{userId:earn.user_id,delta,type:'adjust',taskId:task.id,createdBy:actingUserId??null,
+      reason:active?'Subtask completion credit restored':'Subtask completion credit reversed'});
+    entries.push({earn_ledger_id:earn.id,ledger_id:Number(row.lastInsertRowid),user_id:earn.user_id,delta});
+  }
+  if(!entries.length)return false;
+  d.prepare(`INSERT INTO task_scoring_completion_events(settlement_id,sequence,active,task_id,task_revision,actor_user_id,status,entries_json)
+    VALUES(?,?,?,?,?,?,?,?)`).run(settlement.id,(previous?.sequence??0)+1,active?1:0,task.id,task.revision,actingUserId??null,task.status,JSON.stringify(entries));
+  return true;
+}
+
+/** Root Task earnings retain their established lifetime policy. Only an actual
+ * completed-subtask transition can suspend its proven completion credit. */
+export function reverseTaskEarnings(d,taskId,actingUserId=null){
+  return d.transaction(()=>{
+    const task=d.prepare('SELECT * FROM tasks WHERE id=?').get(taskId);
+    if(!task?.parent_task_id || !['open','in_progress'].includes(task.status))return false;
+    const provenance=rewardOccurrenceProvenance(d,taskId);if(provenance.retired)return false;
+    const settled=d.prepare(`SELECT s.* FROM task_scoring_settlements s WHERE logical_key=?
+      AND NOT EXISTS(SELECT 1 FROM task_scoring_settlement_releases r WHERE r.settlement_id=s.id) ORDER BY s.id DESC LIMIT 1`).get(provenance.logicalKey);
+    return settled?syncSubtaskAwardState(d,task,settled,false,actingUserId):false;
+  }).immediate();
+}
 
 /**
- * Award the first rewardable completion. Historical earnings survive reopening.
+ * Retain original history while subtask completion credit follows real progress.
  */
 export function syncTaskRewards(d, taskId, oldStatus, newStatus, actingUserId) {
   const wasDone = oldStatus === 'done';
   const isDone = newStatus === 'done';
   if (isDone && !wasDone) awardForCompletion(d, taskId, actingUserId);
+  else if(wasDone&&!isDone)reverseTaskEarnings(d,taskId,actingUserId);
 }
 
 export class RewardError extends Error {

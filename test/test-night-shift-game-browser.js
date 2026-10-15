@@ -66,10 +66,16 @@ test('real Dashboard mounts a deliberate sparse game, preserves data and cleans 
     assert.equal(await page.evaluate(()=>performance.getEntriesByType('resource').some(r=>r.name.includes('/components/night-shift-console.js'))),false,'console loads only on entry');
     await page.evaluate(()=>{const other=document.createElement('button');other.id='synthetic-other-camera';other.dataset.camera='west';document.body.append(other);});
     await accelerate(page,{win:true});await opened(page);assert.equal(await page.evaluate(()=>window.__gameAudio.created),0);
+    for(const key of ['/','?','n','g','t'])await page.keyboard.press(key);
+    assert.equal(await page.$eval('#search-overlay',n=>n.classList.contains('search-overlay--visible')),false,'game owns keys before the Dashboard search shortcut');
+    assert.equal(await page.$$('.modal-overlay').then(n=>n.length),0,'Dashboard help and create shortcuts stay inactive');
+    assert.equal(new URL(page.url()).pathname,'/','Dashboard navigation chords stay inactive');
+    await page.keyboard.press('Tab');assert.equal(await page.evaluate(()=>!!document.activeElement.closest('[data-night-shift-console]')),true,'native focus traversal remains inside the dialog');
     assert.equal(await page.$eval('#ns-play',n=>n.hidden),true);assert.equal(await page.$eval('#ns-sound',n=>n.checked),false);
     await page.click('#ns-start');await page.waitForFunction(()=>!!window.__gameModel);const originalCamera=await page.evaluate(()=>window.__gameModel.state.camera);await page.evaluate(()=>document.getElementById('synthetic-other-camera').click());assert.equal(await page.evaluate(()=>window.__gameModel.state.camera),originalCamera,'game must not bind other page camera controls');await page.evaluate(()=>document.getElementById('synthetic-other-camera').remove());await page.click('[data-camera="store"]');await page.keyboard.press('a');await page.keyboard.press('d');await page.keyboard.press('p');
     assert.equal(await page.$eval('#ns-paused',n=>n.hidden),false);await page.click('#ns-resume');
     await page.keyboard.press('Escape');await closed(page);assert.equal(await page.evaluate(()=>document.activeElement.hasAttribute('data-night-shift-entry')),true);
+    await page.keyboard.press('/');await page.waitForFunction(()=>document.getElementById('search-overlay').classList.contains('search-overlay--visible'));await page.keyboard.press('Escape');await page.waitForFunction(()=>!document.getElementById('search-overlay').classList.contains('search-overlay--visible'));
     await opened(page);await page.click('#ns-start');await page.evaluate(()=>history.back());await closed(page);assert.equal(new URL(page.url()).pathname,'/','Back closes the game first');
     await opened(page);await page.click('#ns-start');await page.evaluate(()=>window.yuvomi.navigate('/tasks'));await closed(page);await page.waitForSelector('.activity-card');assert.equal(await page.$$('[data-night-shift-entry]').then(n=>n.length),0);
     await page.evaluate(()=>window.yuvomi.navigate('/'));await page.waitForSelector('[data-night-shift-entry]');await opened(page);await page.click('#ns-start');

@@ -177,14 +177,16 @@ export async function openNightShiftConsole({signal,returnFocus,onClose=()=>{}}=
   listen(document,'visibilitychange',()=>{if(document.hidden && dialog.open)pause();});
   listen(window,'blur',()=>{if(dialog.open)pause();});
   listen(document,'keydown',event=>{
-    if(!dialog.open || event.repeat || event.altKey || event.ctrlKey || event.metaKey || event.target instanceof HTMLInputElement)return;
+    if(!dialog.open)return;
+    event.stopPropagation();
+    if(event.repeat || event.altKey || event.ctrlKey || event.metaKey || event.target instanceof HTMLInputElement)return;
     const key=event.key.toLowerCase();
     if(key==='p' && ['playing','paused'].includes(game.state.phase)){event.preventDefault();game.state.phase==='playing'?pause():resume();return;}
     if(game.state.phase!=='playing')return;
     if(['a','d','c','1','2','3','4','5'].includes(key))event.preventDefault();
     if(key==='a')shutter('left'); if(key==='d')shutter('right'); if(key==='c')monitor();
     if(/^[1-5]$/.test(key)){game.selectCamera(ROOMS[Number(key)-1].id);paint();}
-  });
+  },{capture:true});
   settingsText(); paint();
   signal?.addEventListener('abort',destroy,{once:true});
   document.body.append(dialog);overlayToken=attachOverlay(dialog,destroy);dialog.showModal();$('start').focus({preventScroll:true});

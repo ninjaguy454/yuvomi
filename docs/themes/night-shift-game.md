@@ -13,7 +13,7 @@ Survive a 90-second simulation from 12 AM to 6 AM. Choose among five live camera
 | Freddy | East route; watching his current live camera freezes movement; lowering the monitor accelerates him | Watch his camera, or hold the right shutter for 3 seconds |
 | Foxy | Cove tension rises while neglected and falls while watched; at 100% he sprints west | Watch CAM 05, or hold the left shutter for 2 seconds; a blocked sprint costs 4% power |
 
-Mouse and touch use the camera map, shutters and monitor controls. Keyboard: 1–5 cameras, A/D shutters, C monitor, P pause/resume, Escape exit. The visible UI deliberately keeps only the HUD, map, controls and settings; these rules stay in documentation. Leaving the tab pauses the simulation. Browser Back closes the console before leaving the Dashboard.
+Mouse and touch use the camera map, shutters and monitor controls. Keyboard: 1–5 cameras, A/D shutters, C monitor, P pause/resume, Escape exit. While the console is open, its capture handler keeps Dashboard search, help, create and navigation shortcuts inactive; native Tab/Enter/Escape defaults remain available. Exit releases that handler and restores normal Dashboard shortcuts. The visible UI deliberately keeps only the HUD, map, controls and settings; these rules stay in documentation. Leaving the tab pauses the simulation. Browser Back closes the console before leaving the Dashboard.
 
 ## Motion, audio and ownership
 

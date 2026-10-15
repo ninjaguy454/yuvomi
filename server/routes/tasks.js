@@ -1,5 +1,5 @@
 import {setTaskAssignments as setAssignments} from '../services/task-assignments.js';
-import {parseCategoryAssigneeLimit,categoryAssigneePolicy,assertAssigneeCount,proposedTaskAssigneePolicy,persistTaskAssigneePolicy,persistNewTaskAssignees,assigneePolicyProjection,readTaskAssigneePolicy,persistCapturedTaskAssignees,proposeDefinitionAssigneePolicies,proposedBoundTaskCategoryPolicy} from '../services/task-assignee-policy.js';
+import {parseCategoryAssigneeLimit,categoryAssigneePolicy,assertAssigneeCount,proposedTaskAssigneePolicy,persistTaskAssigneePolicy,persistNewTaskAssignees,assigneePolicyProjection,readTaskAssigneePolicy,persistCapturedTaskAssignees,proposeDefinitionAssigneePolicies,proposedBoundTaskCategoryPolicy,taskDirectAssignmentSelection} from '../services/task-assignee-policy.js';
 import {isTripStep,tripTaskState,markTripTaskOverrides} from '../services/trip-task-state.js';
 import {attachTripTaskProjection} from '../services/trip-task-projection.js';
 import {retireTripTask,refreshTripStepReminders} from '../services/trip-tasks.js';
@@ -288,7 +288,7 @@ function futureEditContext(req,task) {
     return fields;
   };
   const definition=proposedFutureSeriesDefinition(db.get(),req,task,before,req.body.future_patch??{}, {validateFields});
-  proposeDefinitionAssigneePolicies(db.get(),before,definition);
+  proposeDefinitionAssigneePolicies(db.get(),before,definition,{assignmentIntent:req.body.future_patch});
   if(!futureRootCapabilities(db.get(),req,task,definition).view)throw new TaskStateError('This future definition is unavailable.',{},404);
   assertSeriesDefinitionMutation(db.get(),req,task,before,definition,{futureOnly:true});
   validateFutureDefinitionWindows(req,task,definition);
@@ -1083,6 +1083,7 @@ function applyEditedSubtasks(task, edited, actorId) {
       parent_task_id,created_by,visibility,sort_order,start_time,is_optional,points) VALUES(?,?,'open',?,?,?,?,?,?,?,?,?,?)`)
       .run(child.title,task.category,task.start_date,task.due_date,task.due_time,task.id,actorId,task.visibility,order,task.start_time,child.isOptional,child.points).lastInsertRowid);assignNewTaskCardColor(db.get(),id,{inheritFrom:task.id});}
     if(!sameIdOrder(loadTaskSkillIds(db.get(),id),child.skillIds))setTaskSkills(db.get(),id,child.skillIds);
+    if(!child.id&&child.assignedUsers===undefined)persistNewTaskAssignees(db.get(),id,[]);
     if(child.assignedUsers!==undefined) {
       const old=child.id?db.get().prepare('SELECT * FROM tasks WHERE id=?').get(id):null;
       const proposal=proposedTaskAssigneePolicy(db.get(),old,{assigned_to:child.assignedUsers},{category:old?.category??task.category});
@@ -2525,7 +2526,7 @@ router.post('/:id/scoring-preview',(req,res)=>{
         if(series)assertSeriesEdit(db.get(),req,task,series,req.body.expected_series_revision);
         else if(scope==='future')assertSeriesEdit(db.get(),req,task,series,req.body.expected_series_revision);
         const edited=editedSubtasksInput(task,req.body,req,{definitionOnly:historical});
-        if(!getTaskActivityBinding(db.get(),task.id)&&!req.body.activity_template_id)proposedTaskAssigneePolicy(db.get(),task,req.body,{directIds:req.body.assigned_to===undefined?null:parseAssignedTo(req.body.assigned_to)});
+        if(!getTaskActivityBinding(db.get(),task.id)&&!req.body.activity_template_id)proposedTaskAssigneePolicy(db.get(),task,req.body,{directIds:scoringAssignmentIntent(task,req.body).assigned});
         const currentBinding=getTaskActivityBinding(db.get(),task.id);if(currentBinding&&sameTaskActivityBinding(parseTaskActivityBinding(req.body,currentBinding).binding,currentBinding))proposedBoundTaskCategoryPolicy(db.get(),task,req.body,readTaskActivityDefinition(db.get(),task.id),currentBinding);
         for(const child of edited?.next||[]){const previous=child.id?db.get().prepare('SELECT * FROM tasks WHERE id=?').get(child.id):null;proposedTaskAssigneePolicy(db.get(),previous,child.assignedUsers===undefined?{}:{assigned_to:child.assignedUsers},{category:previous?.category??req.body.category??task.category,directIds:child.assignedUsers??[]});}
         assertScoringProgressIntent(task,req.body,edited);
@@ -2844,8 +2845,9 @@ export function updateTaskDefinition(req, res) {
       // ein Kind die Aufgabe einfach seinem Geschwister zu, und die Sperre
       // haette den Fall nicht gehalten, um den es hier geht.
       const me = req.authUserId || req.session.userId;
-      const othersBefore = assignedBefore.filter((id) => id !== me);
-      const othersAfter  = userIds.filter((id) => id !== me);
+      const direct=taskDirectAssignmentSelection(db.get(),task,req.body);
+      const othersBefore = direct.previous.filter((id) => id !== me);
+      const othersAfter  = direct.selected.filter((id) => id !== me);
       if (othersBefore.length !== othersAfter.length
           || othersBefore.some((id) => !othersAfter.includes(id))) touchesDefinition = true;
 

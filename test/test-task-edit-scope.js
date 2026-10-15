@@ -50,6 +50,12 @@ test('future serializer omits invalid inactive amounts and never treats null as 
   assert.deepEqual(taskFuturePatch(definition,{scoring_mode:'legacy',subtasks:[{action_key:'a',title:'Work',points:2}]},['scoring_mode']),{});
 });
 
+test('future assignment intent compares direct performers rather than child visibility',()=>{
+  const definition={fields:{assigned_to:[2,3],direct_assignee_ids:[2]},actions:[]};
+  assert.deepEqual(taskFuturePatch(definition,{assigned_to:[2],subtasks:[]},['assigned_to']),{});
+  assert.deepEqual(taskFuturePatch(definition,{assigned_to:[2,3],subtasks:[]},['assigned_to']),{fields:{assigned_to:[2,3]}});
+});
+
 test('all authoritative unavailable forecast codes produce specific guidance without raw private codes',()=>{
   for(const [code,key] of Object.entries({next_occurrence_unavailable:'scoringNoNext',recurrence_ended:'scoringEnded',target_preserved:'scoringTargetPreserved',random_assignment_unresolved:'scoringRandom',binding_policy_changed:'scoringBindingChanged',projection_evidence_unavailable:'scoringEvidence'})){
     const message=taskScoringErrorMessage({data:{reason:'scoring_projection_unavailable',conditions:[code,code,'private_unknown']}});assert.equal(message,`tasks.scoringForecastUnavailable tasks.${key}`);

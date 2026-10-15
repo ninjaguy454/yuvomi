@@ -35,6 +35,14 @@ export function persistTaskAssigneePolicy(d,taskId,policy,directIds){
   const insert=d.prepare('INSERT INTO task_direct_assignees(task_id,user_id) VALUES(?,?)');for(const id of directIds)insert.run(taskId,id);
 }
 const samePeople=(a,b)=>a.length===b.length&&[...a].sort((x,y)=>x-y).every((id,i)=>id===[...b].sort((x,y)=>x-y)[i]);
+/** Old clients may echo the visibility union; only a direct marker promotes it. */
+export function taskDirectAssignmentSelection(d,task,body){
+  const visible=task?d.prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(task.id).map(row=>row.user_id):[];
+  const saved=task?readTaskAssigneePolicy(d,task.id):null,previous=saved?.direct_assignee_ids??visible;
+  const explicit=Object.hasOwn(body,'direct_assignee_ids'),value=explicit?body.direct_assignee_ids:body.assigned_to;
+  const selected=value===undefined?previous:[...new Set((Array.isArray(value)?value:value==null||value===''?[]:[value]).map(Number))];
+  return {previous,selected:saved&&!explicit&&samePeople(selected,visible)?previous:selected};
+}
 /** An unchanged full legacy editor payload is not an adoption/conversion. */
 export function proposedTaskAssigneePolicy(d,task,body,{category=body.category??task?.category??'misc',directIds=null}={}){
   const saved=task?readTaskAssigneePolicy(d,task.id):null;
@@ -42,10 +50,12 @@ export function proposedTaskAssigneePolicy(d,task,body,{category=body.category??
   const explicit=Object.hasOwn(body,'direct_assignee_ids');
   if(explicit&&(!Array.isArray(body.assigned_to)||!Array.isArray(body.direct_assignee_ids)||!samePeople(body.assigned_to,body.direct_assignee_ids)))
     throw new TaskAssigneePolicyError('Direct assignees must match the explicit assignment selection.');
-  const ids=directIds??(explicit?body.direct_assignee_ids:body.assigned_to??saved?.direct_assignee_ids??visible);
+  const rotationChanged=!!task&&(['assignment_mode','rotation_group','rotation_slot'].some(key=>body[key]!==undefined&&String(body[key]??'')!==String(task[key]??''))
+    ||body.rotation_user_ids!==undefined&&!samePeople(body.rotation_user_ids,d.prepare('SELECT user_id FROM task_rotation_members WHERE task_id=? ORDER BY sort_order').all(task.id).map(row=>row.user_id)));
+  const selection=taskDirectAssignmentSelection(d,task,body);
+  const ids=!task?directIds??selection.selected:rotationChanged&&(body.assignment_mode??task.assignment_mode)==='round_robin'&&directIds!==null?directIds:selection.selected;
   const changedCategory=!!task&&category!==task.category;
-  const reference=explicit?saved?.direct_assignee_ids??visible:visible;
-  const changedPeople=(explicit||body.assigned_to!==undefined)&&!samePeople(ids,reference);
+  const changedPeople=(explicit||body.assigned_to!==undefined||rotationChanged)&&!samePeople(ids,selection.previous);
   if(task&&!changedCategory&&!changedPeople)return null;
   if(task&&!saved&&changedCategory&&body.assigned_to===undefined)
     throw new TaskAssigneePolicyError('Choose the direct assignees explicitly before applying a category rule.','direct_assignees_required');
@@ -65,12 +75,14 @@ export function assertActivityAssigneePolicy(policy,activity,resolution){
   assertAssigneeCount(policy,ids);
 }
 /** Pure validation/enrollment for an explicitly authored future definition. */
-export function proposeDefinitionAssigneePolicies(d,before,after){
+export function proposeDefinitionAssigneePolicies(d,before,after,{assignmentIntent=null}={}){
   const oldActions=new Map(before?.subtasks?.map(action=>[action.action_key,action])||[]);
   for(const [old,row] of [[before,after],...after.subtasks.map(row=>[oldActions.get(row.action_key),row])]){
     const ids=row.assigned_user_ids||[],category=row.task.category||'misc';
-    if(old&&old.task.category===category&&samePeople(old.assigned_user_ids||[],ids))continue;
-    const direct=old?.assignee_policy&&samePeople(old.assigned_user_ids||[],ids)?old.assignee_policy.direct_assignee_ids:ids;
+    const explicit=row===after?Object.hasOwn(assignmentIntent?.fields??{},'assigned_to'):(assignmentIntent?.actions?.update??[]).some(action=>action.action_key===row.action_key&&Object.hasOwn(action.fields??{},'assigned_user_ids'));
+    const previous=old?.assignee_policy?.direct_assignee_ids??old?.assigned_user_ids??[];
+    if(old&&old.task.category===category&&samePeople(old.assigned_user_ids||[],ids)&&(!explicit||samePeople(previous,ids)))continue;
+    const direct=!explicit&&old?.assignee_policy&&samePeople(old.assigned_user_ids||[],ids)?previous:ids;
     const policy=categoryAssigneePolicy(d,category);assertAssigneeCount(policy,direct);row.assignee_policy={...policy,direct_assignee_ids:[...direct]};
     if(row===after&&after.binding?.snapshot)after.binding.snapshot.assignee_policy=policy;
   }

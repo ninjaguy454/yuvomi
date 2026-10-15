@@ -4,6 +4,7 @@ import { visibilityWhere } from './visibility.js';
 import { taskOptionalContext } from './task-optional.js';
 import { taskWindowAncestors } from './task-window.js';
 import { assertRewardTaskMutation, rewardTaskCapabilities } from './reward-fulfillment-access.js';
+import {taskDirectAssignmentSelection} from './task-assignee-policy.js';
 
 // Only synchronous response hydration opts into this scope. It never survives
 // a request, contains no lifecycle decisions, and is suspended for mutations.
@@ -261,6 +262,8 @@ export function assertTaskMutation(d, actor, task, body = {}, { operation = task
 }
 function assertCurrentTaskMutation(d, actor, task, body, {operation}) {
   const rewardCompletionReplay=assertRewardTaskMutation(d,actor,task,body,operation)===true;
+  const direct=task?taskDirectAssignmentSelection(d,task,body):null;
+  const assignmentChanged=()=>!!direct&&!equal(ids(direct.selected),ids(direct.previous));
   const device = taskDevicePrincipal(actor);
   if (device) {
     const requireKey=key=>{if(!deviceAllows(device,`tasks.${key}`))throw new PermissionError('This display does not permit this Task setting.');};
@@ -286,7 +289,7 @@ function assertCurrentTaskMutation(d, actor, task, body, {operation}) {
     }
     if(operation==='update' && c.edit) {
       for(const [key,fields] of Object.entries(PROTECTED_FIELDS))if(fields.some(field=>body[field]!==undefined
-        && (field==='assigned_to'?!equal(ids(body[field]),assignments(d,task)):String(body[field]??'')!==String(task[field]??'')))) {
+        && (['assigned_to','direct_assignee_ids'].includes(field)?assignmentChanged():String(body[field]??'')!==String(task[field]??'')))) {
         requireKey(key);if(key==='change_assignment')requireKey('reassign');
       }
       return;
@@ -327,7 +330,7 @@ function assertCurrentTaskMutation(d, actor, task, body, {operation}) {
   if (operation === 'documents') return requireAction('edit');
   const changed = field => {
     if (body[field] === undefined) return false;
-    if (field === 'assigned_to') return !equal(ids(body[field]), assignments(d, task));
+    if (field === 'assigned_to' || field === 'direct_assignee_ids') return assignmentChanged();
     if (field === 'skill_ids') return !equal(ids(body[field]), ids(d.prepare('SELECT skill_id FROM task_skill_requirements WHERE task_id = ?').all(task.id).map(row => row.skill_id)));
     if (field === 'tags') return !equal(idsOrStrings(body[field]), idsOrStrings(d.prepare('SELECT tag FROM task_tags WHERE task_id = ?').all(task.id).map(row => row.tag)));
     if (field === 'location') return true;
@@ -341,9 +344,9 @@ function assertCurrentTaskMutation(d, actor, task, body, {operation}) {
   const me = actorId(actor);
   // Joining/leaving only one's own assignment is the legacy claim interaction,
   // including on a locked instruction. It cannot remove or add another member.
-  const selfAssignmentOnly = changed('assigned_to')
-    && equal(ids(body.assigned_to).filter(id => id !== me), assignments(d, task).filter(id => id !== me))
-    && !PROTECTED_FIELDS.change_assignment.filter(field => field !== 'assigned_to').some(changed);
+  const selfAssignmentOnly = assignmentChanged()
+    && equal(ids(direct.selected).filter(id => id !== me), ids(direct.previous).filter(id => id !== me))
+    && !PROTECTED_FIELDS.change_assignment.filter(field => !['assigned_to','direct_assignee_ids'].includes(field)).some(changed);
   for (const [key, fields] of Object.entries(PROTECTED_FIELDS)) {
     if (!fields.some(changed)) continue;
     requireAction(key === 'change_assignment' && selfAssignmentOnly ? 'claim' : key);
@@ -353,7 +356,7 @@ function assertCurrentTaskMutation(d, actor, task, body, {operation}) {
 }
 const idsOrStrings = value => (Array.isArray(value) ? value : []).map(String).sort();
 const PROTECTED_FIELDS = Object.freeze({
-  change_assignment: ['assigned_to', 'assignment_mode', 'rotation_user_ids', 'rotation_group', 'rotation_slot', 'activity_template_id', 'activity_subject_user_id', 'activity_inputs', 'activity_binding'],
+  change_assignment: ['assigned_to', 'direct_assignee_ids', 'assignment_mode', 'rotation_user_ids', 'rotation_group', 'rotation_slot', 'activity_template_id', 'activity_subject_user_id', 'activity_inputs', 'activity_binding'],
   change_priority: ['priority'], change_points: ['points','scoring_mode'], change_category_tags: ['category', 'tags'],
   change_dates: ['expiration_policy', 'start_time', 'start_date', 'due_date', 'due_time', 'is_recurring', 'recurrence_rule', 'recurrence_from_completion'],
   change_required_skills: ['skill_ids', 'activity_template_id', 'activity_binding'],

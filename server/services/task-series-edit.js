@@ -206,7 +206,8 @@ export function assertSeriesDefinitionMutation(d,actor,task,before,after,{future
       requireCapability(capabilities,'change_required_skills');
     if(!same(old.tags,newValue.tags))requireCapability(capabilities,'change_category_tags');
     const dynamicAssignment=old.binding&&newValue.binding||old.task?.assignment_mode==='round_robin'&&newValue.task?.assignment_mode==='round_robin';
-    if(!dynamicAssignment&&!same(old.assigned_user_ids,newValue.assigned_user_ids)||!same(old.rotation_user_ids,newValue.rotation_user_ids)) {
+    const directChanged=!same(old.assignee_policy?.direct_assignee_ids??old.assigned_user_ids,newValue.assignee_policy?.direct_assignee_ids??newValue.assigned_user_ids);
+    if(!dynamicAssignment&&(!same(old.assigned_user_ids,newValue.assigned_user_ids)||directChanged)||!same(old.rotation_user_ids,newValue.rotation_user_ids)) {
       requireCapability(capabilities,'change_assignment');requireCapability(capabilities,'reassign');
     }
   };

@@ -405,6 +405,17 @@ export function resolveActivityAssignment(d, activity, {
   const policy = assignmentPolicy(activity, assignmentPolicyOverride);
 
   if (policy === 'fixed') {
+    // Explicit shared launches capture their roster in the occurrence/series
+    // definition. Other fixed templates retain their existing scalar behavior.
+    if(Array.isArray(activity.fixed_assignee_ids) && (fixedUserIdOverride==null||Number(fixedUserIdOverride)===Number(activity.fixed_user_id))){
+      const ids=activity.fixed_assignee_ids;
+      if(!ids.length||ids.some(id=>!Number.isSafeInteger(id)||id<1)||new Set(ids).size!==ids.length||Number(ids[0])!==Number(activity.fixed_user_id))throw new Error('The shared Activity assignee definition is invalid.');
+      const participants=ids.map(id=>members.find(member=>Number(member.id)===id));
+      if(participants.some(member=>!member))throw new Error('A selected co-assignee is no longer available.');
+      if(participants.some(member=>activityProficiency(d,activity,member,dateKey).proficiency!==PROFICIENCY.NORMAL))throw new Error('Each co-assignee must be qualified to perform this shared Activity independently.');
+      if(participants.some(member=>!isPresent(member)))throw new Error('A selected co-assignee does not meet this Activity’s presence requirement.');
+      return {primary:participants[0],participants,supervisor:null,supervisionNeeded:false,subject,subjectProficiency:subject?activityProficiency(d,activity,subject,dateKey):null,eligible:participants,strategy:'fixed'};
+    }
     const fixedId = fixedUserIdOverride ?? activity.fixed_user_id;
     const fixed = members.find((member) => Number(member.id) === Number(fixedId));
     if (!fixed) throw new Error('The fixed assignee is no longer available.');

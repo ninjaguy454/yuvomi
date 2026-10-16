@@ -202,6 +202,7 @@ export function attachTaskActivityBindings(d, tasks) {
       binding.activity_assignment_override_allowed = snapshot.allow_assignment_override;
     }
     task.activity_definition_snapshot = Boolean(snapshot);
+    task.activity_fixed_assignee_ids = snapshot?.fixed_assignee_ids ? [...snapshot.fixed_assignee_ids] : null;
     task.activity_template_id = binding?.activity_template_id ?? null;
     task.activity_template_name = binding?.activity_template_name ?? null;
     task.activity_assignment_strategy = binding?.activity_assignment_strategy ?? null;
@@ -261,13 +262,26 @@ function deleteSupportTasks(d, sourceTaskId) {
   d.prepare(`DELETE FROM tasks WHERE id IN (${placeholders})`).run(...rows.map((row) => row.id));
 }
 
-/**
- * Validate/preview a binding without consuming an Activity Template rotation.
- */
+/** Explicit roster edits apply only to an already captured shared definition. */
+export function overrideTaskActivityAssignees(activity, assignmentOverrideUserIds) {
+  if (assignmentOverrideUserIds == null) return activity;
+  if (!Array.isArray(activity?.fixed_assignee_ids)) throw new TaskActivityBindingError('This Activity Template requires one assignee.');
+  if (!Array.isArray(assignmentOverrideUserIds) || !assignmentOverrideUserIds.length
+      || assignmentOverrideUserIds.some(id => !Number.isSafeInteger(id) || id < 1)
+      || new Set(assignmentOverrideUserIds).size !== assignmentOverrideUserIds.length)
+    throw new TaskActivityBindingError('Choose valid distinct Activity Template assignees.');
+  const unchanged = activity.fixed_assignee_ids.length === assignmentOverrideUserIds.length
+    && activity.fixed_assignee_ids.every((id, index) => id === assignmentOverrideUserIds[index]);
+  if (!unchanged && !activity.allow_assignment_override) throw new TaskActivityBindingError('This Activity Template does not allow changing its assignees.');
+  return { ...activity, fixed_user_id: assignmentOverrideUserIds[0], fixed_assignee_ids: [...assignmentOverrideUserIds] };
+}
+
+/** Validate/preview a binding without consuming an Activity Template rotation. */
 export function previewTaskActivityBinding(d, {
   activityTemplateId,
   subjectUserId = null,
   assignmentOverrideUserId = null,
+  assignmentOverrideUserIds = null,
   dateKey = todayKey(d),
   task = null,
   allowInactive = false,
@@ -277,7 +291,7 @@ export function previewTaskActivityBinding(d, {
 } = {}) {
   const id = asPositiveInt(activityTemplateId);
   if (!id) throw new TaskActivityBindingError('Choose a valid activity template.');
-  const activity = parseTaskActivitySnapshot(activitySnapshot ?? definitionSnapshot) || activityTemplate(d, id);
+  const activity = overrideTaskActivityAssignees(parseTaskActivitySnapshot(activitySnapshot ?? definitionSnapshot) || activityTemplate(d, id), assignmentOverrideUserIds);
   if (!activity) throw new TaskActivityBindingError('Activity template not found.');
   if (Number(activity.id) !== id) throw new TaskActivityBindingError('The recurring Activity definition belongs to another template.');
   if (!allowInactive && !activity.active) {
@@ -324,6 +338,7 @@ export function applyTaskActivityBinding(d, taskId, {
   activityTemplateId,
   subjectUserId = null,
   assignmentOverrideUserId = null,
+  assignmentOverrideUserIds = null,
   commitRotation = true,
   dateKey = null,
   allowInactive = false,
@@ -343,12 +358,20 @@ export function applyTaskActivityBinding(d, taskId, {
   const existingBinding = getTaskActivityBinding(d, task.id);
   let snapshot = parseTaskActivitySnapshot(activitySnapshot ?? definitionSnapshot
     ?? (Number(existingBinding?.activity_template_id) === Number(activityTemplateId) ? existingBinding?.definition_snapshot_json : null));
+  snapshot = overrideTaskActivityAssignees(snapshot, assignmentOverrideUserIds);
+  // An explicit scalar reassignment ends the saved shared roster rather than
+  // leaving hidden co-assignees to reappear on a later refresh/occurrence.
+  if(assignmentOverrideUserIds==null && snapshot?.fixed_assignee_ids && assignmentOverrideUserId!=null && Number(assignmentOverrideUserId)!==Number(snapshot.fixed_user_id)){
+    delete snapshot.fixed_assignee_ids;
+    snapshot.fixed_user_id=Number(assignmentOverrideUserId);
+  }
   const adoptedPolicy=adoptAssigneePolicy?categoryAssigneePolicy(d,task.category):undefined;
   if(adoptedPolicy&&snapshot)snapshot={...snapshot,assignee_policy:adoptedPolicy};
   const preview = previewTaskActivityBinding(d, {
     activityTemplateId,
     subjectUserId,
     assignmentOverrideUserId,
+    assignmentOverrideUserIds,
     dateKey: dateKey || task.due_date || todayKey(d),
     task,
     allowInactive,

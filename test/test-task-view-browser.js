@@ -287,6 +287,81 @@ async function mounted(mode = 'list', viewport = { width: 1100, height: 800 }, p
 }
 const frames = page => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 
+for (const mode of ['list', 'kanban']) test(`accepted bounty helper ${mode} keeps subset feedback and canonical child writes`, async () => {
+  const page = await mounted(mode);
+  try {
+    const people = [2, 3, 4].map(id => ({ id, display_name: `Member ${id}` }));
+    const step = (id, assigned) => ({ id, parent_task_id: 1, parent_revision: 1, revision: 1,
+      title: `Bounty step ${id}`, status: 'open', points: 2, assigned_to: assigned[0] ?? null,
+      assigned_users: assigned.map(id => people.find(person => person.id === id)), explicit_assignee_ids: assigned,
+      permissions: { view: true, complete: true } });
+    fixture.tasks = [taskRow(1, { assigned_to: 2, assigned_users: people, direct_assignee_ids: [2, 3, 4],
+      is_accepted_bounty: true, subtasks: [step(101, [2]), step(102, [3]), step(103, []), step(104, [4])] })];
+    await page.evaluate(() => {
+      window.subject.state.groupMode = 'assignee';
+      window.subject.state.groupModes.list = 'assignee';
+      window.subject.state.groupModes.personal = 'assignee';
+      window.subject.state.groupModes.household = 'assignee';
+    });
+    await refresh(page);
+    const helper = '[data-helper-view-user-id="3"]';
+    const primary = '.task-card[data-task-id="1"]:not([data-helper-view-user-id])';
+    await page.click(`${helper} [data-action="toggle-activity-details"]`);
+    await page.waitForSelector(`${helper} .activity-card__participants`);
+    assert.deepEqual(await page.$$eval(`${helper} [data-progress-user-id]`,nodes=>nodes.map(node=>Number(node.dataset.progressUserId))),[3]);
+    assert.deepEqual(await page.$$eval(`${primary} [data-subtask-id]`, rows => rows.map(row => Number(row.dataset.subtaskId))), [101, 102, 103, 104]);
+    assert.deepEqual(await page.$$eval(`${helper} [data-subtask-id]`, rows => rows.map(row => Number(row.dataset.subtaskId))), [102, 103]);
+    assert.equal(await page.$$eval(`${helper} [data-action="toggle-status"], ${helper} [data-task-drag-handle], ${helper} .task-bulk-checkbox`, nodes => nodes.length), 0);
+    assert.equal(await page.$eval(helper, node => !!node.closest('.swipe-row')), false);
+    assert.match(await page.$eval(`${helper} .activity-card__open`, node => node.getAttribute('aria-label')), /Open full activity/);
+    assert.equal(await page.$$eval(`${helper} .activity-card__points`, nodes => nodes.length), 0);
+    if (process.env.TASK_HELPER_EVIDENCE) {
+      mkdirSync(process.env.TASK_HELPER_EVIDENCE, { recursive: true });
+      await page.screenshot({ path: join(process.env.TASK_HELPER_EVIDENCE, `helper-${mode}.png`), fullPage: true });
+    }
+    await page.focus(`${helper} .activity-card__open`);
+    await page.keyboard.down('Shift'); await page.keyboard.press('Space'); await page.keyboard.up('Shift');
+    assert.equal(await page.evaluate(() => window.subject.state.selectedTaskIds.size), 0);
+    // Even a stale root-status control in this view cannot dispatch a parent write.
+    await page.$eval(helper, card => {
+      const button = document.createElement('button'); button.dataset.action = 'toggle-status'; button.dataset.id = '1';
+      card.append(button); button.click(); button.remove();
+    });
+    assert.equal(fixture.writes.length, 0);
+
+    let release;
+    const held = new Promise(resolve => { release = resolve; });
+    await page.setRequestInterception(true);
+    page.on('request', request => {
+      if (request.url().endsWith('/tasks/102/status')) release(request); else void request.continue();
+    });
+    await page.$eval(`${helper} [data-action="toggle-subtask"][data-id="102"]`, node => node.click());
+    const request = await held;
+    assert.match(await page.$eval(`${helper} .activity-card__subtasks-progress`, node => node.textContent), /1 of 2/);
+    assert.match(await page.$eval(`${primary} .activity-card__subtasks-progress`, node => node.textContent), /1 of 4/);
+    await request.continue();
+    await page.waitForFunction(() => window.subject.state.tasks[0].subtasks.find(child => child.id === 102).status === 'done');
+    await page.waitForFunction(() => !document.querySelector('[data-helper-view-user-id="3"] [data-id="102"]').disabled);
+    assert.match(await page.$eval(`${helper} .activity-card__subtasks-progress`,node=>node.textContent),/1 of 2/);
+    assert.match(await page.$eval(`${primary} .activity-card__subtasks-progress`,node=>node.textContent),/1 of 4/);
+    assert.equal((await page.$eval(`${helper} [data-progress-user-id="3"]`,node=>node.textContent)).trim(),'50%');
+    assert.deepEqual(fixture.writes.map(row => row.id), [102]);
+    assert.equal(fixture.writes[0].body.expected_revision, 1);
+    assert.equal(fixture.writes[0].body.expected_parent_revision, 1);
+    assert.deepEqual(await page.$$eval(`${helper} [data-subtask-id]`, rows => rows.map(row => Number(row.dataset.subtaskId))), [102, 103]);
+
+    fixture.tasks[0].subtasks[1].assigned_to = 4;
+    fixture.tasks[0].subtasks[1].assigned_users = [people[2]];
+    fixture.tasks[0].subtasks[1].explicit_assignee_ids = [4];
+    fixture.tasks[0].subtasks[2].assigned_to = 4;
+    fixture.tasks[0].subtasks[2].assigned_users = [people[2]];
+    fixture.tasks[0].subtasks[2].explicit_assignee_ids = [4];
+    await refresh(page);
+    assert.equal(await page.$(helper), null, 'old helper view disappears after its last shared/assigned child moves');
+    assert.deepEqual(await page.$$eval('[data-helper-view-user-id="4"] [data-subtask-id]', rows => rows.map(row => Number(row.dataset.subtaskId))), [102, 103, 104]);
+  } finally { await page.close(); }
+});
+
 test('leaving the Tasks view stops automatic top-level status recovery',async()=>{
   const page=await mounted();try{
     fixture.tasks=[taskRow(1,{subtasks:[]})];await refresh(page);fixture.uncertainStatus=true;

@@ -15,7 +15,7 @@ const candidateVersion=Math.max(...ALL_MIGRATIONS.map(migration=>migration.versi
 function open(file){const d=new Database(file);d.pragma("cipher='sqlcipher'");d.pragma(`key="x'${Buffer.from(key,'utf8').toString('hex')}'"`);d.pragma('foreign_keys=ON');return d;}
 function snapshot(d){
   const tables=d.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all()
-    .filter(row=>!['task_assignee_policies','task_direct_assignees','task_scoring_completion_events'].includes(row.name));
+    .filter(row=>!['task_assignee_policies','task_direct_assignees','task_scoring_completion_events','task_template_launch_requests','task_template_launch_results'].includes(row.name));
   return Object.fromEntries(tables.map(({name})=>{
     const rows=d.prepare(`SELECT * FROM "${name}"`).all().filter(row=>name!=='schema_migrations'||row.version<=10058);
     const values=rows.map(row=>{
@@ -26,7 +26,7 @@ function snapshot(d){
   }));
 }
 function encrypted(file){assert.notEqual(readFileSync(file).subarray(0,16).toString(),'SQLite format 3\0');}
-function emptyCompletionAudit(d){assert.equal(d.prepare('SELECT count(*) n FROM task_scoring_completion_events').get().n,0);}
+function emptyCompletionAudit(d){for(const table of ['task_scoring_completion_events','task_template_launch_requests','task_template_launch_results'])assert.equal(d.prepare('SELECT count(*) n FROM '+table).get().n,0);}
 
 test('encrypted10058 upgrade, reopen and old/new backup restore conserve every existing table row and revision',async()=>{
   const seed=open(filename);

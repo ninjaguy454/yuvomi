@@ -8,7 +8,7 @@ New work and explicit changes to direct assignment/category use the configured r
 
 An existing Activity whose direct authorship cannot be established safely requires explicit review before adopting a restrictive category rule. The application does not guess direct assignees from the old combined visibility list. It never truncates, splits or rewrites that work automatically.
 
-This setting does not change scoring modes, award sources, beneficiary selection, supervisor eligibility or subtask visibility. A single-person template still has one beneficiary and one scalar override. Creating independent activities for several people in one launch, fixed multiple-person template overrides and helper-specific activity views are separate features.
+This setting does not change scoring modes, award sources, beneficiary selection, supervisor eligibility or subtask visibility. A single-person template still has one beneficiary and one scalar override. The explicit [Activities for people launcher and bounty helper views](template-people-and-bounty-views.md) use this category policy when creating new work; they do not convert existing Tasks.
 
 Implementation uses an additive migration10061 on the280410d baseline. Existing category limits start null; existing records are not backfilled. Separate prospective policy/direct-assignee metadata preserves the meaning of the older assignment relation. Older clients may omit the category field; edits retain its stored value. New clients send `direct_assignee_ids` alongside their matching `assigned_to` selection to distinguish direct intent from old visibility echoes. Reusable Activity/Workflow category references prevent deletion; stable category keys survive renaming.
 

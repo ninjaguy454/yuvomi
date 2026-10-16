@@ -24,6 +24,7 @@ import { watchTaskChanges, latestTaskLoader, createTaskStartRefresh, taskConnect
 import { reconcileTaskMarkup, captureTaskViewport } from '/utils/task-view-state.js';
 import { bindTaskCardSelection } from '/utils/task-card-selection.js';
 import { createTaskCardSubtasks, taskCardPendingProjection } from '/utils/task-card-subtasks.js';
+import { bountyAssigneeViews, bountyHelperView, taskCardViewKey } from '/utils/task-helper-views.js';
 import { bindTaskCardTouchDrag, taskDragHandle } from '/utils/task-card-drag.js';
 import { renderMonthYearPicker, dateInSelectedMonth } from '/components/month-year-picker.js';
 import { renderRRuleFields, bindRRuleEvents, getRRuleValues, describeRRule } from '/rrule-ui.js';
@@ -37,6 +38,7 @@ import { refresh as refreshReminders } from '/reminders.js';
 import { renderUserMultiSelect, getSelectedUserIds, bindUserMultiSelect, renderAvatarStack } from '/components/user-multi-select.js';
 import { renderUserRotationOrder, getRotationUserIds } from '/components/user-rotation-order.js';
 import { openTaskWorkflows, openActivityTemplateEditor, openSkillEditor, wireVariableMentions } from '/components/activity-automation.js';
+import {openTemplatePeopleLauncher} from '/components/template-people-launcher.js';
 import { bindActivityVariableInputs } from '/components/variable-expression-editor.js';
 import { renderSkillPicker, bindSkillPicker, renderSubtaskEditor, bindSubtaskEditor } from '/components/task-requirements.js';
 import { createManualTaskDraft, taskDraftSnapshot, taskDraftToActivity } from '/utils/task-draft.js';
@@ -157,6 +159,7 @@ let taskDocuments = null;
 
 /** Progress for the first-class subtasks assigned to one household member. */
 function participantCompletion(task, userId) {
+  if (task?.helper_view_user_id) return completionCounts(task, userId);
   const assigned = actionableSubtasks(task).filter((subtask) =>
     !subtask.is_optional && subtaskParticipants(subtask, state.users).some((user) => Number(user.id) === Number(userId))
   );
@@ -233,7 +236,7 @@ function boardTasks() {
   return filteredTasks();
 }
 
-function taskBuckets(tasks, mode, { includeEmptyAssignees = false, mergeActiveStatuses = false } = {}) {
+function taskBuckets(tasks, mode, { includeEmptyAssignees = false, mergeActiveStatuses = false, helperViews = true } = {}) {
   if (mode === 'none') return [{ id: 'all', label: t('tasks.groupAll'), tasks }];
   if (mode === 'assignee') {
     const buckets = new Map();
@@ -241,6 +244,16 @@ function taskBuckets(tasks, mode, { includeEmptyAssignees = false, mergeActiveSt
       state.users.forEach((user) => buckets.set(`user-${user.id}`, { id: `user-${user.id}`, label: memberLabel(user), tasks: [], user }));
     }
     for (const task of tasks) {
+      const views = helperViews ? bountyAssigneeViews(task, state.users) : null;
+      if (views) {
+        for (const { user, task: view } of views) {
+          const key = `user-${user.id}`;
+          const bucket = buckets.get(key) || { id: key, label: memberLabel(user), tasks: [], user };
+          bucket.tasks.push(view);
+          buckets.set(key, bucket);
+        }
+        continue;
+      }
       const people = taskParticipants(task);
       if (!people.length) {
         const bucket = buckets.get('unassigned') || { id: 'unassigned', label: t('tasks.groupUnassigned'), tasks: [] };
@@ -432,7 +445,7 @@ function renderStartDateBadge(startDateStr) {
 }
 
 function renderSwipeRow(task, innerHtml) {
-  if (isClosedOccurrence(task)) return innerHtml;
+  if (isClosedOccurrence(task) || task.helper_view_user_id) return innerHtml;
   const isDone = task.status === 'done';
   return `
     <div class="swipe-row" data-swipe-id="${task.id}" data-swipe-status="${task.status}">
@@ -607,7 +620,7 @@ function renderParticipantStrip(task, participants) {
   </div>`;
 }
 
-function canToggleTask(task) { return canTask(task, isDevicePrincipal() && task?.status === 'done' ? 'reopen' : 'complete'); }
+function canToggleTask(task) { return !task?.helper_view_user_id && canTask(task, isDevicePrincipal() && task?.status === 'done' ? 'reopen' : 'complete'); }
 
 function canToggleCardSubtask(task, subtask) {
   return !isArchived(task) && !isArchived(subtask) && !isClosedOccurrence(task) && !isClosedOccurrence(subtask)
@@ -641,7 +654,7 @@ function renderActivitySubtasks(task, expanded) {
   }).join('');
   return `<div class="activity-card__subtasks">
     <button type="button" class="activity-card__subtasks-toggle" data-action="toggle-subtasks" data-id="${task.id}"
-      aria-expanded="${expanded}" aria-controls="subtasks-${task.id}">
+      aria-expanded="${expanded}" aria-controls="subtasks-${taskCardViewKey(task)}">
       <i data-lucide="chevron-right" class="activity-card__chevron${expanded ? ' activity-card__chevron--open' : ''}" aria-hidden="true"></i>
       <span>${esc(t('tasks.subtasksLabel'))}</span>
       <span class="activity-card__subtasks-progress activity-card__progress-label">
@@ -649,7 +662,7 @@ function renderActivitySubtasks(task, expanded) {
         ${total ? `<span class="activity-card__progress-percent">${Math.round(done / total * 100)}%</span>` : ''}
       </span>
     </button>
-    <div class="subtask-list${expanded ? ' subtask-list--visible' : ''}" id="subtasks-${task.id}">${rows}</div>
+    <div class="subtask-list${expanded ? ' subtask-list--visible' : ''}" id="subtasks-${taskCardViewKey(task)}">${rows}</div>
   </div>`;
 }
 
@@ -657,11 +670,13 @@ function renderTaskCard(task, opts = {}) {
   task = tripTaskDeadline(task);
   const {
     expandedSubtasks = isSubtasksExpanded(task.id),
-    showCheckbox = false,
+    showCheckbox: requestedCheckbox = false,
     isChecked = false,
     showCategory = true,
     board = false,
   } = opts;
+  const helper = !!task.helper_view_user_id;
+  const showCheckbox = requestedCheckbox && !helper;
   const isDone = task.status === 'done';
   const archived = isArchived(task);
   const participants = taskParticipants(task);
@@ -675,12 +690,12 @@ function renderTaskCard(task, opts = {}) {
   const delegated = task.supervision?.actions?.some(action => action.execution_mode === 'delegated' && action.state !== 'not_required' && !action.completed);
   const waiting = helperWaitingLabel(task, state.currentUserId);
   const pointsDisplay = isPermAdmin() ? { shared: true } : {};
-  const points = taskCompletionPoints(task, pointsDisplay);
+  const points = helper ? null : taskCompletionPoints(task, pointsDisplay);
   const pointsLabel = taskScoringLabel(task, state.currentUserId, pointsDisplay);
   const statusLabel = ({ open: 'Not Started', in_progress: 'In Progress', done: 'Completed', expired: 'Expired', skipped:'Skipped' })[task.status] || task.status;
 
   return `<article class="task-card activity-card${hasDetails ? ' activity-card--has-details' : ''}${showCheckbox ? ' activity-card--selecting' : ''}${points !== null && String(points).length > 3 ? ' activity-card--large-points' : ''}${board ? ' kanban-card' : ''}${isDone ? ' task-card--done kanban-card--done' : ''}${archived ? ' task-card--archived' : ''}"
-         data-task-id="${task.id}"${cardColorAttribute(task.card_color)}>
+         data-task-id="${task.id}"${helper ? ` data-helper-view-user-id="${task.helper_view_user_id}" data-view-key="${taskCardViewKey(task)}"` : ''}${cardColorAttribute(task.card_color)}>
     ${points===null?'':`<span class="activity-card__points" role="img" aria-label="${esc(pointsLabel)}" title="${esc(pointsLabel)}">${points}</span>`}
     <div class="activity-card__surface">
     <div class="activity-card__summary">
@@ -688,11 +703,11 @@ function renderTaskCard(task, opts = {}) {
         ${showCheckbox ? `<label class="task-bulk-select-target"><input type="checkbox" class="task-bulk-checkbox" data-task-id="${task.id}" ${isChecked ? 'checked' : ''}
           aria-label="${esc(`${t('tasks.selectTask')}: ${task.title}`)}"></label>` : ''}
         ${hasDetails ? `<button type="button" class="activity-card__details-toggle" data-action="toggle-activity-details" data-id="${task.id}"
-          aria-expanded="${detailsExpanded}" aria-controls="activity-details-${task.id}" aria-label="${esc(t('tasks.activityDetailsToggle'))}">
+          aria-expanded="${detailsExpanded}" aria-controls="activity-details-${taskCardViewKey(task)}" aria-label="${esc(t('tasks.activityDetailsToggle'))}">
           <i data-lucide="chevron-right" class="activity-card__chevron${detailsExpanded ? ' activity-card__chevron--open' : ''}" aria-hidden="true"></i>
         </button>` : '<span class="activity-card__leading-spacer" aria-hidden="true"></span>'}
       </span>
-      <button type="button" class="activity-card__open" data-action="open-task" data-id="${task.id}"${!board ? ' aria-keyshortcuts="Shift+Space" aria-describedby="task-selection-hint" title="Open Task. Hold to select, or press Shift+Space."' : ''}>
+      <button type="button" class="activity-card__open" data-action="open-task" data-id="${task.id}"${helper ? ` aria-label="${esc(`Open full activity: ${task.title}`)}" title="Open full activity"` : !board ? ' aria-keyshortcuts="Shift+Space" aria-describedby="task-selection-hint" title="Open Task. Hold to select, or press Shift+Space."' : ''}>
         <span class="activity-card__title u-card-title u-compact"><span class="activity-card__title-text">${esc(task.title)}</span></span>
         <span class="activity-card__when">
           ${task.next_trip_step?`<span class="due-date">Next: ${esc(task.next_trip_step.title)}</span>`:''}
@@ -705,6 +720,7 @@ function renderTaskCard(task, opts = {}) {
     <div class="activity-card__metadata">
       <div class="activity-card__context">
         <div class="activity-card__state">
+          ${helper ? '<span class="activity-card__status-label">Helper work</span>' : ''}
           ${isClosedOccurrence(task) ? `<span class="activity-card__status-label activity-card__status-label--expired">${task.status==='skipped'?'Skipped':'Expired'}</span>` : ''}
           ${waiting ? `<span class="activity-card__status-label activity-card__status-label--waiting">${esc(waiting)}</span>` : ''}
           ${renderPriorityBadge(task.priority)}
@@ -716,10 +732,10 @@ function renderTaskCard(task, opts = {}) {
         ${names ? `<span class="activity-card__assignee sr-only">${esc(names)}</span>` : ''}
       </div>
       <div class="activity-card__controls">
-        <button type="button" class="task-status-btn task-status-btn--${task.status}" data-action="toggle-status" data-id="${task.id}" data-status="${task.status}" ${isClosedOccurrence(task) || !canToggleTask(task) || task.supervision_action?.can_complete === false ? 'disabled' : ''}
+        ${helper ? '' : `<button type="button" class="task-status-btn task-status-btn--${task.status}" data-action="toggle-status" data-id="${task.id}" data-status="${task.status}" ${isClosedOccurrence(task) || !canToggleTask(task) || task.supervision_action?.can_complete === false ? 'disabled' : ''}
           title="${esc(statusLabel)}" aria-label="${esc(isClosedOccurrence(task) ? task.status==='skipped'?'Skipped. No new completion points awarded.':'Expired. Reopen from Task details to resume.' : `${statusLabel}. ${isDone ? t('tasks.markOpen', { title: task.title }) : t('tasks.markDone', { title: task.title })}`)}">
           <i data-lucide="${isClosedOccurrence(task) ? 'clock-alert' : 'check'}" class="task-status-btn__check" aria-hidden="true"></i>
-        </button>
+        </button>`}
         ${board && !isClosedOccurrence(task) && canToggleTask(task) && task.supervision_action?.can_complete !== false ? `<button type="button" class="task-card__drag-handle" data-task-drag-handle draggable="true"
           data-action="open-task" data-id="${task.id}" aria-label="${esc(`Move Task: ${task.title}`)}" title="Hold to drag. Tap or press Enter for Task status."><i data-lucide="grip-vertical" class="icon-sm" aria-hidden="true"></i></button>` : ''}
       </div>
@@ -727,7 +743,7 @@ function renderTaskCard(task, opts = {}) {
     ${blocked ? `<div class="activity-card__blocker"><i data-lucide="user-round-check" class="icon-sm" aria-hidden="true"></i>${delegated ? 'Helper needed' : 'Supervision needed'}</div>` : ''}
     ${(task.is_offer === true ? canTask(task, 'accept') : canTask(task, 'claim')) && canCheckAndClaim(task) ? `<div class="activity-card__claim"><button class="btn btn--primary btn--sm" data-action="claim-activity" data-id="${task.id}">${esc(task.is_offer === true ? t('tasks.acceptTitle') : task.activity_assignment_state === 'unavailable' ? 'Check availability and claim' : t('tasks.claimTask'))}</button></div>` : ''}
 
-    ${detailsExpanded && hasDetails ? `<div class="activity-card__details" id="activity-details-${task.id}">
+    ${detailsExpanded && hasDetails ? `<div class="activity-card__details" id="activity-details-${taskCardViewKey(task)}">
       ${task.description ? `<div class="activity-card__description">${renderMarkdownLight(task.description)}</div>` : ''}
       ${renderParticipantStrip(task, participants)}
     </div>` : ''}
@@ -1522,6 +1538,10 @@ const taskCardPendingFocus = new WeakMap();
 function taskSnapshot(id) {
   return state.tasks.flatMap(task => [task, ...(task.subtasks || [])]).find(task => Number(task.id) === Number(id));
 }
+function cardTaskSnapshot(card) {
+  const task = card && taskSnapshot(card.dataset.taskId);
+  return card?.dataset.helperViewUserId ? bountyHelperView(task, card.dataset.helperViewUserId, state.users) : task;
+}
 
 function patchTaskPointsBadge(badge, points, label = t('tasks.pointsSummary',{count:points})) {
   if (!badge) return;
@@ -1534,10 +1554,18 @@ function patchTaskPointsBadge(badge, points, label = t('tasks.pointsSummary',{co
 // Only operational nodes change before acknowledgement. Keep the existing card,
 // scrollports, expansion controls and metadata in place while siblings queue.
 function patchCardSubtaskFeedback(list, task, pending, queue, recheck = () => {}) {
-  const projected = taskCardPendingProjection(task, pending, actionableSubtasks);
-  const progress = completionCounts(projected,state.currentUserId);
+  const canonicalPending = taskCardPendingProjection(task, pending, actionableSubtasks);
   for (const card of list.querySelectorAll(`article[data-task-id="${task.id}"]`)) {
-    for (const child of actionableSubtasks(task)) {
+    const helperId = card.dataset.helperViewUserId;
+    const view = helperId ? bountyHelperView(task, helperId, state.users) : task;
+    const projected = helperId ? bountyHelperView(canonicalPending, helperId, state.users) : canonicalPending;
+    if (!view || !projected) { card.hidden = true; continue; }
+    const progress = completionCounts(projected, helperId || state.currentUserId);
+    if (helperId) {
+      const visible = new Set(actionableSubtasks(view).map(child => Number(child.id)));
+      for (const row of card.querySelectorAll('[data-subtask-id]')) row.hidden = !visible.has(Number(row.dataset.subtaskId));
+    }
+    for (const child of actionableSubtasks(view)) {
       const row = card.querySelector(`[data-subtask-id="${child.id}"]`);
       const button = row?.querySelector('[data-action="toggle-subtask"]');
       if (!button) continue;
@@ -1549,7 +1577,7 @@ function patchCardSubtaskFeedback(list, task, pending, queue, recheck = () => {}
       button.setAttribute('aria-busy', String(!!intent));
       button.setAttribute('aria-label', `${done ? 'Reopen' : 'Complete'}: ${child.title}`);
       button.dataset.status = child.status;
-      button.disabled = !!intent || queue.blocked || !canToggleCardSubtask(task, child);
+      button.disabled = !!intent || queue.blocked || !canToggleCardSubtask(view, child);
       button.querySelector('svg path')?.setAttribute('d', done ? 'm20 6-11 11-5-5' : '');
       let saving = row.querySelector('.subtask-item__pending');
       if (intent?.uncertain && !saving) {
@@ -1571,10 +1599,10 @@ function patchCardSubtaskFeedback(list, task, pending, queue, recheck = () => {}
       if (percent) percent.textContent = `${progress.total ? Math.round(progress.done / progress.total * 100) : 0}%`;
     }
     for (const label of card.querySelectorAll('[data-progress-user-id]')) {
-      const person = taskParticipants(task).find(entry => Number(entry.id) === Number(label.dataset.progressUserId));
+      const person = taskParticipants(view).find(entry => Number(entry.id) === Number(label.dataset.progressUserId));
       // Earned-points presentation follows the canonical response, not intent.
       label.textContent = person?.role === 'supervisor' && !task.is_supervision_projection ? 'Supervisor'
-        : progressLabel(participantCompletion(state.progressMode === 'points' ? task : projected, Number(label.dataset.progressUserId)));
+        : progressLabel(participantCompletion(state.progressMode === 'points' ? view : projected, Number(label.dataset.progressUserId)));
     }
     const status = projected.status;
     const statusButton = card.querySelector('[data-action="toggle-status"]');
@@ -1584,16 +1612,16 @@ function patchCardSubtaskFeedback(list, task, pending, queue, recheck = () => {}
       statusButton.title = ({ open: 'Not Started', in_progress: 'In Progress', done: 'Completed', expired: 'Expired', skipped:'Skipped' })[status];
       statusButton.setAttribute('aria-label', `${statusButton.title}. ${status === 'done' ? t('tasks.markOpen', { title: task.title }) : t('tasks.markDone', { title: task.title })}`);
       statusButton.setAttribute('aria-busy', String(queue.busy));
-      statusButton.disabled = queue.busy || isClosedOccurrence(task) || !canToggleTask(task) || task.supervision_action?.can_complete === false;
+      statusButton.disabled = queue.busy || isClosedOccurrence(view) || !canToggleTask(view) || view.supervision_action?.can_complete === false;
     }
     const drag = card.querySelector('[data-task-drag-handle]');
     if (drag) {
-      drag.disabled = queue.busy || isArchived(task) || isClosedOccurrence(task) || !canToggleTask(task) || task.supervision_action?.can_complete === false;
+      drag.disabled = queue.busy || isArchived(view) || isClosedOccurrence(view) || !canToggleTask(view) || view.supervision_action?.can_complete === false;
       drag.draggable = !drag.disabled;
     }
     const points = card.querySelector('.activity-card__points');
     const pointsDisplay = isPermAdmin() ? { shared: true } : {};
-    const count = taskCompletionPoints(task, pointsDisplay);
+    const count = helperId ? null : taskCompletionPoints(task, pointsDisplay);
     patchTaskPointsBadge(points, count,taskScoringLabel(task,state.currentUserId,pointsDisplay));
     card.classList.toggle('activity-card--large-points', count!==null && String(count).length > 3);
   }
@@ -1819,11 +1847,12 @@ function wireVisibilityWarning(panel, selectSel, msName, warnSel) {
 }
 
 function taskActivityAssignmentPolicy(activity, task, templateId) {
-  if (task?.recurrence_series_id != null && Number(task.activity_template_id) === Number(templateId)) {
+  if ((task?.recurrence_series_id != null || Array.isArray(task?.activity_fixed_assignee_ids)) && Number(task.activity_template_id) === Number(templateId)) {
     return { ...activity,
       assignment_strategy: task.activity_assignment_strategy ?? activity?.assignment_strategy,
       allow_assignment_override: task.activity_assignment_override_allowed ?? activity?.allow_assignment_override,
       subject_required: task.activity_subject_required ?? activity?.subject_required,
+      fixed_assignee_ids: task.activity_fixed_assignee_ids ?? null,
     };
   }
   return activity;
@@ -1856,7 +1885,9 @@ function wireAssignmentMode(panel, task) {
     const hint = panel.querySelector('#task-template-assignment-hint');
     if (hint) {
       hint.hidden = !templateFixed;
-      hint.textContent = overrideAllowed ? 'This template has a fixed assignee. Choose one member to override it for this recurring Task.' : 'The assignee is fixed by this Activity Template.';
+      hint.textContent = overrideAllowed ? Array.isArray(template?.fixed_assignee_ids)
+        ? 'Choose the members assigned to this shared activity. Its current primary stays primary while selected.'
+        : 'This template has a fixed assignee. Choose one member to override it for this recurring Task.' : 'The assignee is fixed by this Activity Template.';
     }
     rotation.hidden = !roundRobin;
   };
@@ -2985,8 +3016,8 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
   if (managedActivity && activityRequiresSubject && !activitySubjectUserId) {
     resetSubmit('Choose a household member for this Activity Template.'); return;
   }
-  if (overrideAssignment && body.assigned_to.length !== 1) {
-    resetSubmit('Choose one assignee for this Activity Template.'); return;
+  if (overrideAssignment && (Array.isArray(selectedTemplate?.fixed_assignee_ids) ? !body.assigned_to.length : body.assigned_to.length !== 1)) {
+    resetSubmit(Array.isArray(selectedTemplate?.fixed_assignee_ids) ? 'Choose at least one assignee for this shared activity.' : 'Choose one assignee for this Activity Template.'); return;
   }
   if (!managedActivity && assignmentMode === 'round_robin') {
     if (!rrule.is_recurring) { resetSubmit('Round robin requires a recurring task.'); return; }
@@ -3046,7 +3077,7 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
   }
 
   const permittedBody=permittedTaskBody(body,controls?.originalTask);
-  if(!managedActivity&&assignmentMode==='fixed'&&Array.isArray(permittedBody.assigned_to))permittedBody.direct_assignee_ids=[...permittedBody.assigned_to];
+  if((!managedActivity||Array.isArray(selectedTemplate?.fixed_assignee_ids))&&assignmentMode==='fixed'&&Array.isArray(permittedBody.assigned_to))permittedBody.direct_assignee_ids=[...permittedBody.assigned_to];
   const countError=controls?.assigneePolicy?.validate();if(countError){resetSubmit(countError);return;}
   if(taskId && controls?.editBaseline && hasTaskScoringChanges(controls.editBaseline.definition,readTaskEditState(form,controls).definition)) {
     if(body.status && body.status!==controls.originalTask.status){resetSubmit(t('tasks.scoringSeparate'));return;}
@@ -3331,7 +3362,7 @@ function wireKanbanDrag(container) {
   board.addEventListener('dragstart', (e) => {
     const handle = taskDragHandle(e.target, board);
     const card = handle?.closest('.kanban-card[data-task-id]');
-    const task = card && taskSnapshot(card.dataset.taskId);
+    const task = cardTaskSnapshot(card);
     if (!task || !canToggleTask(task) || task.supervision_action?.can_complete === false) { e.preventDefault(); return; }
     state.dragTaskId = card.dataset.taskId;
     state.dragBucketKey = card.closest('[data-bucket-key]')?.dataset.bucketKey || null;
@@ -3398,8 +3429,8 @@ function wireKanbanDrag(container) {
       e.stopPropagation();
       const card      = statusBtn.closest('.kanban-card[data-task-id]');
       if (!card) return;
-      const task = state.tasks.find((t) => String(t.id) === String(card.dataset.taskId));
-      if (!task) return;
+      const task = cardTaskSnapshot(card);
+      if (!task || task.helper_view_user_id) return;
       // Der Knopf einer abgelegten Karte holt zurück, statt weiterzuschalten -
       // sein data-next-status trägt dann den Status, den die Aufgabe behalten hat.
       await runColumnMove(task, statusBtn.dataset.nextStatus, container);
@@ -3444,7 +3475,7 @@ function wireKanbanTouch(container) {
   if (!board) { taskTouchBindings.delete(container); return; }
   const dispose = bindTaskCardTouchDrag(board, {
     canDrag: card => {
-      const task = taskSnapshot(card.dataset.taskId);
+      const task = cardTaskSnapshot(card);
       return !!task && canToggleTask(task) && task.supervision_action?.can_complete !== false;
     },
     onDragStateChange: active => {
@@ -3851,7 +3882,7 @@ function renderTaskCalendarAgendaRow(task) {
 
 function renderTaskCalendarAgendaGroups(tasks) {
   if (!tasks.length) return `<p class="task-calendar-agenda__empty">${esc(t('tasks.kanbanColEmpty'))}</p>`;
-  const buckets = taskBuckets(tasks, state.groupMode).filter((bucket) => bucket.tasks.length);
+  const buckets = taskBuckets(tasks, state.groupMode, { helperViews: false }).filter((bucket) => bucket.tasks.length);
   return buckets.map((bucket) => `<div class="task-calendar-agenda-group">
     ${state.groupMode === 'none' ? '' : `<span class="task-calendar-agenda-group__label">${esc(bucket.label)}</span>`}
     ${sortedTasks(bucket.tasks).map(renderTaskCalendarAgendaRow).join('')}
@@ -4458,6 +4489,7 @@ function wireSwipeGestures(container) {
       reveal: '.swipe-reveal--done',
       flyOut: true,
       run: async (row) => {
+        if (row.querySelector('[data-helper-view-user-id]')) return;
         const taskId = row.dataset.swipeId;
         const snapshot = taskSnapshot(taskId);
         if (!snapshot || !canToggleTask(snapshot)) { await loadTasks(container); return; }
@@ -4980,6 +5012,7 @@ function wireQuickAddBtn(container) {
     container.querySelectorAll('.task-control-popover').forEach((panel) => closeTaskPopover(container, panel));
     openTaskWorkflows({ onCreated: async () => loadTasks(container), canCreate: state.isAdmin });
   });
+  container.querySelector('#btn-template-people')?.addEventListener('click',()=>openTemplatePeopleLauncher({onCreated:async()=>loadTasks(container)}));
 }
 
 function placeSelectOptions(selected = null) {
@@ -5130,7 +5163,7 @@ function wireBulkSelect(container) {
   const list = container.querySelector('#task-list');
   const controller = new AbortController();
   const dispose = bindTaskCardSelection(list, {
-    canSelect: card => state.viewMode === 'list' && !!taskSnapshot(card.dataset.taskId),
+    canSelect: card => state.viewMode === 'list' && !card.dataset.helperViewUserId && !!taskSnapshot(card.dataset.taskId),
     onSelect: card => {
       const restore = captureTaskViewport(container);
       const id = Number(card.dataset.taskId);
@@ -5155,7 +5188,7 @@ function wireBulkCheckboxes(container) {
 
   listEl.addEventListener('change', (e) => {
     const checkbox = e.target.closest('.task-bulk-checkbox');
-    if (!checkbox) return;
+    if (!checkbox || checkbox.closest('[data-helper-view-user-id]')) return;
 
     const taskId = Number(checkbox.dataset.taskId);
     if (checkbox.checked) {
@@ -5329,7 +5362,7 @@ function wireTaskList(container) {
     }
 
     if (action === 'toggle-status') {
-      const task = taskSnapshot(id);
+      const task = cardTaskSnapshot(target.closest('article[data-task-id]')) || (!target.closest('[data-helper-view-user-id]') ? taskSnapshot(id) : null);
       if (!task || !canToggleTask(task)) return;
       target.disabled = true;
       try {
@@ -5363,7 +5396,7 @@ function wireTaskList(container) {
     }
 
     if (action === 'approve-device-task') {
-      const parent = state.tasks.find(task => Number(task.id) === Number(target.closest('article[data-task-id]')?.dataset.taskId));
+      const parent = cardTaskSnapshot(target.closest('article[data-task-id]'));
       const child = actionableSubtasks(parent).find(task => Number(task.id) === Number(id));
       if (!canApproveDeviceTask(child)) return;
       try {
@@ -5382,9 +5415,10 @@ function wireTaskList(container) {
     }
 
     if (action === 'toggle-subtask') {
-      const parent = state.tasks.find(task => Number(task.id) === Number(target.closest('article[data-task-id]')?.dataset.taskId));
-      const child = actionableSubtasks(parent).find(task => Number(task.id) === Number(id));
-      if (!child || !canToggleCardSubtask(parent, child)) return;
+      const view = cardTaskSnapshot(target.closest('article[data-task-id]'));
+      const parent = view && taskSnapshot(view.id);
+      const child = actionableSubtasks(view).find(task => Number(task.id) === Number(id));
+      if (!parent || !child || !canToggleCardSubtask(view, child)) return;
       if (document.activeElement === target) {
         if (!taskCardPendingFocus.has(listEl)) taskCardPendingFocus.set(listEl, new Map());
         taskCardPendingFocus.get(listEl).set(Number(parent.id), target);
@@ -5646,7 +5680,9 @@ function applyTaskPagePermissions(container) {
     if (button) button.hidden = !canCapability('tasks.create');
   }
   const manageButton = container.querySelector('#task-manage-btn');
-  if (manageButton) manageButton.hidden = !canCapability('workflows.run') && !canCapability('tasks.change_category_tags');
+  const canLaunchTemplate=canCapability('tasks.create')&&canCapability('activities.view')&&canCapability('tasks.change_assignment');
+  if (manageButton) manageButton.hidden = !canCapability('workflows.run') && !canCapability('tasks.change_category_tags')&&!canLaunchTemplate;
+  const templatePeopleButton=container.querySelector('#btn-template-people');if(templatePeopleButton)templatePeopleButton.hidden=!canLaunchTemplate;
   const workflowButton = container.querySelector('#btn-quick-add');
   if (workflowButton) workflowButton.hidden = !canCapability('workflows.run');
   for (const id of ['btn-manage-categories', 'btn-manage-tags']) {
@@ -5801,6 +5837,7 @@ export async function render(container, { user }) {
             <button type="button" class="task-control-option" id="btn-manage-categories"><i data-lucide="folder-tree" class="icon-sm" aria-hidden="true"></i><span>${esc(t('tasks.categoriesLabel'))}</span></button>
             <button type="button" class="task-control-option" id="btn-manage-tags"><i data-lucide="tags" class="icon-sm" aria-hidden="true"></i><span>${esc(t('tasks.tagsLabel'))}</span></button>
             <button type="button" class="task-control-option" id="btn-quick-add"><i data-lucide="zap" class="icon-sm" aria-hidden="true"></i><span>${esc(t('tasks.workflowsLabel'))}</span></button>
+            <button type="button" class="task-control-option" id="btn-template-people"><i data-lucide="users" class="icon-sm" aria-hidden="true"></i><span>Create from template</span></button>
           </div>
         </div>
         <div class="task-control-popover task-profile-popover" id="task-profile-popover" popover="auto" role="dialog"></div>

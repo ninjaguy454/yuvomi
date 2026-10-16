@@ -112,6 +112,8 @@ function assertCachedRotationCreationAccess(conn, req, body) {
 function idempotencyMiddleware(req, res, next) {
   // Acceptance receipts reauthorize and project current data inside the service.
   if(/^\/tasks\/[^/]+\/accept\/?$/i.test(req.path))return next();
+  // Template launches have durable receipts and reauthorize current Tasks.
+  if(/^\/tasks\/template-launch\/(?:preview|create)\/?$/i.test(req.path))return next();
   // Notes group receipts reauthorize the complete affected scope and context on
   // every retry. A cached HTTP board must never bypass that canonical service.
   const originalPath=String(req.originalUrl || `${req.baseUrl||''}${req.path||''}`).split('?')[0];

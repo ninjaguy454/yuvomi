@@ -11,6 +11,7 @@ import {listTaskOffers,taskOfferState} from './task-offers.js';
 import { taskWindowAncestors } from './task-window.js';
 import { taskScoringSummary } from './task-scoring.js';
 import {assigneePolicyProjection} from './task-assignee-policy.js';
+import {attachTaskHelperViewMetadata} from './task-helper-views.js';
 
 const fail = (message, status=403) => {throw Object.assign(new Error(message),{status,code:status});};
 const pick = (value, keys) => Object.fromEntries(keys.filter(key=>value[key]!==undefined).map(key=>[key,value[key]]));
@@ -99,6 +100,9 @@ function project(d,principal,row,cache=new Map(),seen=new Set()) {
   const authorizedTaskIds=[row.id,...out.subtasks.map(child=>child.id)];
   try {out.scoring=taskScoringSummary(d,row.id,{viewerId:null,authorizedTaskIds,includeHistoricalSettlements:!row.parent_task_id&&!principal.scope?.member_ids?.length});out.scoring_mode=out.scoring.mode;}
   catch(error){if(error.status===404)out.scoring=null;else throw error;}
+  // Use the source row's scalar assignment, never inherited display members.
+  const metadata=attachTaskHelperViewMetadata(d,[{...row,is_supervision_projection:out.is_supervision_projection}])[0];
+  out.explicit_assignee_ids=metadata.explicit_assignee_ids;out.is_accepted_bounty=metadata.is_accepted_bounty;
   return out;
 }
 export function deviceTaskList(d,principal,{query=null,withVisibility=false}={}) {

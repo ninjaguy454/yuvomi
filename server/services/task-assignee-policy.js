@@ -77,7 +77,7 @@ export function assertActivityAssigneePolicy(policy,activity,resolution){
 }
 const bindingAssignmentConfiguration=binding=>binding?{
   ...Object.fromEntries(['activity_template_id','subject_user_id','assignment_override_user_id'].map(key=>[key,binding[key]??null])),
-  ...Object.fromEntries(['assignment_policy','assignment_strategy','fixed_user_id','participant_count','rotation_group'].map(key=>[key,binding.snapshot?.[key]??null]))
+  ...Object.fromEntries(['assignment_policy','assignment_strategy','fixed_user_id','fixed_assignee_ids','participant_count','rotation_group'].map(key=>[key,binding.snapshot?.[key]??null]))
 }:null;
 function changedRootAssignmentConfiguration(before,after){
   return JSON.stringify(bindingAssignmentConfiguration(before.binding))!==JSON.stringify(bindingAssignmentConfiguration(after.binding))
@@ -93,7 +93,11 @@ export function proposeDefinitionAssigneePolicies(d,before,after,{assignmentInte
     const assignmentField=row===after?'assigned_to':'assigned_user_ids',explicit=Object.hasOwn(fields,assignmentField),selected=explicit?fields[assignmentField]:ids;
     const previous=old?.assignee_policy?.direct_assignee_ids??old?.assigned_user_ids??[];
     const configurationChanged=row===after&&old&&changedRootAssignmentConfiguration(old,row);
-    if(old&&!configurationChanged&&old.task.category===category&&(explicit?samePeople(previous,selected):samePeople(old.assigned_user_ids||[],ids))){
+    // A captured shared Activity may acquire child owners in its visibility
+    // union while its authored direct roster and binding remain unchanged.
+    const sharedDirect=row===after&&row.binding?.snapshot?.fixed_assignee_ids&&old?.binding?.snapshot?.fixed_assignee_ids
+      ?row.assignee_policy?.direct_assignee_ids:null;
+    if(old&&!configurationChanged&&old.task.category===category&&(explicit?samePeople(previous,selected):sharedDirect?samePeople(previous,sharedDirect):samePeople(old.assigned_user_ids||[],ids))){
       if(old.assignee_policy)row.assignee_policy=structuredClone(old.assignee_policy);else delete row.assignee_policy;
       if(row===after&&row.binding?.snapshot){
         if(old.binding?.snapshot?.assignee_policy)row.binding.snapshot.assignee_policy=structuredClone(old.binding.snapshot.assignee_policy);

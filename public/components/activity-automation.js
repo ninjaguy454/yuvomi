@@ -339,7 +339,7 @@ function workflowVariableId(question) {
   return question?.id ?? question?.key ?? '';
 }
 
-function renderRuntimeQuestion(question, members, places, rotationContext = {}) {
+export function renderRuntimeQuestion(question, members, places, rotationContext = {}) {
   if (question.expression || question.kind === 'value') return '';
   const key = h(workflowVariableId(question));
   const label = question.label || workflowVariableId(question);
@@ -371,7 +371,7 @@ function renderRuntimeQuestion(question, members, places, rotationContext = {}) 
   return inputRow(label, `<input class="input" type="${inputType}" name="input_${key}" data-runtime-input="${key}" data-type="${h(question.type || 'text')}" ${required}>`);
 }
 
-function collectRuntimeInputs(form) {
+export function collectRuntimeInputs(form) {
   const inputs = {};
   form.querySelectorAll('[data-runtime-input]').forEach((field) => {
     const key = field.dataset.runtimeInput;

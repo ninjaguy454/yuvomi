@@ -960,6 +960,7 @@ router.get('/activity-options', (req, res) => {
       title_template: activity.title_template,
       description: activity.description,
       category: activity.category,
+      category_max_assignees: categoryAssigneePolicy(db.get(),activity.category).max_assignees,
       priority: activity.priority,
       points: activity.points,
       scoring_mode: activity.scoring_mode,
@@ -988,7 +989,8 @@ router.get('/activity-options', (req, res) => {
       subject_required: activity.subject_required,
       ...variableFields(activity),
     }));
-    res.json({ data: { activities, skills: db.get().prepare('SELECT * FROM skills WHERE active = 1 ORDER BY name COLLATE NOCASE, id').all() } });
+    res.json({ data: { activities, skills: db.get().prepare('SELECT * FROM skills WHERE active = 1 ORDER BY name COLLATE NOCASE, id').all(),
+      members:householdMembers(db.get()),places:db.get().prepare('SELECT * FROM places WHERE active=1 ORDER BY name COLLATE NOCASE,id').all(),launch_actor_id:req.authUserId||req.session.userId } });
   } catch (err) {
     log.error('GET /activity-options:', err);
     res.status(500).json({ error: 'Could not load activity templates.', code: 500 });

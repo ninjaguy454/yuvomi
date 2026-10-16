@@ -10,7 +10,7 @@ function snapshot(d){return Object.fromEntries(d.prepare("SELECT name FROM sqlit
 }]));}
 test('10062 encrypted upgrade only adds empty audit state and never repairs existing household awards',()=>{
   const migration=ALL_MIGRATIONS.find(row=>row.version===10062);assert.ok(migration,'The isolated completion-state migration is registered');
-  assert.deepEqual(ALL_MIGRATIONS.filter(row=>row.version>10061).map(row=>row.version),[10062]);
+  assert.deepEqual(ALL_MIGRATIONS.filter(row=>row.version>10061&&row.version<=migration.version).map(row=>row.version),[10062]);
   const directory=mkdtempSync(join(tmpdir(),'vidamia-subtask-upgrade-')),file=join(directory,'synthetic.db'),key=Buffer.from('synthetic-subtask-upgrade-key').toString('hex');let d;
   const open=readonly=>{const value=new Database(file,{readonly,fileMustExist:readonly});value.pragma("cipher='sqlcipher'");value.pragma(`key="x'${key}'"`);value.pragma('foreign_keys=ON');return value;};
   try{

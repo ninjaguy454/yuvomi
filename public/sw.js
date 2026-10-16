@@ -17,8 +17,8 @@
 
 const APP_RELEASE   = '2.54.0-kitchen.5';
 
-// Release Kanban available-height groups and bottom horizontal scrolling.
-const CACHE_VERSION = `${APP_RELEASE}-vidamia.89`;
+// Release template people creation and bounty helper views.
+const CACHE_VERSION = `${APP_RELEASE}-vidamia.90`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;

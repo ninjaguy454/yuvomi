@@ -17,8 +17,8 @@
 
 const APP_RELEASE   = '2.54.0-kitchen.5';
 
-// Release template people creation and bounty helper views.
-const CACHE_VERSION = `${APP_RELEASE}-vidamia.90`;
+// Release clearer weather card effects and translucent Task columns.
+const CACHE_VERSION = `${APP_RELEASE}-vidamia.91`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;

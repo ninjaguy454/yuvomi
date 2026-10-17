@@ -93,6 +93,10 @@ test('real weather Kanban keeps translucent groups and readable phone and wall-t
       const geometry=await page.evaluate(()=>{const sample=value=>{const c=document.createElement('canvas').getContext('2d');c.fillStyle=value;c.fillRect(0,0,1,1);return c.getImageData(0,0,1,1).data[3]/255;};return{alpha:sample(getComputedStyle(document.querySelector('.task-board__bucket')).backgroundColor),sway:[...document.querySelectorAll('.activity-card')].some(node=>getComputedStyle(node).transform!=='none'),overflow:document.documentElement.scrollWidth>innerWidth+1};});
       await capture(page,'weather-visibility-real-kanban-'+width);
       assert.ok(geometry.alpha<=.65,'real Kanban column reveals the landscape');assert.equal(geometry.sway,false);assert.equal(geometry.overflow,false);
+      check(width+'px real collapse icons retain opaque backing and nontext contrast',await page.$$eval('.task-status-bucket__toggle>.activity-card__chevron',nodes=>{
+        const rgba=value=>{const c=document.createElement('canvas').getContext('2d');c.fillStyle=value;c.fillRect(0,0,1,1);return [...c.getImageData(0,0,1,1).data];},light=rgb=>rgb.slice(0,3).map(v=>v/255).map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4).reduce((sum,v,i)=>sum+v*[.2126,.7152,.0722][i],0);
+        return nodes.length>0&&nodes.every(node=>{const css=getComputedStyle(node),background=rgba(css.backgroundColor),a=light(rgba(css.color)),b=light(background);return background[3]===255&&(Math.max(a,b)+.05)/(Math.min(a,b)+.05)>=3;});
+      }));
       await page.tap('.activity-card__open');await page.waitForSelector('.modal-panel');assert.ok(await page.$eval('.modal-panel',node=>node.textContent.includes('Synthetic scene task')),'real Task detail remains touch accessible');await page.keyboard.press('Escape');
     }
   }finally{await context.close();}

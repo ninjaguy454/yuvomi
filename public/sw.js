@@ -49,6 +49,9 @@ const API_CACHE_WHITELIST = ['/calendar', '/tasks', '/shopping', '/meals', '/con
 // App-Shell: sofort benötigt für ersten Render
 const APP_SHELL = [
   '/utils/task-assignee-policy.js',
+  '/utils/task-helper-views.js',
+  '/components/template-people-launcher.js',
+  '/utils/template-launch-attempt.js',
   '/utils/night-shift-entry.js',
   '/utils/night-shift-game.js',
   '/utils/night-shift-scream.js',

@@ -88,8 +88,11 @@ export function cardColor(theme,slot){
   const t=typeof theme==='string'?byId.get(theme)||byId.get('neutral'):theme;
   const index=CARD_SLOTS.indexOf(slot),neutral=index<0||slot==='neutral-v1',raw=neutral?t.accent:t.slots[index];
   const fill=neutral?t.surface:mixColors(t.kind==='dark'?'#0d1918':'#ffffff',raw,t.kind==='dark'?.36:.48);
-  const out={fill,text:readableColor(t.text,[fill],4.5),edge:readableColor(raw,[fill,t.surface],3),raw,name:neutral?'Neutral':t.slotNames[index]};
-  for(const [role,ink]of Object.entries({muted:t.muted,danger:'#bd4f59',success:'#3a865c',warning:'#aa711e',info:'#357ca0',focus:t.focus}))out[role]=readableColor(ink,[fill,t.surface],4.6);
+  // Local Weather cards reveal the photograph. Protect every ink against the
+  // lightest and darkest possible pixels through their 90% tint.
+  const photographic=t.id?.startsWith('local-weather-')?[mixColors(fill,'#000000',.1),mixColors(fill,'#ffffff',.1)]:[];
+  const out={fill,text:readableColor(t.text,[fill,...photographic],4.5),edge:readableColor(raw,[fill,t.surface,...photographic],3),raw,name:neutral?'Neutral':t.slotNames[index]};
+  for(const [role,ink]of Object.entries({muted:t.muted,danger:'#bd4f59',success:'#3a865c',warning:'#aa711e',info:'#357ca0',focus:t.focus}))out[role]=readableColor(ink,[fill,t.surface,...photographic],4.6);
   return out;
 }
 export function namedThemeVariables(t){

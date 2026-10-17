@@ -8,7 +8,7 @@ function frostMarkup(width,height,index){
   const random=()=>{seed=(seed*1664525+1013904223)>>>0;return seed/4294967296;},point=(x,y)=>x.toFixed(1)+' '+y.toFixed(1);
   let stems='',ferns='',plates='';
   for(let side=0;side<4;side++)for(let i=0;i<8;i++){
-    const along=(i+.25+random()*.5)/8,depth=4+random()*5;
+    const along=(i+.25+random()*.5)/8,depth=8+random()*5;
     const x=side===0?0:side===1?width:width*along,y=side===2?0:side===3?height:height*along;
     const angle=side===0?0:side===1?Math.PI:side===2?Math.PI/2:-Math.PI/2;
     const tx=x+Math.cos(angle)*depth,ty=y+Math.sin(angle)*depth;
@@ -56,7 +56,7 @@ export function createCardMaterials({document:doc,window:win,onChange}){
       const row={node,rim,frost,index:index++,width:0,height:0,beads:[],patches:[],active:false,visible:rect.bottom>0&&rect.top<win.innerHeight&&rect.right>0&&rect.left<win.innerWidth,addedPosition:win.getComputedStyle(node).position==='static'};
       if(row.addedPosition)node.classList.add('local-weather-card-host');
       for(let i=0;i<4;i++){
-        const bead=make('local-weather-water-bead');bead.style[i%2?'right':'left']=(1+i%2)+'px';bead.style.width=(2+(i%3))+'px';bead.style.height=(3+(i%3)*2)+'px';rim.append(bead);
+        const bead=make('local-weather-water-bead');bead.style[i%2?'right':'left']=(1+i%2)+'px';bead.style.width=(6+(i%3))+'px';bead.style.height=(9+(i%3)*2)+'px';rim.append(bead);
         row.beads.push({node:bead,speed:.08+i*.015,phase:(row.index*.19+i*.24)%1});
       }
       for(let i=0;i<1;i++){

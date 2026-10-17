@@ -8,8 +8,8 @@
     "node": ">=22.0.0"
   },
   "scripts": {
-    "test:weather-scene": "node --test test/test-weather-scene-facts.js test/test-weather-scene-routes.js test/test-local-weather-scene-runtime.js test/test-local-weather-scene.js test/test-weather-thunder.js",
-    "test:weather-scene-browser": "node --test --test-concurrency=1 test/test-local-weather-scene-browser.js test/test-local-weather-scene-full-app-browser.js test/test-weather-postdeploy-browser.js",
+    "test:weather-scene": "node --test test/test-weather-surface-contrast.js test/test-weather-scene-facts.js test/test-weather-scene-routes.js test/test-local-weather-scene-runtime.js test/test-local-weather-scene.js test/test-weather-thunder.js",
+    "test:weather-scene-browser": "node --test --test-concurrency=1 test/test-weather-surface-visibility-browser.js test/test-local-weather-scene-browser.js test/test-local-weather-scene-full-app-browser.js test/test-weather-postdeploy-browser.js",
     "test:device-theme": "node --test test/test-device-theme.js",
     "test:device-theme-browser": "node --test test/test-device-theme-browser.js",
     "test:personal-appearance-shortcut-browser": "node --test test/test-personal-appearance-shortcut-browser.js",

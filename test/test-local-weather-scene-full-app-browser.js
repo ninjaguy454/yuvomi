@@ -38,7 +38,7 @@ test.after(async()=>{
   if(server?.exitCode===null){server.kill();await new Promise(resolve=>server.once('exit',resolve));}report.serverClosed=true;db.close();
   if(process.env.LOCAL_WEATHER_REVIEW_DIR){mkdirSync(process.env.LOCAL_WEATHER_REVIEW_DIR,{recursive:true});writeFileSync(join(process.env.LOCAL_WEATHER_REVIEW_DIR,'integration-full-app-verification.json'),JSON.stringify(report,null,2)+'\n');}
 });
-async function capture(page,name){if(process.env.LOCAL_WEATHER_REVIEW_DIR){const file=join(process.env.LOCAL_WEATHER_REVIEW_DIR,name+'.png');await page.screenshot({path:file});report.captures.push(name+'.png');}}
+async function capture(page,name){if(process.env.LOCAL_WEATHER_REVIEW_DIR){mkdirSync(process.env.LOCAL_WEATHER_REVIEW_DIR,{recursive:true});const file=join(process.env.LOCAL_WEATHER_REVIEW_DIR,name+'.png');await page.screenshot({path:file});report.captures.push(name+'.png');}}
 async function login(page){await page.evaluateOnNewDocument(()=>{localStorage.setItem('yuvomi-lang','en');localStorage.setItem('yuvomi-locale','en');});await page.goto(origin+'/login');await page.waitForSelector('#username');await page.type('#username','scenereview');await page.type('#password',password);await page.click('[type=submit]');await page.waitForSelector('.dashboard');}
 function track(page){page.on('pageerror',error=>errors.push(error.message));page.on('request',request=>{const url=new URL(request.url());if(url.pathname.startsWith('/api/v1/weather'))requests.push(url.pathname);});page.setDefaultTimeout(15000);}
 
@@ -83,6 +83,21 @@ test('real personal app receives whitelisted household facts and mounts approved
   }finally{await context.close();}
 });
 
+test('real weather Kanban keeps translucent groups and readable phone and wall-tablet controls',async()=>{
+  const context=await browser.createBrowserContext(),page=await context.newPage();track(page);
+  try{
+    await page.setViewport({width:390,height:844,hasTouch:true});await page.emulateMediaFeatures([{name:'prefers-reduced-motion',value:'reduce'}]);await login(page);
+    for(const [width,height]of [[390,844],[1280,800]]){
+      await page.setViewport({width,height,hasTouch:true});await page.goto(origin+'/tasks?view=kanban');await page.waitForSelector('.task-board__bucket .activity-card');await page.waitForSelector('.local-weather-card-rim[data-active=true]');
+      await page.waitForFunction(()=>[...document.querySelectorAll('.local-weather-art')].every(image=>image.complete&&image.naturalWidth));
+      const geometry=await page.evaluate(()=>{const sample=value=>{const c=document.createElement('canvas').getContext('2d');c.fillStyle=value;c.fillRect(0,0,1,1);return c.getImageData(0,0,1,1).data[3]/255;};return{alpha:sample(getComputedStyle(document.querySelector('.task-board__bucket')).backgroundColor),sway:[...document.querySelectorAll('.activity-card')].some(node=>getComputedStyle(node).transform!=='none'),overflow:document.documentElement.scrollWidth>innerWidth+1};});
+      await capture(page,'weather-visibility-real-kanban-'+width);
+      assert.ok(geometry.alpha<=.65,'real Kanban column reveals the landscape');assert.equal(geometry.sway,false);assert.equal(geometry.overflow,false);
+      await page.tap('.activity-card__open');await page.waitForSelector('.modal-panel');assert.ok(await page.$eval('.modal-panel',node=>node.textContent.includes('Synthetic scene task')),'real Task detail remains touch accessible');await page.keyboard.press('Escape');
+    }
+  }finally{await context.close();}
+});
+
 test('real Wall scene retains house permissions and device denial remains neutral',async()=>{
   const personal=await browser.createBrowserContext(),page=await personal.newPage();track(page);await page.setViewport({width:1920,height:1080});
   try{
@@ -92,7 +107,7 @@ test('real Wall scene retains house permissions and device denial remains neutra
     check('Wall status labels retain opaque surfaces and readable contrast',await page.$$eval('.wall-dashboard__connection,.wall-dashboard__footer',nodes=>{
       const rgb=value=>(value.match(/[\d.]+/g)||[]).map(Number),light=channels=>channels.slice(0,3).map(v=>v/255).map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4).reduce((sum,v,i)=>sum+v*[.2126,.7152,.0722][i],0);
       return nodes.length===2&&nodes.every(node=>{const css=getComputedStyle(node),background=rgb(css.backgroundColor);if(background.length===4&&background[3]!==1)return false;const a=light(rgb(css.color)),b=light(background);return(Math.max(a,b)+.05)/(Math.min(a,b)+.05)>=4.5;});
-    }));await capture(page,'integration-wall');
+    }));await capture(page,'integration-wall');await page.setViewport({width:1280,height:800,hasTouch:true});await page.waitForSelector('.wall-dashboard__connection',{visible:true});await page.waitForSelector('.local-weather-scene');await page.waitForFunction(()=>[...document.querySelectorAll('.local-weather-art')].every(image=>image.complete&&image.naturalWidth));await capture(page,'weather-visibility-real-wall-tablet');
   }finally{await personal.close();}
   const preferences=normalizeDevicePreferences(db,{});preferences.allow_theme_changes=true;preferences.appearance.named_appearance=selected;
   const device=createDevice(db,{name:'Synthetic weather-denied scene display',preferences},1),token='synthetic-scene-device-'+device.id;

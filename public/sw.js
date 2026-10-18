@@ -17,8 +17,8 @@
 
 const APP_RELEASE   = '2.54.0-kitchen.5';
 
-// Release clearer weather card effects and translucent Task columns.
-const CACHE_VERSION = `${APP_RELEASE}-vidamia.91`;
+// Release explicit activity closure with preserved progress and points.
+const CACHE_VERSION = `${APP_RELEASE}-vidamia.92`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;

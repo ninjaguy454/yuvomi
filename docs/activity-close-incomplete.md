@@ -12,6 +12,8 @@ An authorized household parent or administrator must have the existing whole-sco
 
 Coupled Workflow and rotation work, synced/pending-export work, prize deliveries and payment tasks retain their existing lifecycle. They are excluded from this action until their cancellation semantics are defined. Ordinary completion, Skip, expiration and archive remain separate outcomes. A closed activity does not satisfy a Workflow dependency.
 
+The rotation exclusion includes the authoritative next recurrence definition and template assignment cursor, even when this occurrence has a fixed-assignment exception. Existing expired-child Reopen also respects closed structural and helper-source ancestors. Device active lists omit closed source work; direct and historical helper views show the closure without rewriting saved checkbox records.
+
 ## API and compatibility
 
 - `POST /api/v1/tasks/{id}/close-incomplete`

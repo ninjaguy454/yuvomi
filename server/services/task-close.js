@@ -7,13 +7,23 @@ import {retiredRecurrenceOccurrence} from './task-recurrence-frontier.js';
 import {taskSkipScope} from './task-skip.js';
 import {reconcileTaskSupervision} from './task-supervision.js';
 import {taskDeadlineMs} from './task-window.js';
-import {authoritativeTaskRecurrence} from './task-series.js';
+import {authoritativeTaskRecurrence,taskSeriesState,seriesDefinitionForGeneration} from './task-series.js';
+
+const coupledRotation=task=>task?.assignment_mode==='round_robin'||task?.rotation_group||JSON.parse(task?.rotation_bindings_json||'[]').length>0;
+const coupledBinding=binding=>binding&&!(binding.assignment_override_user_id&&binding.snapshot?.allow_assignment_override)
+  &&!['fixed','subject_skill'].includes(binding.snapshot?.assignment_strategy);
 
 export function taskCloseUnsupportedReason(d,task,rows=taskSkipScope(d,task.id)) {
   if(task.parent_task_id||d.prepare('SELECT 1 FROM task_activity_support_tasks WHERE task_id=? UNION SELECT 1 FROM task_supervision_actions WHERE counterpart_task_id=?').get(task.id,task.id))return 'Close the whole original activity from its details.';
   if(retiredRecurrenceOccurrence(d,task.id))return 'This occurrence is no longer materialized.';
+  // An occurrence-only assignment exception does not replace its next series
+  // definition. Check the configuration the recurrence generator will consume.
+  const recurrence=authoritativeTaskRecurrence(d,task),state=taskSeriesState(d,task.id);
+  const next=state?seriesDefinitionForGeneration(d,state.series_id,state.occurrence.generation+1)?.data:null;
+  if(recurrence?.is_recurring&&(coupledRotation(recurrence)||next?.subtasks?.some(action=>coupledRotation(action.task))
+    ||coupledBinding(state?.definition?.data.binding)||coupledBinding(next?.binding)))return 'Coupled rotation work must use its existing lifecycle.';
   for(const row of rows) {
-    if(row.assignment_mode==='round_robin'||row.rotation_group||(row.rotation_bindings_json&&row.rotation_bindings_json!=='[]')
+    if(coupledRotation(row)
       ||d.prepare('SELECT 1 FROM task_rotation_occurrences WHERE task_id=? UNION SELECT 1 FROM task_rotation_periods WHERE task_id=?').get(row.id,row.id))return 'Coupled rotation work must use its existing lifecycle.';
     if(d.prepare('SELECT 1 FROM workflow_instance_tasks WHERE task_id=? UNION SELECT 1 FROM workflow_instances WHERE parent_task_id=? UNION SELECT 1 FROM workflow_task_dependencies WHERE task_id=? OR depends_on_task_id=?').get(row.id,row.id,row.id,row.id))return 'Coupled Workflow work must use its existing lifecycle.';
     if(d.prepare('SELECT 1 FROM reward_fulfillment_task_links WHERE task_id=?').get(row.id))return 'Prize deliveries must use their existing fulfillment or Undo action.';

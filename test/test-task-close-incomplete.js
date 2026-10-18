@@ -120,6 +120,59 @@ test('coupled rotation closure remains excluded without consuming a turn',async 
   const before=f.snapshot(),result=await close(f,root.id);assert.equal(result.status,409);assert.equal(result.reason,'close_incomplete_unsupported');assert.equal(f.snapshot(),before);
 });
 
+test('occurrence-only fixed assignment cannot close an authoritative round-robin series',async t=>{
+  const f=await scoringFixture(t),root=(await f.create({...routine,...recurring,assignment_mode:'round_robin',rotation_user_ids:[2,3]})).data;
+  assert.equal((await f.edit(root.id,{edit_scope:'occurrence',assignment_mode:'fixed',assigned_to:[2],rotation_user_ids:[]})).status,200);
+  const before=f.snapshot(),result=await close(f,root.id);
+  assert.equal(result.status,409,JSON.stringify(result));assert.equal(result.reason,'close_incomplete_unsupported');assert.equal(f.snapshot(),before);
+  assert.equal((await f.call('GET',`/tasks/${root.id}`)).data.can_close_incomplete,false);
+});
+
+for(const mode of ['round_robin','binding','template_cursor'])test(`future-only ${mode} remains outside Close without consuming recurrence`,async t=>{
+  const f=await scoringFixture(t),root=(await f.create({...routine,...recurring})).data;
+  const {taskSeriesState,appendSeriesDefinition}=await import('../server/services/task-series.js');
+  const state=taskSeriesState(f.d,root.id),definition=structuredClone(state.definition.data);
+  if(mode==='round_robin'){definition.task.assignment_mode='round_robin';definition.rotation_user_ids=[2,3];}
+  else if(mode==='binding')definition.task.rotation_bindings_json=JSON.stringify([{purpose_key:'synthetic',group_id:1}]);
+  else definition.binding={snapshot:{assignment_strategy:'eligible_round_robin',allow_assignment_override:false},assignment_override_user_id:null};
+  appendSeriesDefinition(f.d,root.id,{actorId:1,definition,effectiveGeneration:state.occurrence.generation+1,force:true});
+  const before=f.snapshot(),result=await close(f,root.id);
+  assert.equal(result.status,409,JSON.stringify(result));assert.equal(result.reason,'close_incomplete_unsupported');assert.equal(f.snapshot(),before);
+  assert.equal((await f.call('GET',`/tasks/${root.id}`)).data.can_close_incomplete,false);
+});
+
+test('legacy expired-child Reopen cannot change closed activity progress or policy',async t=>{
+  const f=await scoringFixture(t),root=(await f.create(routine)).data,child=root.subtasks[1].id;
+  assert.equal((await f.edit(child,{expiration_policy:'expire_incomplete',due_date:'2026-11-01',due_time:'13:00'})).status,200);
+  t.mock.timers.setTime(Date.parse('2026-11-02T12:00:00Z'));
+  const {expireTask}=await import('../server/services/task-lifecycle.js');assert.equal(expireTask(f.d,child).expired,true);
+  assert.equal((await close(f,root.id)).status,200);
+  const before=f.snapshot(),result=await f.call('POST',`/tasks/${child}/reopen`,{expiration_policy:'keep_overdue'});
+  assert.equal(result.status,409,JSON.stringify(result));assert.equal(result.reason,'task_closed_incomplete');assert.equal(f.snapshot(),before);
+  assert.equal((await reopen(f,root.id)).status,200);
+  assert.equal((await f.call('POST',`/tasks/${child}/reopen`,{expiration_policy:'keep_overdue'})).status,200);
+  assert.equal(f.row(child).status,'open');
+});
+
+test('devices omit closed helper work from active lists and truthfully project direct history',async t=>{
+  const f=await scoringFixture(t),root=(await f.create(routine)).data;
+  const skill=Number(f.d.prepare("INSERT INTO skills(name,minimum_age,age_promotion,created_by) VALUES('Synthetic device helper',0,'normal',1)").run().lastInsertRowid);
+  for(const [user,proficiency] of [[1,'excluded'],[2,'excluded'],[3,'normal']])f.d.prepare("INSERT INTO user_skill_proficiency(user_id,skill_id,proficiency,source,updated_by) VALUES(?,?,?,'manual',1)").run(user,skill,proficiency);
+  const {setTaskSkills}=await import('../server/services/task-skills.js');
+  const {reconcileTaskSupervision}=await import('../server/services/task-supervision.js');
+  const {deviceTaskList,deviceTaskDetail}=await import('../server/services/device-tasks.js');
+  setTaskSkills(f.d,root.subtasks[1].id,[skill]);const view=reconcileTaskSupervision(f.d,root.id),id=view.support_task_id;
+  const principal={kind:'device',id:1,scope:{},permissions:{modules:{tasks:'write'},capabilities:{'tasks.view_household':'allow','device_tasks.complete':'allow'}}};
+  assert.ok(deviceTaskList(f.d,principal).some(row=>row.id===id));const physical=f.row(id);
+  assert.equal((await close(f,root.id)).status,200);
+  const before=f.snapshot();
+  for(const query of [null,{}, {status:'open'},{status:'in_progress'}])assert.ok(!deviceTaskList(f.d,principal,{query}).some(row=>row.id===id),JSON.stringify(query));
+  const detail=deviceTaskDetail(f.d,principal,id);assert.equal(detail.status,'closed_incomplete');assert.equal(detail.closed_incomplete_at,f.row(root.id).closed_incomplete_at);
+  assert.equal(detail.permissions.complete,false);assert.equal(detail.permissions.reopen,false);assert.equal(detail.permissions.reset,false);
+  const history=deviceTaskList(f.d,principal,{query:{status:'closed_incomplete'}});assert.ok(history.some(row=>row.id===id&&row.status==='closed_incomplete'));
+  assert.deepEqual(f.row(id),physical);assert.equal(f.snapshot(),before);
+});
+
 test('queued assignment and reminder deliveries become stale for closed roots and unchecked children',async t=>{
   const f=await scoringFixture(t),root=(await f.create(routine)).data;
   const {isNotificationDeliveryCurrent}=await import('../server/services/notification-events.js');

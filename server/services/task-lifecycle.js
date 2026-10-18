@@ -407,6 +407,8 @@ export function reopenExpiredTask(d,taskId,{actorId,body={},now=new Date()}={}) 
     assertTaskRevision(d,task,body,{required:true,requireParent:true});
     if(task.status!=='expired')throw new TaskStateError('Only expired Tasks can be reopened.');
     if(task.archived_at)throw new TaskStateError('Restore this Task from the archive before reopening it.');
+    const closed=taskWindowAncestors(d,taskId).find(row=>row.status==='closed_incomplete');
+    if(closed)throw new TaskStateError('A household parent or administrator must explicitly reopen the closed activity before progress can change.',{reason:'task_closed_incomplete',task_id:closed.id});
     if(taskWindowAncestors(d,taskId).some(row=>row.id!==task.id&&row.status==='expired'))
       throw new TaskStateError('Reopen the expired parent Task first.',{reason:'parent_expired'});
     const errors=v.collectErrors([v.date(body.due_date,'due_date'),v.time(body.due_time,'due_time')]);

@@ -16,7 +16,7 @@ import {attachTaskHelperViewMetadata} from './task-helper-views.js';
 const fail = (message, status=403) => {throw Object.assign(new Error(message),{status,code:status});};
 const pick = (value, keys) => Object.fromEntries(keys.filter(key=>value[key]!==undefined).map(key=>[key,value[key]]));
 const keys = ['card_color','card_color_choice','id','title','description','status','priority','points','category','start_date','start_time','due_date','due_time','countdown',
-  'revision','parent_task_id','assigned_to','is_optional','sort_order','is_recurring','expiration_policy','expired_at','skipped_at',
+  'revision','parent_task_id','assigned_to','is_optional','sort_order','is_recurring','expiration_policy','expired_at','skipped_at','closed_incomplete_at',
   'created_at','updated_at','completed_at','locked','recurrence_rule','recurrence_from_completion'];
 const member = row => pick(row,['id','display_name','avatar_color']);
 function requireTask(d, principal, id) {
@@ -39,10 +39,16 @@ function protectedAction(d,row,view=inspectTaskSupervision(d,row.id)) {
   return view.support_task_id===row.id || view.actions.some(action=>(action.action_task_id===row.id || action.counterpart_task_id===row.id)
     && (action.counterpart_task_id===row.id || action.state!=='not_required'));
 }
+function helperClosure(d,row) {
+  if(row.status==='done'||!d.prepare('SELECT 1 FROM task_activity_support_tasks WHERE task_id=? UNION SELECT 1 FROM task_supervision_actions WHERE counterpart_task_id=?').get(row.id,row.id))return null;
+  return taskWindowAncestors(d,row.id).find(source=>source.status==='closed_incomplete');
+}
 function project(d,principal,row,cache=new Map(),seen=new Set()) {
   if(seen.has(row.id))return null;
   seen.add(row.id);
   const out=pick(row,keys);
+  const closed=helperClosure(d,row);
+  if(closed){out.status='closed_incomplete';out.closed_incomplete_at=closed.closed_incomplete_at;}
   Object.assign(out,assigneePolicyProjection(d,row.id));
   out.assigned_users=assignees(d,row).map(member);
   out.assigned_name=out.assigned_users.find(user=>user.id===row.assigned_to)?.display_name || out.assigned_users[0]?.display_name || null;
@@ -73,7 +79,7 @@ function project(d,principal,row,cache=new Map(),seen=new Set()) {
         AND NOT EXISTS(SELECT 1 FROM split_expense_guest_users g WHERE g.user_id=u.id) ORDER BY u.display_name`).all().filter(member=>!allowed.length||allowed.includes(member.id));
     }else out.permissions.claim=false;
   }else out.permissions.claim=false;
-  if(blocked || optional || ['expired','skipped','closed_incomplete'].includes(row.status) || !out.assigned_users.length) {
+  if(blocked || optional || ['expired','skipped','closed_incomplete'].includes(out.status) || !out.assigned_users.length) {
     out.permissions.complete=false;out.permissions.reopen=false;out.permissions.reset=false;
     if(blocked)out.execution_notice='A qualified person must approve this supervised or helper-owned action.';
   }
@@ -124,10 +130,13 @@ export function deviceTaskList(d,principal,{query=null,withVisibility=false}={})
   // before projection; query filters can only narrow device authorization.
   const candidates = d.prepare(`SELECT t.* FROM tasks t WHERE ${taskScopeWhere('t',{includeFuture:true,includeSupervision:true})}
     AND t.archived_at IS NULL ORDER BY t.status='done',t.due_date IS NULL,t.due_date,t.due_time,t.id`).all()
-    .filter(row=>deviceTaskVisible(d,principal,row) && (query
-      ? (!statuses.length?!['expired','skipped','closed_incomplete'].includes(row.status):statuses.includes(row.status))
-      : !['done','expired','skipped','closed_incomplete'].includes(row.status)))
-    .filter(row=>statuses.some(status=>['expired','skipped','done'].includes(status)) || !taskWindowAncestors(d,row.id).some(source=>source.status==='skipped'))
+    .filter(row=>{
+      if(!deviceTaskVisible(d,principal,row))return false;
+      const status=helperClosure(d,row)?'closed_incomplete':row.status;
+      return query?(!statuses.length?!['expired','skipped','closed_incomplete'].includes(status):statuses.includes(status))
+        :!['done','expired','skipped','closed_incomplete'].includes(status);
+    })
+    .filter(row=>statuses.some(status=>['expired','skipped','closed_incomplete','done'].includes(status)) || !taskWindowAncestors(d,row.id).some(source=>['skipped','closed_incomplete'].includes(source.status)))
     .filter(row=>(!priorities.length||priorities.includes(row.priority))&&(!categories.length||categories.includes(row.category))
       &&(!assigned.length||assignees(d,row).some(member=>assigned.includes(member.id)))
       && (!tags.length||tags.every(tag=>d.prepare('SELECT 1 FROM task_tags WHERE task_id=? AND LOWER(tag)=?').get(row.id,tag))))

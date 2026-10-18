@@ -61,7 +61,7 @@ export function retireTripTask(d,id,actorId,reason){
  recordTaskActivity(d,id,'archived',actorId,{reason});
 }
 function syncReminders(d,trip,step,t,recipe){
- if(!t||['done','expired','skipped'].includes(t.status)||t.archived_at)return;
+ if(!t||['done','expired','skipped','closed_incomplete'].includes(t.status)||t.archived_at)return;
  const existing=d.prepare('SELECT m.*,r.remind_at,r.pushed_at,r.dismissed FROM trip_step_reminders m LEFT JOIN reminders r ON r.id=m.reminder_id WHERE m.trip_id=? AND m.step_key=?').all(trip.id,step.step_key);
  const recipients=new Set(recipe.reminder_offset_minutes==null?[]:d.prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(t.id).map(r=>r.user_id));
  for(const m of existing){
@@ -114,7 +114,7 @@ export function reconcileTripTasks(d,trip,body,actorId){
  const before=json(prior);
  if(trip.status==='cancelled'){
   if(group.state==='cancelled'){saveDefinitionOnly();return;}
-  const remaining=d.prepare("SELECT id FROM tasks WHERE (id=? OR parent_task_id=?) AND archived_at IS NULL AND status NOT IN ('done','expired','skipped')").all(parent.id,parent.id).map(t=>t.id);
+  const remaining=d.prepare("SELECT id FROM tasks WHERE (id=? OR parent_task_id=?) AND archived_at IS NULL AND status NOT IN ('done','expired','skipped','closed_incomplete')").all(parent.id,parent.id).map(t=>t.id);
   for(const s of prior)if(s.state==='active'){retireTripTask(d,s.task_id,actorId,'Trip cancelled');d.prepare("UPDATE trip_task_steps SET state='cancelled' WHERE trip_id=? AND step_key=?").run(trip.id,s.step_key);}
   for(const id of remaining)retireTripTask(d,id,actorId,'Trip cancelled');
   d.prepare("UPDATE trip_task_groups SET state='cancelled',generated_json=?,revision=revision+1 WHERE trip_id=?").run(json({...baseline,definition_hash:definitionHash,cancelled_ids:remaining}),trip.id);return;
@@ -138,7 +138,7 @@ export function reconcileTripTasks(d,trip,body,actorId){
   let s=prior.find(r=>r.step_key===recipe.step_key),t=s?.task_id?d.prepare('SELECT * FROM tasks WHERE id=?').get(s.task_id):null;
   if(s&&s.state!=='active')continue; // tombstones never resurrect through another save
   const desired=desiredStep(d,trip,recipe);
-  if(t&&(['done','expired','skipped'].includes(t.status)||t.archived_at))continue;
+  if(t&&(['done','expired','skipped','closed_incomplete'].includes(t.status)||t.archived_at))continue;
   if(!s){
    if(parent.status==='done')throw new TaskStateError('Reopen the completed Trip checklist before adding steps.');
    const id=Number(d.prepare("INSERT INTO tasks(title,description,category,priority,status,created_by,parent_task_id,points,visibility,is_recurring,expiration_policy) VALUES(?,?,'misc',?,'open',?,?,0,'all',0,'keep_overdue')").run(recipe.title,recipe.description,recipe.priority,actorId,parent.id).lastInsertRowid);

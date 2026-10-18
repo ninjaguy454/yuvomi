@@ -375,7 +375,7 @@ async function runDueNotifications({
         WITH RECURSIVE ancestry(id,parent_task_id,status) AS (
           SELECT id,parent_task_id,status FROM tasks WHERE id=r.entity_id
           UNION SELECT t.id,t.parent_task_id,t.status FROM tasks t JOIN ancestry a ON t.id=a.parent_task_id
-        ) SELECT 1 FROM ancestry WHERE status IN ('expired','skipped')))
+        ) SELECT 1 FROM ancestry WHERE status IN ('expired','skipped','closed_incomplete')))
     ORDER BY r.remind_at ASC
   `).all(nowIso);
 
@@ -386,7 +386,7 @@ async function runDueNotifications({
   for (const reminder of due) {
     if(reminder.entity_type==='task'&&!tripReminderActive(activeDb,reminder.entity_id))continue;
     if(reminder.entity_type==='task' && taskWindowAncestors(activeDb,reminder.entity_id)
-      .some(row=>['expired','skipped'].includes(row.status)))continue;
+      .some(row=>['expired','skipped','closed_incomplete'].includes(row.status)))continue;
     const payload = reminderPayload(reminder, locale);
     const notification = enqueueNotification(activeDb, {
       userId: reminder.created_by,

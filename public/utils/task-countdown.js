@@ -70,7 +70,7 @@ function durationLabel(minutes) {
 /** Presentation only: never alters task status, expiration, or stored dates. */
 export function taskCountdown(task, now = new Date()) {
   if (!(task?.countdown === true || Number(task?.countdown) === 1)
-    || task.archived_at || task.expired_at || ['done', 'expired','skipped'].includes(task.status)) return null;
+    || task.archived_at || task.expired_at || ['done', 'expired','skipped','closed_incomplete'].includes(task.status)) return null;
   const due = dueFields(task);
   const fields = zonedFields(now);
   if (!due || !fields) return null;

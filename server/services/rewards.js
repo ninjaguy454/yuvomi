@@ -47,7 +47,7 @@ export function awardForCompletion(d, taskId, actingUserId) {
     const task = d.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
     if (!task || !Number.isInteger(task.points) || task.points < 0) return false;
     if(task.parent_task_id && task.status!=='done')return false;
-    if (taskWindowAncestors(d,taskId).some(row=>['expired','skipped'].includes(row.status))) return false;
+    if (taskWindowAncestors(d,taskId).some(row=>['expired','skipped','closed_incomplete'].includes(row.status))) return false;
     const provenance=rewardOccurrenceProvenance(d,taskId);
     if(provenance.retired)return false;
     const settled=d.prepare(`SELECT s.* FROM task_scoring_settlements s WHERE logical_key=?

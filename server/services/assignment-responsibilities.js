@@ -311,7 +311,7 @@ export function listTaskResponsibilities(d, taskIds) {
 
 export function claimTask(d, taskId, userId, {actorId=userId,sourceDevice=null}={}) {
   return d.transaction(() => {
-    if (taskWindowAncestors(d,taskId).some(row=>['expired','skipped'].includes(row.status))) throw new Error('This Task is expired or skipped; assignments are closed.');
+    if (taskWindowAncestors(d,taskId).some(row=>['expired','skipped','closed_incomplete'].includes(row.status))) throw new Error('This Task is expired or skipped; assignments are closed.');
     const context = d.prepare("SELECT * FROM task_assignment_context WHERE task_id = ? AND strategy = 'open_claimable'").get(taskId);
     if (!context) throw new Error('This task is not claimable.');
     if (!['open', 'unavailable'].includes(context.state)) throw new Error('This task has already been claimed.');
@@ -367,7 +367,7 @@ export function claimTask(d, taskId, userId, {actorId=userId,sourceDevice=null}=
 
 export function overrideTaskAssignment(d, taskId, targetUserId, actorUserId) {
   return d.transaction(() => {
-    if (taskWindowAncestors(d,taskId).some(row=>['expired','skipped'].includes(row.status))) throw new Error('This Task is expired or skipped; assignments are closed.');
+    if (taskWindowAncestors(d,taskId).some(row=>['expired','skipped','closed_incomplete'].includes(row.status))) throw new Error('This Task is expired or skipped; assignments are closed.');
     const context = d.prepare('SELECT * FROM task_assignment_context WHERE task_id = ?').get(taskId);
     if (!context) throw new Error('This task is not managed by an assignment policy.');
     if (!context.override_allowed) throw new Error('Assignment overrides are disabled for this activity.');
@@ -416,7 +416,7 @@ export function respondToTaskObligation(d, obligationId, action, actorUserId, no
     if (!obligation) throw new Error('Assignment request not found.');
     if (!['pending', 'accepted'].includes(obligation.status)) throw new Error('This assignment request is already closed.');
     const source = d.prepare('SELECT assigned_to,status,archived_at FROM tasks WHERE id=?').get(obligation.task_id);
-    if (!source || ['done', 'expired', 'skipped'].includes(source.status) || source.archived_at != null
+    if (!source || ['done', 'expired', 'skipped','closed_incomplete'].includes(source.status) || source.archived_at != null
       || taskWindowAncestors(d,obligation.task_id).some(row=>row.status==='skipped')) throw new Error('This Task is no longer active.');
     if (obligation.role === 'primary' && Number(source.assigned_to) !== Number(obligation.responsible_user_id)) {
       throw new Error('This assignment request is no longer current.');
@@ -565,7 +565,7 @@ export function reconcileOverdueTaskObligations(d, { nowAt = new Date().toISOStr
   const expired = d.prepare(`
     SELECT o.* FROM planning_obligations o JOIN tasks t ON t.id=o.task_id
      WHERE o.entity_type = 'task' AND o.status = 'pending'
-       AND t.status NOT IN ('done', 'expired', 'skipped') AND t.archived_at IS NULL
+       AND t.status NOT IN ('done', 'expired', 'skipped','closed_incomplete') AND t.archived_at IS NULL
        AND ${taskUnskippedWhere(d)}
        AND o.response_deadline IS NOT NULL
      ORDER BY o.id

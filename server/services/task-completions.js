@@ -246,23 +246,29 @@ export function seriesHistory(d, { me, taskId, limit = 20 }) {
 // events without colliding with completion IDs at the same timestamp.
 const OCCURRENCE_HISTORY_SQL = `WITH occurrence_history AS (
   SELECT id,task_id,series_id,user_id,completed_at,completed_at AS occurred_at,
-    NULL AS expired_at,NULL AS skipped_at,'completed' AS event_type,source_device_id,source_device_name FROM task_completions
+    NULL AS expired_at,NULL AS skipped_at,NULL AS closed_incomplete_at,'completed' AS event_type,source_device_id,source_device_name FROM task_completions
   UNION ALL
   SELECT -e.id,e.action_task_id,COALESCE(o.series_id,e.action_task_id),NULL,NULL,
-    json_extract(e.details_json,'$.expired_at'),json_extract(e.details_json,'$.expired_at'),NULL,'expired',NULL,NULL
+    json_extract(e.details_json,'$.expired_at'),json_extract(e.details_json,'$.expired_at'),NULL,NULL,'expired',NULL,NULL
   FROM task_activity_events e JOIN tasks et ON et.id=e.action_task_id
   LEFT JOIN task_recurrence_occurrences o ON o.task_id=et.id
   WHERE e.event_type='expired' AND et.parent_task_id IS NULL
     AND NOT EXISTS(SELECT 1 FROM task_activity_events skipped WHERE skipped.action_task_id=e.action_task_id AND skipped.event_type='skipped')
   UNION ALL
   SELECT -e.id,e.action_task_id,COALESCE(o.series_id,e.action_task_id),e.actor_user_id,NULL,
-    json_extract(e.details_json,'$.skipped_at'),NULL,json_extract(e.details_json,'$.skipped_at'),'skipped',NULL,NULL
+    json_extract(e.details_json,'$.skipped_at'),NULL,json_extract(e.details_json,'$.skipped_at'),NULL,'skipped',NULL,NULL
   FROM task_activity_events e JOIN tasks et ON et.id=e.action_task_id
   LEFT JOIN task_recurrence_occurrences o ON o.task_id=et.id
   WHERE e.event_type='skipped' AND et.parent_task_id IS NULL
+  UNION ALL
+  SELECT -e.id,e.action_task_id,COALESCE(o.series_id,e.action_task_id),e.actor_user_id,NULL,
+    json_extract(e.details_json,'$.closed_incomplete_at'),NULL,NULL,json_extract(e.details_json,'$.closed_incomplete_at'),'closed_incomplete',NULL,NULL
+  FROM task_activity_events e JOIN tasks et ON et.id=e.action_task_id
+  LEFT JOIN task_recurrence_occurrences o ON o.task_id=et.id
+  WHERE e.event_type='closed_incomplete' AND et.parent_task_id IS NULL
 )
 SELECT c.*,u.display_name AS user_name,u.avatar_color AS user_color,u.avatar_data AS user_avatar,
-  t.title,t.category,CASE WHEN c.event_type IN ('expired','skipped') THEN 0 ELSE t.points END AS points,t.is_recurring,t.visibility
+  t.title,t.category,CASE WHEN c.event_type IN ('expired','skipped','closed_incomplete') THEN 0 ELSE t.points END AS points,t.is_recurring,t.visibility
 FROM occurrence_history c JOIN tasks t ON t.id=c.task_id LEFT JOIN users u ON u.id=c.user_id`;
 
 export function occurrenceFeed(d,{me,limit=50,userId=null,beforeAt=null,beforeId=null,seriesId=null,taskIds=null}={}) {
@@ -272,7 +278,7 @@ export function occurrenceFeed(d,{me,limit=50,userId=null,beforeAt=null,beforeId
   // occurrence outside a caller's already-authorized Task projection.
   if(taskIds!==null){where.push('c.task_id IN (SELECT value FROM json_each(@taskIds))');params.taskIds=JSON.stringify(taskIds);}
   if(userId!=null) {
-    where.push(`((c.event_type='completed' AND c.user_id=@user) OR (c.event_type IN ('expired','skipped') AND
+    where.push(`((c.event_type='completed' AND c.user_id=@user) OR (c.event_type IN ('expired','skipped','closed_incomplete') AND
       (t.assigned_to=@user OR EXISTS(SELECT 1 FROM task_assignments a WHERE a.task_id=t.id AND a.user_id=@user))))`);
     params.user=userId;
   }

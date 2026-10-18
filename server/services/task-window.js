@@ -17,7 +17,7 @@ export function taskExpirationDue(d, task, now = new Date()) {
   const deadline = taskDeadlineMs(d, task);
   return task?.expiration_policy === 'expire_incomplete' && !task.archived_at
     && ['open','in_progress'].includes(task.status) && deadline != null && Number(now) >= deadline
-    && !taskWindowAncestors(d,task.id).some(row=>row.status==='skipped');
+    && !taskWindowAncestors(d,task.id).some(row=>['skipped','closed_incomplete'].includes(row.status));
 }
 /** Include structural ancestors and authoritative sources of helper projections. */
 export function taskWindowAncestors(d, taskId) {
@@ -38,5 +38,5 @@ function ancestrySql(d, seed) {
 /** Active projections must also respect the outcome of their canonical source. */
 export function taskUnskippedWhere(d, alias='t') {
   if(!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(alias))throw new TypeError('Invalid Task SQL alias.');
-  return `NOT EXISTS (${ancestrySql(d,`${alias}.id`)} SELECT 1 FROM tasks source JOIN ancestry a ON source.id=a.id WHERE source.status='skipped')`;
+  return `NOT EXISTS (${ancestrySql(d,`${alias}.id`)} SELECT 1 FROM tasks source JOIN ancestry a ON source.id=a.id WHERE source.status IN ('skipped','closed_incomplete'))`;
 }

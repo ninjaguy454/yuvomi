@@ -13,7 +13,7 @@ export function tasksPaths() {
         description: 'Several tags narrow the result: a task must carry all of them. Tag matching ignores case, including non-ASCII letters. Archived tasks are omitted unless asked for. Rows also carry flattened Activity Template/subject/assignment metadata, responsibility records, rotation members, first-class subtasks and a normalized saved, Google, or manual `location` with navigation URL.',
         params: [
           { name: 'offers', in: 'query', required: false, schema: { type: 'string', enum: ['1'] }, description: 'Show currently visible unassigned regular root Tasks eligible to appear on the Open tasks board. Existing visibility, assignment policy, start and expiration rules still apply. This does not create a new Task type.' },
-          { name: 'status',      in: 'query', required: false, schema: { type: 'string', enum: ['open', 'in_progress', 'done', 'expired', 'skipped', 'archived'] }, description: 'Repeatable; several values are OR-ed. Expired occurrences are historical and excluded by default. "archived" is the separate archive axis and behaves like the `archived` parameter.' },
+          { name: 'status',      in: 'query', required: false, schema: { type: 'string', enum: ['open', 'in_progress', 'done', 'expired', 'skipped', 'closed_incomplete', 'archived'] }, description: 'Repeatable; several values are OR-ed. Expired occurrences are historical and excluded by default. "archived" is the separate archive axis and behaves like the `archived` parameter.' },
           { name: 'archived',    in: 'query', required: false, schema: { type: 'string', enum: ['1', 'only'] }, description: 'Archived tasks are hidden by default. `1` includes them, `only` returns just the archive. A task keeps its own status while archived.' },
           { name: 'priority',    in: 'query', required: false, schema: { type: 'string', enum: ['none', 'low', 'medium', 'high', 'urgent'] } },
           { name: 'assigned_to', in: 'query', required: false, schema: { type: 'integer' }, description: 'Family member ID.' },
@@ -127,6 +127,16 @@ export function tasksPaths() {
     '/api/v1/tasks/{id}/reopen': {
       post: op({summary:'Reopen an expired Task',tag:'Tasks',params:[idParam()],stateChanging:true,requestBody:jsonBody(null),
         description:'Requires the current lifecycle edit permission and expected_revision (plus expected_parent_revision for a subtask). Provide a future due_date/due_time or expiration_policy: keep_overdue. Preserves completed subtasks, history, and any existing recurrence successor. Archived occurrences must be restored first. Expiration itself never awards completion points.'}),
+    },
+    '/api/v1/tasks/{id}/close-incomplete': {
+      post:op({summary:'Close without completing remaining subtasks',tag:'Tasks',params:[idParam()],stateChanging:true,
+        requestBody:jsonBody({type:'object',additionalProperties:false,required:['operation_id','expected_revision'],properties:{operation_id:{type:'string',minLength:1,maxLength:128},expected_revision:{type:'integer',minimum:1}}}),
+        description:'A household parent or administrator with existing whole-scope tasks.skip_occurrence authority may close an active top-level local activity, recurring or one-off. Children and earned points remain unchanged; no completion, award, settlement or reversal is written. Status becomes closed_incomplete. Recurrence advances once, including repeat-from-completion from the household-local close date. Failed generation rolls back the entire action. Coupled Workflow/rotation, synced, prize-delivery and payment work are excluded. Exact retries reuse operation_id and revision and recheck current authority.'}),
+    },
+    '/api/v1/tasks/{id}/reopen-incomplete': {
+      post:op({summary:'Reopen an activity while preserving saved progress',tag:'Tasks',params:[idParam()],stateChanging:true,
+        requestBody:jsonBody({type:'object',additionalProperties:false,required:['operation_id','expected_revision'],properties:{operation_id:{type:'string',minLength:1,maxLength:128},expected_revision:{type:'integer',minimum:1}}}),
+        description:'Requires the same current human parent/admin and whole-scope authority as Close. Resumes saved progress without resetting children, changing earnings or deleting/regenerating successors. Normal earning and frozen-credit rules continue. A passed deadline switches this occurrence to keep_overdue; future occurrences remain unchanged. Exact retry returns the current authorized projection. Reset, ordinary completion and expired-task reopening remain separate actions.'}),
     },
     '/api/v1/tasks/{id}/skip': {
       post:op({summary:'Skip this recurring occurrence',tag:'Tasks',params:[idParam()],stateChanging:true,

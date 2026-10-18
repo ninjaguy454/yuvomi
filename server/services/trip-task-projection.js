@@ -12,7 +12,7 @@ export function attachTripTaskProjection(d,task,actor){
  if(!group)return task;
  task.trip_group={trip_id:group.trip_id,state:group.state,revision:group.revision};
  const next=group.state==='active'?taskReadStatement(d,`SELECT c.id,c.title,c.due_date,c.due_time FROM tasks c
-   WHERE c.parent_task_id=@parent AND c.archived_at IS NULL AND c.status NOT IN ('done','expired','skipped')
+   WHERE c.parent_task_id=@parent AND c.archived_at IS NULL AND c.status NOT IN ('done','expired','skipped','closed_incomplete')
      AND (c.start_date IS NULL OR c.start_date<=@today)
      AND NOT EXISTS(SELECT 1 FROM trip_task_steps s WHERE s.task_id=c.id AND s.state!='active')
      AND ${taskVisibilityWhere(d,actor,'c','@me')}
@@ -30,7 +30,7 @@ export function tripDisplayDueSql(d,actor,alias='t',field='due_date'){
  return `CASE WHEN EXISTS(SELECT 1 FROM trip_task_groups g WHERE g.parent_task_id=${alias}.id)
  THEN (SELECT c.${field} FROM tasks c JOIN trip_task_groups g ON g.parent_task_id=c.parent_task_id
    WHERE c.parent_task_id=${alias}.id AND g.state='active' AND c.archived_at IS NULL
-     AND c.status NOT IN ('done','expired','skipped') AND (c.start_date IS NULL OR c.start_date<=@today)
+     AND c.status NOT IN ('done','expired','skipped','closed_incomplete') AND (c.start_date IS NULL OR c.start_date<=@today)
      AND NOT EXISTS(SELECT 1 FROM trip_task_steps s WHERE s.task_id=c.id AND s.state!='active')
      AND ${taskVisibilityWhere(d,actor,'c','@me')}
    ORDER BY c.due_date IS NULL,c.due_date,COALESCE(c.due_time,'23:59:59'),c.sort_order,c.id LIMIT 1)

@@ -13,6 +13,7 @@ import {addActivityTemplateScoringSchema} from './services/activity-template-sco
 import {addTaskAssigneePolicySchema} from './services/task-assignee-policy-schema.js';
 import {addTaskScoringCompletionSchema} from './services/task-scoring-completion-schema.js';
 import {addTaskTemplateLaunchSchema} from './services/task-template-launch-schema.js';
+import {addTaskCloseSchema} from './services/task-close-schema.js';
 /**
  * Modul: Datenbank (Database)
  * Zweck: SQLite/SQLCipher Verbindung, Schema-Migration (versioniert) und Query-Helfer
@@ -9133,6 +9134,7 @@ FORK_MIGRATIONS.push({version:10060,description:'Activity Templates: explicit sc
 FORK_MIGRATIONS.push({version:10061,description:'Prospective category assignee limits and direct performer provenance',up:addTaskAssigneePolicySchema});
 FORK_MIGRATIONS.push({version:10062,description:'Reversible subtask completion credits with append-only audit',up:addTaskScoringCompletionSchema});
 FORK_MIGRATIONS.push({version:10063,description:'Atomic per-person Activity Template launch receipts',up:addTaskTemplateLaunchSchema});
+FORK_MIGRATIONS.push({version:10064,description:'Explicit activity closure without completing remaining subtasks',foreignKeysOff:true,up:addTaskCloseSchema});
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];
 
 const FORK_MIGRATION_REMAPS = [

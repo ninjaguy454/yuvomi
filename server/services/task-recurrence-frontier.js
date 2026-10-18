@@ -101,7 +101,7 @@ export function isRecurrenceFrontier(d,taskId) {return recurrenceFrontier(d,task
  * Its provenance remains materialized: archived or expired history must still
  * prevent an older occurrence from regenerating the same calendar slot. */
 export function isTerminalRecurrenceOccurrence(task) {
-  return Boolean(task && (['done','expired','skipped'].includes(task.status) || task.expired_at));
+  return Boolean(task && (['done','expired','skipped','closed_incomplete'].includes(task.status) || task.expired_at));
 }
 
 /** Original action lineage survives deletion just like occurrence lineage.

@@ -257,7 +257,7 @@ router.get('/', (req, res) => {
         END AS __due_sort
       FROM tasks t
       LEFT JOIN users u ON t.assigned_to = u.id
-      WHERE t.status NOT IN ('done', 'expired', 'skipped')
+      WHERE t.status NOT IN ('done', 'expired', 'skipped','closed_incomplete')
         AND ${taskUnskippedWhere(d)}
         -- Abgelegtes gehört nicht in „Heute auf einen Blick" (#688): eine
         -- archivierte Aufgabe ist aus dem Lauf genommen, und wer sie von hier aus
@@ -290,7 +290,7 @@ router.get('/', (req, res) => {
   if (allows('tasks')) try {
     result.openTaskCount = d.prepare(`
       SELECT COUNT(*) AS n FROM tasks t
-      WHERE t.status NOT IN ('done', 'expired', 'skipped') AND t.archived_at IS NULL
+      WHERE t.status NOT IN ('done', 'expired', 'skipped','closed_incomplete') AND t.archived_at IS NULL
         AND ${taskUnskippedWhere(d)}
         AND ${taskScopeWhere('t', { includeFuture: true, includeSupervision })} AND ${taskStarts.where('t')}
         AND ${taskVisibilityWhere(db.get(), userId, 't', '@me')}${taskCategoryAnd}
@@ -305,7 +305,7 @@ router.get('/', (req, res) => {
   if (allows('tasks')) try {
     result.overdueTaskCount = d.prepare(`
       SELECT COUNT(*) AS n FROM tasks t
-      WHERE t.status NOT IN ('done', 'expired', 'skipped') AND t.archived_at IS NULL
+      WHERE t.status NOT IN ('done', 'expired', 'skipped','closed_incomplete') AND t.archived_at IS NULL
         AND ${taskUnskippedWhere(d)}
         AND (${tripDisplayDueSql(d,userId)}) IS NOT NULL AND (${tripDisplayDueSql(d,userId)}) < @today
         AND ${taskScopeWhere('t', { includeFuture: true, includeSupervision })} AND ${taskStarts.where('t')}
@@ -703,7 +703,7 @@ router.get('/', (req, res) => {
     result.memberTodayTasks = d.prepare(`
       SELECT ta.user_id AS user_id, COUNT(*) AS open_count
       FROM tasks t JOIN task_assignments ta ON ta.task_id = t.id
-      WHERE t.status NOT IN ('done', 'expired', 'skipped') AND t.archived_at IS NULL
+      WHERE t.status NOT IN ('done', 'expired', 'skipped','closed_incomplete') AND t.archived_at IS NULL
         AND ${taskUnskippedWhere(d)}
         AND (${tripDisplayDueSql(d,userId)}) IS NOT NULL AND (${tripDisplayDueSql(d,userId)}) <= @today
         AND ${taskScopeWhere('t', { includeFuture: true, includeSupervision })} AND ${taskStarts.where('t')}

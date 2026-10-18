@@ -112,18 +112,19 @@ function context(d, source, action) {
   const dateKey = occurrence.due_date || occurrence.start_date || todayKey(d);
   // Workflow/Activity bindings delimit eligibility scopes, but a terminal
   // ancestor still closes the useful completion window for every descendant.
-  let expiredTask = chain.find(item => ['expired','skipped'].includes(item.status));
+  let expiredTask = chain.find(item => ['expired','skipped','closed_incomplete'].includes(item.status));
   let ancestor = source;
   const ancestorIds = new Set(chain.map(item => item.id));
   while (!expiredTask && ancestor?.parent_task_id && !ancestorIds.has(ancestor.parent_task_id)) {
     ancestor = task(d, ancestor.parent_task_id);
     if (!ancestor) break;
     ancestorIds.add(ancestor.id);
-    if (['expired','skipped'].includes(ancestor.status)) expiredTask = ancestor;
+    if (['expired','skipped','closed_incomplete'].includes(ancestor.status)) expiredTask = ancestor;
   }
   return { occurrence, dateKey, learnerId: chain.find(item => item.assigned_to)?.assigned_to || null,
     archived: chain.some(item => item.archived_at), expired: expiredTask?.status==='expired', expired_at: expiredTask?.expired_at ?? null,
     skipped:expiredTask?.status==='skipped',skipped_at:expiredTask?.skipped_at??null,
+    closed_incomplete:expiredTask?.status==='closed_incomplete',closed_incomplete_at:expiredTask?.closed_incomplete_at??null,
     presence: { policy: pc.presence_policy || 'ignore', targetPlaceId: pc.place_id || null,
     ...activityPresenceWindow(d, { task: occurrence, dateKey, windowMode: pc.presence_window || 'due' }) } };
 }
@@ -253,14 +254,14 @@ export function inspectTaskSupervision(d, taskId) {
   for (const row of rows) {
     const prior = saved.find(item => Number(item.action_task_id) === Number(row.id))
       || taskReadStatement(d,'SELECT * FROM task_supervision_actions WHERE action_task_id=?').get(row.id);
-    const { occurrence, dateKey, presence, learnerId, archived, expired, expired_at,skipped,skipped_at } = context(d, source, row);
+    const { occurrence, dateKey, presence, learnerId, archived, expired, expired_at,skipped,skipped_at,closed_incomplete,closed_incomplete_at } = context(d, source, row);
     actionWindows.set(row.id, { start_date: occurrence.start_date, start_time: occurrence.start_time,
       due_date: occurrence.due_date, due_time: occurrence.due_time });
     const optional=optionalContextFor(row.id);
-    if ((expired||skipped||optional.closed_parent) && row.status !== 'done') {
+    if ((expired||skipped||closed_incomplete||optional.closed_parent) && row.status !== 'done') {
       if (prior) actions.push({ ...prior, action_title: row.title, state: 'not_required',
-        reason: skipped?'The occurrence was skipped.':expired?'The original Task or action expired incomplete.':'The parent Task is complete; reopen it before performing this optional action.',
-        expired, expired_at, skipped,skipped_at,closed_optional:Boolean(optional.closed_parent), archived,
+        reason: closed_incomplete?'The activity was closed without completing its remaining subtasks.':skipped?'The occurrence was skipped.':expired?'The original Task or action expired incomplete.':'The parent Task is complete; reopen it before performing this optional action.',
+        expired, expired_at, skipped,skipped_at,closed_incomplete,closed_incomplete_at,closed_optional:Boolean(optional.closed_parent), archived,
         learner_name: byId.get(Number(prior.learner_user_id))?.display_name || null,
         supervisor_name: byId.get(Number(prior.supervisor_user_id))?.display_name || null,
         required_skills: JSON.parse(prior.required_skill_ids_json || '[]').map(id => d.prepare('SELECT id,name FROM skills WHERE id=?').get(id)).filter(Boolean),
@@ -573,7 +574,7 @@ export function taskSupervisionNotificationKey(view) {
 }
 
 function notifySupervision(d, source, view) {
-  if (['done', 'expired','skipped'].includes(source.status) || view.state === 'none') return;
+  if (['done', 'expired','skipped','closed_incomplete'].includes(source.status) || view.state === 'none') return;
   const unresolved = ['needed', 'excluded'].includes(view.state);
   const recipients = unresolved ? [source.created_by, ...d.prepare("SELECT id FROM users WHERE role='admin'").all().map(row => row.id)]
     : view.state === 'assigned' ? [view.supervisor_user_id] : [];
@@ -635,7 +636,7 @@ export function reconcileTaskSupervision(d, taskId, { actorId = null, supervisor
   if (!supported(d)) return inspectTaskSupervision(d, taskId);
   return d.transaction(() => {
     const current=task(d,taskSupervisionRootId(d,taskId));
-    if(current&&context(d,current,current).skipped)return inspectTaskSupervision(d,taskId);
+    if(current&&(context(d,current,current).skipped||context(d,current,current).closed_incomplete))return inspectTaskSupervision(d,taskId);
     consolidateNestedSupervision(d,taskSupervisionRootId(d,taskId),actorId);
     let view = inspectTaskSupervision(d, taskId);
     const actionWindows = actionWindowsByView.get(view);
@@ -815,7 +816,7 @@ export function attachTaskSupervision(d, tasks, actorId = null, sourceViews = ne
     if (!sourceViews.has(sourceId)) sourceViews.set(sourceId, inspectTaskSupervision(d, sourceId));
     const source = sourceViews.get(sourceId);
     row.supervision = actorId == null ? source : {...source, may_assign: taskSupervisionManagementAllowed(d, actorId, sourceId), actions:source.actions.map(action=>({...action,
-      can_complete:!action.expired && !action.skipped && !action.closed_optional && ((action.execution_mode !== 'delegated' && action.completed) || action.state === 'not_required'
+      can_complete:!action.expired && !action.skipped && !action.closed_incomplete && !action.closed_optional && ((action.execution_mode !== 'delegated' && action.completed) || action.state === 'not_required'
         || (action.state === 'assigned' && Number(action.supervisor_user_id) === Number(actorId)))}))};
     row.supervision_action = row.supervision.actions.find(action => action.action_task_id === row.id || action.counterpart_task_id === row.id) || null;
     row.skill_eligibility = row.supervision_action?.skill_eligibility || skillEligibilityByView.get(source)?.get(row.id) || [];
@@ -924,6 +925,7 @@ export function supervisionProjectionUpdates(d, taskId) {
 
 function projectionUpdatesForView(d, view) {
   const source=task(d,view.source_task_id);
+  if(source&&context(d,source,source).closed_incomplete)return [];
   if(source&&context(d,source,source).skipped) {
     const ids=[...view.actions.map(action=>action.counterpart_task_id).filter(Boolean),view.support_task_id].filter(Boolean);
     return ids.map(id=>({id,status:task(d,id)?.status==='done'?'done':'skipped'}));

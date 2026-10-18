@@ -80,7 +80,7 @@ function listTasks(db, actorId, args) {
       params.status = args.status;
     }
   } else {
-    sql += " AND t.archived_at IS NULL AND t.status NOT IN ('expired','skipped')";
+    sql += " AND t.archived_at IS NULL AND t.status NOT IN ('expired','skipped','closed_incomplete')";
   }
   if(!['done','expired','skipped','archived'].includes(args.status))sql+=` AND ${taskUnskippedWhere(db)}`;
   // Tag-Filter, gleiche Semantik wie GET /api/v1/tasks: mehrere Tags engen

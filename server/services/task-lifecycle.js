@@ -72,6 +72,8 @@ export function assertRecurringCompletionStarted(d, taskId, now = new Date()) {
 export function assertTaskWindowAction(d, taskId, now = new Date(), {optionalReopenScope=null}={}) {
   assertTripTaskActive(d,taskId);
   for (const task of taskWindowAncestors(d,taskId)) {
+    if (task.status === 'closed_incomplete')
+      throw new TaskStateError('This activity was closed without completing its remaining subtasks. A household parent or administrator must explicitly reopen it before progress can change.',{reason:'task_closed_incomplete',task_id:task.id});
     if (task.status === 'skipped')
       throw new TaskStateError('This occurrence was skipped and cannot be reopened or completed.',{reason:'task_skipped',task_id:task.id});
     if (task.status === 'expired' || taskExpirationDue(d,task,now))
@@ -379,6 +381,19 @@ export function resumeExpiredTaskRecurrence(d,taskId) {
   const recurrence=task?authoritativeTaskRecurrence(d,task):null;
   if(!['expired','skipped'].includes(task?.status)||!recurrence.is_recurring
     ||(recurrence.recurrence_from_completion&&task.status!=='skipped')||task.parent_task_id)return;
+  if(!recurrenceHooks)throw new TaskStateError('Recurring Task actions are temporarily unavailable.',{},503);
+  return recurrenceHooks.spawn(task);
+}
+
+/** Uses the same transactional recurrence adapter without awarding completion. */
+export function advanceClosedTaskRecurrence(d,taskId) {
+  const task=d.prepare('SELECT * FROM tasks WHERE id=?').get(taskId);
+  if(!task||task.status!=='closed_incomplete'||task.parent_task_id)return;
+  const recurrence=authoritativeTaskRecurrence(d,task);
+  if(!recurrence?.is_recurring)return;
+  if(d.prepare('SELECT 1 FROM task_recurrence_occurrences WHERE predecessor_task_id=?').get(taskId)) {
+    d.prepare('UPDATE task_incomplete_closures SET recurrence_handled=1 WHERE task_id=?').run(taskId);return;
+  }
   if(!recurrenceHooks)throw new TaskStateError('Recurring Task actions are temporarily unavailable.',{},503);
   return recurrenceHooks.spawn(task);
 }

@@ -21,7 +21,8 @@ export function bountyHelperView(task, userId, users = []) {
   const person = people.find(user => Number(user.id) === userId) || { id: userId, display_name: '' };
   const view = { ...task, helper_view_user_id: userId, assigned_to: userId, assigned_name: person.display_name,
     assigned_users: [{ ...person, id: userId }], activity_responsibilities: [], subtasks,
-    permissions: { ...task.permissions, complete: false, reopen: false, reset: false, claim: false, accept: false },
+    permissions: { ...task.permissions, complete: false, reopen: false, reset: false, claim: false, accept: false, close_incomplete:false },
+    can_close_incomplete:false,can_reopen_incomplete:false,
     // A display container has no reward of its own. Child scoring stays canonical.
     scoring: null, waiting_on_helper: false,
     subtask_total: subtasks.filter(child => !child.is_optional).length,

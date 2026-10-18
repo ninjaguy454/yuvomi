@@ -9,6 +9,7 @@ import {acceptTask} from '../services/task-acceptance.js';
 import {previewTemplateLaunch,createTemplateLaunch,TemplateLaunchError} from '../services/task-template-launch.js';
 import {attachTaskHelperViewMetadata} from '../services/task-helper-views.js';
 import {skipTaskOccurrence,taskSkipUnsupportedReason,taskSkipHasRotationScope} from '../services/task-skip.js';
+import {closeIncompleteTask,reopenIncompleteTask,taskCloseUnsupportedReason} from '../services/task-close.js';
 /**
  * Modul: Aufgaben (Tasks)
  * Zweck: REST-API-Routen für Aufgaben und Teilaufgaben (max. 2 Ebenen)
@@ -168,7 +169,7 @@ router.param('id',(req,res,next,value)=>{
     return res.status(404).json({error:'Task not found.',code:404});
   if (!['POST','PUT','PATCH','DELETE'].includes(req.method)) return next();
   const route=req.route.path;
-  if (route==='/:id/supervisor' || route==='/:id/location/promote' || route==='/:id/rotation/reconcile' || route==='/:id/accept' || route==='/:id/skip') return next();
+  if (route==='/:id/supervisor' || route==='/:id/location/promote' || route==='/:id/rotation/reconcile' || route==='/:id/accept' || route==='/:id/skip' || route==='/:id/close-incomplete' || route==='/:id/reopen-incomplete') return next();
   try {
     const task=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(Number(value));
     if (!task) return res.status(404).json({error:'Task not found.',code:404});
@@ -463,7 +464,7 @@ function prepareCurrentScoringExecution(task,body,edited,assignment,ctx) {
     return {ref:ref(row),role:isRoot?rootRole:'source_action',task:executionTask(isRoot?fields:row),
       primary_user_id:isRoot?primary??null:child?.assignedUsers!==undefined?child.assignedUsers[0]??null:row.assigned_to??null,
       assigned_user_ids:boundParticipants,skill_ids:isRoot?taskSkillInput(body,task.id,desired?.activityTemplateId):child?.skillIds??(row.id>0?loadTaskSkillIds(d,row.id):[]),
-      window:window(row),is_optional:optionalFor(row.id).is_optional,completed:!!row.archived_at||['done','expired','skipped'].includes(row.status),
+      window:window(row),is_optional:optionalFor(row.id).is_optional,completed:!!row.archived_at||['done','expired','skipped','closed_incomplete'].includes(row.status),
       ...(isRoot?{binding,planning}:pc?{planning:pc}:{})};
   };
   const refs=new Map(ctx.rows.filter(row=>row.id>0).map(row=>[row.id,ref(row)]));
@@ -655,7 +656,7 @@ function prospectiveRootWindow(task,state,record,definition,asOfDate,target,{pre
       return {start_date:target.occurrence.planned_start_date,due_date:target.occurrence.planned_due_date};
     return planSeriesOccurrence(db.get(),record,state.occurrence);
   }
-  return planSeriesOccurrence(db.get(),record,state.occurrence,{completedOn:asOfDate,skipped:task.status==='skipped',withoutCompletion:['expired','skipped'].includes(task.status)});
+  return planSeriesOccurrence(db.get(),record,state.occurrence,{completedOn:asOfDate,skipped:task.status==='skipped',withoutCompletion:['expired','skipped','closed_incomplete'].includes(task.status)});
 }
 function phaseExecutionInput(task,state,record,definition,ids,asOfDate,target,{beforePhase=false,canonicalUnchanged=false}={}) {
   const d=db.get(),context={kind:'next_occurrence',generation:state.occurrence.generation+1,as_of_date:asOfDate,
@@ -712,7 +713,7 @@ function phaseExecutionInput(task,state,record,definition,ids,asOfDate,target,{b
         learner_user_id:prior.learner_user_id,supervisor_user_id:prior.supervisor_user_id});
     }
   } else {
-    const completionRelative=!!definition.task.recurrence_from_completion&&!['expired','skipped'].includes(task.status);
+    const completionRelative=!!definition.task.recurrence_from_completion&&!['expired','skipped','closed_incomplete'].includes(task.status);
     context.assumed_completion_date=completionRelative?asOfDate:null;
     if(completionRelative)context.conditions.push('completion_date_assumed');
     const window=prospectiveRootWindow(task,state,record,definition,asOfDate,target);
@@ -1072,7 +1073,7 @@ function editedSubtasksInput(task, body, actor, { definitionOnly = false } = {})
       item.isOptional ??= child.is_optional || 0;
       if(!definitionOnly)assertOptionalityEdit(child,item.isOptional);
       const assignments=item.assignedUsers===undefined?{}:{assigned_to:item.assignedUsers};
-      if(!definitionOnly && item.assignedUsers!==undefined && ['done','expired','skipped'].includes(child.status)
+      if(!definitionOnly && item.assignedUsers!==undefined && ['done','expired','skipped','closed_incomplete'].includes(child.status)
         && !sameIdOrder(item.assignedUsers,db.get().prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(child.id).map(row=>row.user_id)))
         throw new TaskStateError('Completed subtask assignments are historical. Reopen that action before changing its assignee.');
       assertTaskMutation(db.get(),actor,child,{title:item.title,points:item.points,skill_ids:item.skillIds,is_optional:item.isOptional,...assignments},{operation:'update'});
@@ -1584,6 +1585,11 @@ export function hydrateTask(task, me, supervisionViews = new Map(), starts = nul
   task.can_skip_occurrence=Boolean(task.permissions.skip_occurrence && !task.archived_at
     && ['open','in_progress','expired'].includes(task.status) && !task.parent_task_id && task.is_recurring
     && !taskSkipUnsupportedReason(db.get(),task));
+  task.can_close_incomplete=Boolean(task.permissions.close_incomplete&&!task.archived_at
+    &&['open','in_progress'].includes(task.status)&&!task.parent_task_id&&!taskCloseUnsupportedReason(db.get(),task));
+  const closure=db.get().prepare('SELECT first_closed_at,recurrence_handled FROM task_incomplete_closures WHERE task_id=?').get(task.id);
+  task.incomplete_closure=closure?{first_closed_at:closure.first_closed_at,recurrence_handled:!!closure.recurrence_handled}:null;
+  task.can_reopen_incomplete=Boolean(task.permissions.close_incomplete&&!task.archived_at&&task.status==='closed_incomplete'&&closure);
   for(const row of [task,...task.subtasks])if(row.supervision) {
     // A shared parent does not expose a separately private child's title.
     let actions=row.supervision.actions.filter(action=>mayAccessTask(
@@ -1613,7 +1619,7 @@ export function hydrateTask(task, me, supervisionViews = new Map(), starts = nul
   const structural=task.subtasks.filter(child=>!child.archived_at&&(isSupport||!child.is_supervision_projection));
   const operational=structural.filter(child=>!child.is_optional&&(isSupport||!child.is_delegated_action));
   task.subtask_total=operational.length;task.subtask_done=operational.filter(child=>child.status==='done').length;
-  task.waiting_on_helper=!isSupport && !['done','expired','skipped'].includes(task.status)
+  task.waiting_on_helper=!isSupport && !['done','expired','skipped','closed_incomplete'].includes(task.status)
     && operational.every(child=>child.status==='done')
     && (structural.some(child=>!child.is_optional&&child.is_delegated_action&&child.status!=='done')
       || task.supervision_action?.action_task_id===task.id && task.supervision_action?.state!=='not_required');
@@ -1625,6 +1631,12 @@ export function hydrateTask(task, me, supervisionViews = new Map(), starts = nul
   attachScoring(task,me,scoringIds,true);
   for(const child of task.subtasks)attachScoring(child,me,[child.id]);
   attachTaskHelperViewMetadata(db.get(),[task,...task.subtasks]);
+  // An unfinished helper container shares its source's closed window without
+  // rewriting its physical checkbox/progress records.
+  if(task.is_supervision_projection&&task.status!=='done') {
+    const closed=taskWindowAncestors(db.get(),task.id).find(row=>row.status==='closed_incomplete');
+    if(closed){task.status='closed_incomplete';task.closed_incomplete_at=closed.closed_incomplete_at;}
+  }
   return task;
 }
 
@@ -2128,7 +2140,7 @@ router.get('/', (req, res) => {
     }
 
     if(!rawStatuses.length && !archiveQuery)sql += " AND t.status NOT IN ('expired','skipped')";
-    if(!archiveQuery&&!rawStatuses.some(status=>['done','expired','skipped'].includes(status)))sql+=` AND ${taskUnskippedWhere(db.get())}`;
+    if(!archiveQuery&&!rawStatuses.some(status=>['done','expired','skipped','closed_incomplete'].includes(status)))sql+=` AND ${taskUnskippedWhere(db.get())}`;
 
     const priorities = asList(priority);
     if (priorities.length) {
@@ -2607,7 +2619,7 @@ router.post('/:id/scoring-preview',(req,res)=>{
       } else {
         const errors=validateTaskInput(req.body,false,task.recurrence_rule);if(errors.length)throw new TaskStateError(errors.join(' '),{},400);
         assertTaskMutation(db.get(),req,task,req.body,{operation:'update'});
-        const historical=scope==='future'&&(!!task.archived_at||['done','expired','skipped'].includes(task.status));
+        const historical=scope==='future'&&(!!task.archived_at||['done','expired','skipped','closed_incomplete'].includes(task.status));
         const series=scope==='future'?taskSeriesState(db.get(),task.id):null;
         if(series)assertSeriesEdit(db.get(),req,task,series,req.body.expected_series_revision);
         else if(scope==='future')assertSeriesEdit(db.get(),req,task,series,req.body.expected_series_revision);
@@ -2683,7 +2695,7 @@ export function updateTaskDefinition(req, res) {
     assertRotationBindingsChange(db.get(),req,task.rotation_bindings_json,rotationBindings);
     if(rotationsChanged && !taskCapabilities(db.get(),req,task).edit) return res.status(403).json({error:'Your household permissions do not allow editing this Activity.',code:403});
     if (task.parent_task_id && rotationsChanged) return res.status(400).json({error:'Configure shared rotations on the parent Activity. Its subtasks inherit the same occurrence.',code:400});
-    const historical=!!task.archived_at||['done','expired','skipped'].includes(task.status);
+    const historical=!!task.archived_at||['done','expired','skipped','closed_incomplete'].includes(task.status);
     const historicalSeriesOnly=editScope==='future'&&historical;
     if(!historicalSeriesOnly)assertTaskWindowAction(db.get(),task.id);
     const errors = validateTaskInput(req.body, false, task.recurrence_rule);
@@ -3332,6 +3344,7 @@ function discardRecurrenceFollowupSingle(taskId) {
 }
 
 function discardRecurrenceFollowup(taskId) {
+  if(db.get().prepare('SELECT 1 FROM task_incomplete_closures WHERE task_id=?').get(taskId))return 0;
   const task = db.get().prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
   const source = task && recurringCohortMember(task);
   if (!source?.rotation_group) return discardRecurrenceFollowupSingle(taskId);
@@ -3386,20 +3399,25 @@ function shiftedStartDate(startDate, dueDate, nextDue) {
  */
 function spawnRecurrenceFollowupSingle(task, {expirationAnchor=false}={}) {
   if (!task || task.parent_task_id) return;
+  const closure=db.get().prepare('SELECT * FROM task_incomplete_closures WHERE task_id=? AND recurrence_closed_at IS NOT NULL').get(task.id);
+  if(closure?.recurrence_handled)return;
   const series=ensureSeriesDefinition(db.get(),task.id);
   if(!series)return;
   if (!isRecurrenceFrontier(db.get(),task.id)) return;
   // Höchstens eine Folgeinstanz je Erledigung - sonst legt doppeltes Abhaken nach.
-  if (recurrenceFollowupOf(task.id)) return;
+  if (recurrenceFollowupOf(task.id)) {
+    if(closure)db.get().prepare('UPDATE task_incomplete_closures SET recurrence_handled=1 WHERE task_id=?').run(task.id);
+    return;
+  }
 
   // Relative template occurrences recur from their own Start Date, then
   // resolve Due from the snapshotted calendar-day span. NULL deliberately
   // retains the legacy due-anchored behavior for all pre-existing Tasks.
   // Completion-relative mode still obtains its next date from completion;
   // expiration continues to supply no completion-relative anchor.
-  const completedOn = todayInHouseholdZone();
+  const completedOn = closure ? todayKey(db.get(),new Date(closure.recurrence_closed_at)) : todayInHouseholdZone();
   const plan=seriesMaterializationPlan(db.get(),task,{completedOn,expirationAnchor});
-  if(!plan)return;
+  if(!plan){if(closure)db.get().prepare('UPDATE task_incomplete_closures SET recurrence_handled=1 WHERE task_id=?').run(task.id);return;}
   const sourceTask=task;
   const definition=plan.definition.data;
   task={...sourceTask,...definition.task,assigned_to:definition.assigned_user_ids[0]??null};
@@ -3534,6 +3552,7 @@ function spawnRecurrenceFollowupSingle(task, {expirationAnchor=false}={}) {
     recordTaskActivity(db.get(),Number(newTask.lastInsertRowid),'recurrence_generated',task.created_by,
       {title:task.title,revision:db.get().prepare('SELECT revision FROM tasks WHERE id=?').get(newTask.lastInsertRowid).revision});
     recordOccurrenceDefinition(db.get(),Number(newTask.lastInsertRowid),{definitionId:plan.definition.id,startDate:nextStartDate,dueDate:nextDate,baseline:true});
+    if(closure)db.get().prepare('UPDATE task_incomplete_closures SET recurrence_handled=1 WHERE task_id=?').run(sourceTask.id);
     return Number(newTask.lastInsertRowid);
   })();
 }
@@ -3574,7 +3593,7 @@ function resumePendingSeriesRotations(taskId,{all=false}={}) {
   const occurrence=registerRecurrenceOccurrence(db.get(),taskId);
   if(!occurrence)return [];
   const candidates=db.get().prepare(`SELECT o.* FROM task_recurrence_occurrences o JOIN tasks t ON t.id=o.task_id
-    WHERE o.series_id=? AND o.state='materialized' AND o.generation>=? AND t.archived_at IS NULL AND t.status NOT IN ('done','expired','skipped')
+    WHERE o.series_id=? AND o.state='materialized' AND o.generation>=? AND t.archived_at IS NULL AND t.status NOT IN ('done','expired','skipped','closed_incomplete')
     AND EXISTS(SELECT 1 FROM json_each(t.rotation_bindings_json) purpose WHERE NOT EXISTS(
       SELECT 1 FROM task_rotation_occurrences link WHERE link.task_id=t.id AND link.retired_at IS NULL
       AND link.purpose_key=json_extract(purpose.value,'$.purpose_key'))) ORDER BY o.generation,o.task_id`)
@@ -3667,6 +3686,20 @@ router.post('/:id/skip', (req,res)=>{
     if(result.recurrenceError)log.warn('Skipped occurrence awaits recurrence recovery:',result.recurrenceError.message);
     res.json({data:hydrateTask(result.task,req.authUserId||req.session.userId),replayed:result.replayed,recurrence_pending:result.recurrencePending});
   } catch(error) {res.status(error.status||500).json({error:error.message,code:error.status||500,...error.details});}
+});
+
+router.post('/:id/close-incomplete', (req,res)=>{
+  try {
+    const result=closeIncompleteTask(db.get(),Number(req.params.id),{principal:req,body:req.body});
+    res.json({data:hydrateTask(result.task,req.authUserId||req.session.userId),replayed:result.replayed});
+  } catch(error) {res.status(error.status||500).json({error:error.status?error.message:'The activity could not be closed.',code:error.status||500,...error.details});}
+});
+
+router.post('/:id/reopen-incomplete', (req,res)=>{
+  try {
+    const result=reopenIncompleteTask(db.get(),Number(req.params.id),{principal:req,body:req.body});
+    res.json({data:hydrateTask(result.task,req.authUserId||req.session.userId),replayed:result.replayed});
+  } catch(error) {res.status(error.status||500).json({error:error.status?error.message:'The activity could not be reopened.',code:error.status||500,...error.details});}
 });
 
 router.post('/:id/reopen', (req,res)=>{
@@ -3961,7 +3994,7 @@ router.post('/:id/rotation/reconcile',(req,res)=>{
     if(!task||!mayAccessTask(task,me))return res.status(404).json({error:'Task not found.',code:404});
     assertCapability(db.get(),req,'rotations.configure');
     if(!taskCapabilities(db.get(),req,task).edit)return res.status(403).json({error:'Your household permissions do not allow editing this Activity.',code:403});
-    if(task.archived_at||['done','expired','skipped'].includes(task.status))return res.status(409).json({error:'Historical rotation evidence is preserved. Resolve a current occurrence instead.',code:409});
+    if(task.archived_at||['done','expired','skipped','closed_incomplete'].includes(task.status))return res.status(409).json({error:'Historical rotation evidence is preserved. Resolve a current occurrence instead.',code:409});
     const result=db.get().transaction(()=>{
       assertTaskRevision(db.get(),task,req.body,{required:true});
       const result=bindTaskRotations(db.get(),task.id,{actorId:me});

@@ -15,18 +15,18 @@ const candidateVersion=Math.max(...ALL_MIGRATIONS.map(migration=>migration.versi
 function open(file){const d=new Database(file);d.pragma("cipher='sqlcipher'");d.pragma(`key="x'${Buffer.from(key,'utf8').toString('hex')}'"`);d.pragma('foreign_keys=ON');return d;}
 function snapshot(d){
   const tables=d.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all()
-    .filter(row=>!['task_assignee_policies','task_direct_assignees','task_scoring_completion_events','task_template_launch_requests','task_template_launch_results'].includes(row.name));
+    .filter(row=>!['task_assignee_policies','task_direct_assignees','task_scoring_completion_events','task_template_launch_requests','task_template_launch_results','task_incomplete_closures','task_close_receipts'].includes(row.name));
   return Object.fromEntries(tables.map(({name})=>{
     const rows=d.prepare(`SELECT * FROM "${name}"`).all().filter(row=>name!=='schema_migrations'||row.version<=10058);
     const values=rows.map(row=>{
-      const fields=Object.entries(row).filter(([field])=>!['card_color','card_color_choice','card_color_slot','max_assignees'].includes(field));
+      const fields=Object.entries(row).filter(([field])=>!['card_color','card_color_choice','card_color_slot','max_assignees','closed_incomplete_at'].includes(field));
       return JSON.stringify(Object.fromEntries(fields.sort(([a],[b])=>a.localeCompare(b))));
     });
     return[name,values.sort()];
   }));
 }
 function encrypted(file){assert.notEqual(readFileSync(file).subarray(0,16).toString(),'SQLite format 3\0');}
-function emptyCompletionAudit(d){for(const table of ['task_scoring_completion_events','task_template_launch_requests','task_template_launch_results'])assert.equal(d.prepare('SELECT count(*) n FROM '+table).get().n,0);}
+function emptyCompletionAudit(d){for(const table of ['task_scoring_completion_events','task_template_launch_requests','task_template_launch_results','task_incomplete_closures','task_close_receipts'])assert.equal(d.prepare('SELECT count(*) n FROM '+table).get().n,0);assert.equal(d.prepare('SELECT count(*) n FROM tasks WHERE closed_incomplete_at IS NOT NULL').get().n,0);}
 
 test('encrypted10058 upgrade, reopen and old/new backup restore conserve every existing table row and revision',async()=>{
   const seed=open(filename);

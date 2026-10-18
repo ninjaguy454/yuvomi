@@ -341,7 +341,7 @@ function taskCountdowns(d, userId, todayKey) {
     SELECT t.id, t.title, t.due_date, t.is_recurring, t.recurrence_from_completion
     FROM tasks t
     WHERE t.countdown = 1
-      AND t.status NOT IN ('done', 'expired', 'skipped')
+      AND t.status NOT IN ('done', 'expired', 'skipped','closed_incomplete')
       AND t.archived_at IS NULL
       AND t.due_date IS NOT NULL
       AND t.due_date >= CASE WHEN t.is_recurring = 1 THEN @today ELSE @floor END
@@ -350,7 +350,7 @@ function taskCountdowns(d, userId, todayKey) {
 
   const out = [];
   for (const row of rows) {
-    if(taskWindowAncestors(d,row.id).some(task=>task.status==='skipped'))continue;
+    if(taskWindowAncestors(d,row.id).some(task=>['skipped','closed_incomplete'].includes(task.status)))continue;
     const days = daysBetween(todayKey, row.due_date);
     if (days === null || days < -OVERDUE_GRACE_DAYS) continue;
     out.push({

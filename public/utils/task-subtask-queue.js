@@ -20,7 +20,7 @@ export function createSubtaskQueue({ getTask, getChild, canDispatch = () => true
       return failure('A queued step changed. Review its current state before trying again.');
     if (checkParent && task.revision !== item.parentRevision)
       return failure('This Task changed while steps were queued. Review it before trying again.');
-    if (task.archived_at || ['expired','skipped'].includes(task.status) || child.archived_at || ['expired','skipped'].includes(child.status))
+    if (task.archived_at || ['expired','skipped','closed_incomplete'].includes(task.status) || child.archived_at || ['expired','skipped','closed_incomplete'].includes(child.status))
       return failure('This Task is no longer available for queued progress.');
     if (child.is_optional && task.status === 'done')
       return failure('Reopen the completed parent Task before changing an optional action.', 'optional_parent_completed');
@@ -112,7 +112,7 @@ export function createSubtaskQueue({ getTask, getChild, canDispatch = () => true
         // cannot prove rejection. A newer revision resolves the CAS attempt;
         // otherwise show canonical progress while keeping its result unknown.
         if (!child || fresh.revision > item.parentRevision || child.revision > item.childRevision
-          || child.status === item.status || fresh.archived_at || ['expired','skipped'].includes(fresh.status)
+          || child.status === item.status || fresh.archived_at || ['expired','skipped','closed_incomplete'].includes(fresh.status)
           || canDispatch(child, item.status, getTask()) !== true) entries.delete(item.id);
         else { item.readbackStatus = child.status; blocked = true; }
       }
@@ -121,7 +121,7 @@ export function createSubtaskQueue({ getTask, getChild, canDispatch = () => true
         // A newer reset, expiration or permission change outranks the visual
         // overlay too. The in-flight slot still prevents duplicate dispatch.
         if (!child || child.revision !== active.childRevision && child.status !== active.status
-          || fresh.archived_at || ['expired','skipped'].includes(fresh.status) || child.archived_at || ['expired','skipped'].includes(child.status)
+          || fresh.archived_at || ['expired','skipped','closed_incomplete'].includes(fresh.status) || child.archived_at || ['expired','skipped','closed_incomplete'].includes(child.status)
           || canDispatch(child, active.status, getTask()) !== true)
           entries.delete(active.id);
       }

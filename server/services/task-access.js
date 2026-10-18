@@ -150,8 +150,8 @@ export function deviceTaskCapabilities(d, principal, task) {
   const view = deviceTaskVisible(d, principal, task), allow = key => deviceAllows(principal, `device_tasks.${key}`);
   const stored=task?.id?d.prepare('SELECT * FROM tasks WHERE id=?').get(task.id):task;
   const locked=stored?.locked || stored?.parent_task_id && d.prepare('SELECT locked FROM tasks WHERE id=?').get(stored.parent_task_id)?.locked;
-  const skipped=stored?.id&&taskWindowAncestors(d,stored.id).some(row=>row.status==='skipped');
-  const definition=view&&!locked&&!skipped&&!['done','expired','skipped'].includes(stored?.status);
+  const skipped=stored?.id&&taskWindowAncestors(d,stored.id).some(row=>['skipped','closed_incomplete'].includes(row.status));
+  const definition=view&&!locked&&!skipped&&!['done','expired','skipped','closed_incomplete'].includes(stored?.status);
   return {view, own:false, create:deviceAllows(principal,'tasks.create'), edit:definition&&deviceAllows(principal,'tasks.edit_others'), complete:view && !skipped && allow('complete'), reopen:view && !skipped && allow('reopen'),
     reset:view && !skipped && allow('reset'), claim:view && !skipped && allow('claim'), comment:false,
     ...Object.fromEntries(['delete_archive','change_assignment','reassign','change_priority','change_points','change_category_tags','change_dates','change_required_skills'].map(key=>[key,key==='delete_archive'?false:definition&&deviceAllows(principal,`tasks.${key}`)]))};
@@ -225,13 +225,16 @@ export function taskCapabilities(d, actor, sourceTask) {
   // Missing/draft Tasks retain their existing input-based fallback. Two such
   // inputs need not mean the same thing, so only persisted records are cached.
   rewardTaskCapabilities(d,actor,task,result);
+  const manager=taskReadStatement(d,'SELECT role,family_role FROM users WHERE id=?').get(me);
+  result.close_incomplete=Boolean(manager&&(manager.role==='admin'||['dad','mom','parent'].includes(manager.family_role))
+    &&p.modules.tasks==='write'&&result.skip_occurrence&&!task?.parent_task_id&&!projection);
   if (scope && stored) scope.capabilities.set(id, {...result});
   return result;
 }
 export function attachTaskCapabilities(d, actor, tasks) {
   for (const task of tasks) {
     task.permissions = taskCapabilities(d, actor, task);
-    if(taskWindowAncestors(d,task.id).some(row=>row.status==='skipped')) {
+    if(taskWindowAncestors(d,task.id).some(row=>['skipped','closed_incomplete'].includes(row.status))) {
       task.permissions.complete=false;task.permissions.claim=false;
     }
     // A closed optional branch is a lifecycle restriction, not a change to the
@@ -315,6 +318,7 @@ function assertCurrentTaskMutation(d, actor, task, body, {operation}) {
   const c = taskCapabilities(d, actor, task);
   if (!c.view) throw new PermissionError('Task not found.', 404);
   const requireAction = key => { if (!c[key]) throw new PermissionError('Your household permissions do not allow this Task action.'); };
+  if (operation === 'close_incomplete') return requireAction('close_incomplete');
   if (operation === 'reopen') { requireAction('edit'); return requireAction('change_dates'); }
   if (operation === 'skip') return requireAction('skip_occurrence');
   if (['status', 'check'].includes(operation)) {

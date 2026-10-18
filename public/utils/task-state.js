@@ -53,6 +53,8 @@ export async function changeTaskStatus(task, status, { confirm: requestConfirmat
   const authentication=authenticationSnapshot();
   const cue=status==='done'?(soundTicket||captureCompletionSound(gesture)):null;
   if (task.status === 'skipped') throw new Error('This occurrence was skipped and cannot be reopened or completed.');
+  if (task.status === 'closed_incomplete') throw new Error('Reopen this activity from its details before changing progress.');
+  if (status === 'closed_incomplete') throw new Error('Use Close without completing remaining subtasks from activity details.');
   if (status === 'skipped') throw new Error('Use Skip this occurrence from Task details.');
   if (task.status === 'expired') throw new Error('Reopen this expired Task before changing its status.');
   if (status === 'expired') throw new Error('Tasks expire automatically at their deadline.');
@@ -126,4 +128,43 @@ export async function skipTaskOccurrence(task,{confirm:requestConfirmation=confi
   pendingSkips.set(key,body);
   try {const result=await api.post(`/tasks/${task.id}/skip`,body);pendingSkips.delete(key);return result;}
   catch(error){if([400,403,404,409,428].includes(error.status||error.code))pendingSkips.delete(key);throw error;}
+}
+
+const pendingClosures=new Map();
+/** A separate confirmed outcome: no optimistic checkmarks or completion sound. */
+export async function closeIncompleteTask(task,{confirm:requestConfirmation=confirmOverModal}={}) {
+  if(!task.can_close_incomplete||!task.permissions?.close_incomplete||task.archived_at||task.parent_task_id||task.helper_view_user_id||!['open','in_progress'].includes(task.status))
+    throw new Error('You cannot close this activity.');
+  const authentication=authenticationSnapshot();
+  const recurrence=task.incomplete_closure?.recurrence_handled?'Already-created future occurrences stay unchanged.'
+    :task.is_recurring?`The next occurrence advances once${task.recurrence_from_completion?' from today':''}.`:'';
+  if(!await requestConfirmation('Close without completing remaining subtasks?',{
+    detail:`Unfinished subtasks stay unchecked. Previously earned points remain; no additional points are awarded. ${recurrence}`.trim(),
+    confirmLabel:'Close without completing remaining subtasks',closeOnConfirm:false,
+  }))return null;
+  if(!sameAuthentication(authentication))throw new Error('Your sign-in changed. Reopen the activity and try again.');
+  for(const [key,value] of pendingClosures)if(!sameAuthentication(value.authentication))pendingClosures.delete(key);
+  const key=`${authentication.epoch}:${task.id}:${task.revision}`;
+  const body=pendingClosures.get(key)?.body||{expected_revision:task.revision,operation_id:globalThis.crypto.randomUUID()};
+  pendingClosures.set(key,{body,authentication});
+  try {const result=await api.post(`/tasks/${task.id}/close-incomplete`,body);pendingClosures.delete(key);return sameAuthentication(authentication)?result:null;}
+  catch(error){if([400,403,404,409,428].includes(error.status||error.code))pendingClosures.delete(key);throw error;}
+}
+
+/** Explicitly resume saved work; this request never resets progress or successors. */
+export async function reopenIncompleteTask(task,{confirm:requestConfirmation=confirmOverModal}={}) {
+  if(!task.can_reopen_incomplete||!task.permissions?.close_incomplete||task.archived_at||task.parent_task_id||task.helper_view_user_id||task.status!=='closed_incomplete')
+    throw new Error('You cannot reopen this activity.');
+  const authentication=authenticationSnapshot();
+  if(!await requestConfirmation('Reopen this activity?',{
+    detail:'Saved subtask progress and earned points remain. Already-created future occurrences stay unchanged. Newly finished work uses the normal earning rules. A passed deadline switches this occurrence to Keep overdue; Reset remains a separate action.',
+    confirmLabel:'Reopen activity',closeOnConfirm:false,
+  }))return null;
+  if(!sameAuthentication(authentication))throw new Error('Your sign-in changed. Reopen the activity details and try again.');
+  for(const [key,value] of pendingClosures)if(!sameAuthentication(value.authentication))pendingClosures.delete(key);
+  const key=`reopen:${authentication.epoch}:${task.id}:${task.revision}`;
+  const body=pendingClosures.get(key)?.body||{expected_revision:task.revision,operation_id:globalThis.crypto.randomUUID()};
+  pendingClosures.set(key,{body,authentication});
+  try {const result=await api.post(`/tasks/${task.id}/reopen-incomplete`,body);pendingClosures.delete(key);return sameAuthentication(authentication)?result:null;}
+  catch(error){if([400,403,404,409,428].includes(error.status||error.code))pendingClosures.delete(key);throw error;}
 }

@@ -64,7 +64,7 @@ export async function recoverTaskStatus({ task, body, write, read, signal, isCur
       if (fresh.status === request.status) return { data: fresh, reconciled: true };
       if (fresh.revision !== request.expected_revision
         || original.parent && fresh.parent_revision !== request.expected_parent_revision
-        || fresh.status !== original.status || fresh.archived_at || ['expired', 'skipped'].includes(fresh.status))
+        || fresh.status !== original.status || fresh.archived_at || ['expired', 'skipped','closed_incomplete'].includes(fresh.status))
         throw failure('This Task changed. Its current status has been refreshed; review it before trying again.', 409, 'stale_revision');
       if (rejection) throw rejection;
       const permission = request.status === 'done' ? 'complete' : request.status === 'open' ? 'reset'

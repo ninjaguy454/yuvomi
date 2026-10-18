@@ -46,6 +46,7 @@ export const STATUSES = () => [
   { value: 'done',        label: t('tasks.statusDone')       },
   { value: 'expired',     label: 'Expired'                  },
   { value: 'skipped',     label: 'Skipped'                  },
+  { value: 'closed_incomplete', label: 'Closed without completing remaining subtasks' },
 ];
 
 // In der Filterleiste bleibt das Archiv ein Wert neben den Status - dort ist es
@@ -70,7 +71,8 @@ export function isExpired(task) {
   return task?.status === 'expired';
 }
 export function isSkipped(task) { return task?.status === 'skipped'; }
-export function isClosedOccurrence(task) { return isExpired(task)||isSkipped(task); }
+export function isClosedOccurrence(task) { return isExpired(task)||isSkipped(task)||task?.status==='closed_incomplete'; }
+export function closedOccurrenceLabel(task) { return task?.status==='closed_incomplete'?'Closed without completing remaining subtasks':isSkipped(task)?'Skipped':'Expired'; }
 
 function isSharedTaskDisplay() {
   const context=deviceBootstrap();

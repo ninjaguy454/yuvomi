@@ -85,7 +85,7 @@ function completions(d,p,{taskId=null,query={}}={}) {
   // Apply canonical device visibility before paging. A scan-limit cursor over
   // hidden rows would disclose their existence, IDs and completion dates.
   const taskIds=d.prepare(`SELECT task_id FROM task_completions UNION
-    SELECT action_task_id FROM task_activity_events WHERE event_type IN ('expired','skipped')`).all()
+    SELECT action_task_id FROM task_activity_events WHERE event_type IN ('expired','skipped','closed_incomplete')`).all()
     .map(row=>row.task_id).filter(id=>deviceTaskVisible(d,p,id));
   const result=occurrenceFeed(d,{me:null,limit,taskIds,userId:query.user_id?Number(query.user_id):null,
     beforeAt:query.before_at||null,beforeId:query.before_id||null,seriesId:taskId?seriesRootOf(d,Number(taskId)):null});

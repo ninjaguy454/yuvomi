@@ -1,6 +1,7 @@
 /** Map safe legacy Task cohorts to reusable Group identities. The old cohort
  * cursor and slot remain the assignment adapter: replacing them with one
  * Group cursor would give every Task in a cycle the same person. */
+import {normalizeGroupAssignment} from './group-assignment.js';
 const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
 // SQLite NOCASE folds ASCII only; use the same equivalence for cohort keys.
 const keyOf=value=>typeof value==='string'?value.replace(/[A-Z]/g,letter=>letter.toLowerCase()):'';
@@ -8,9 +9,7 @@ const ids=value=>Array.isArray(value)&&value.length&&value.every(id=>Number.isSa
   ?value.map(Number):null;
 const hasGroupAssignment=(d,json)=>{
   try{
-    const config=typeof json==='string'?JSON.parse(json):json;
-    return Number.isSafeInteger(Number(config?.group_id))&&Number(config.group_id)>0
-      &&!!d.prepare('SELECT 1 FROM rotation_groups WHERE id=?').get(Number(config.group_id));
+    return !!normalizeGroupAssignment(d,json,{allowInactive:true,allowImported:true});
   }catch{return false;}
 };
 
@@ -132,7 +131,8 @@ export function convertLegacyRotationGroups(d){
   // its own Group assignment. Keep the definition intact; resolve its review
   // only when every legacy-keyed action has a valid authoritative Group.
   for(const row of d.prepare("SELECT id,definition_json FROM task_recurrence_definitions WHERE id IN (SELECT source_id FROM rotation_compatibility_review WHERE source_type='recurrence_subtasks' AND status='requires_review')").all()){
-    const actions=JSON.parse(row.definition_json).subtasks||[];
+    const actions=JSON.parse(row.definition_json).subtasks;
+    if(!Array.isArray(actions))continue;
     const keyed=actions.filter(action=>typeof action?.task?.rotation_group==='string'&&action.task.rotation_group.trim());
     if(keyed.length&&keyed.every(action=>hasGroupAssignment(d,action.task.assignment_group_json)))
       d.prepare("UPDATE rotation_compatibility_review SET status='resolved' WHERE source_type='recurrence_subtasks' AND source_id=?").run(row.id);

@@ -192,6 +192,24 @@ test('a saved Group survives unrelated edits when its viewer permission and acti
   assert.equal(newcomer.status,400,'inactive Groups cannot be newly attached');
 });
 
+test('an untouched Activity order survives Group membership changes on root and subtask',async t=>{
+  const f=await scoringFixture(t),g=group(f.d,'Membership edits');
+  const config={group_id:g.id,start_mode:'first',direction:'first_to_last',member_order:[3,2]};
+  const created=await f.create({due_date:'2026-11-01',assignment_group:config,assigned_to:[],
+    subtasks:[{title:'Action',points:0,assignment_group:config,assigned_user_ids:[]}]});
+  assert.equal(created.status,201,JSON.stringify(created));
+  const id=created.data.id,child=f.d.prepare('SELECT id FROM tasks WHERE parent_task_id=?').get(id).id;
+  const before=[f.row(id).assigned_to,f.row(child).assigned_to];
+  saveRotationGroup(f.d,{name:g.name,member_ids:[3,1]},{id:g.id,actorId:1,expectedRevision:g.revision});
+  const edited=await f.edit(id,{title:'Unrelated title',assignment_group:config,assigned_to:[],
+    subtasks:[{id:child,title:'Unrelated action title',points:0,assignment_group:config,assigned_user_ids:[],skill_ids:[]}]});
+  assert.equal(edited.status,200,JSON.stringify(edited));
+  assert.deepEqual([f.row(id).assigned_to,f.row(child).assigned_to],before);
+  assert.deepEqual(JSON.parse(f.row(id).assignment_group_json),config);
+  assert.deepEqual(JSON.parse(f.row(child).assignment_group_json),config);
+  assert.equal(f.d.prepare('SELECT count(*) n FROM task_group_assignment_decisions WHERE task_id IN (?,?)').get(id,child).n,2);
+});
+
 test('recurrence resolves the next Group member for root and subtask from captured choices',async t=>{
   const f=await scoringFixture(t),g=group(f.d);
   const config={group_id:g.id,start_mode:'first',direction:'first_to_last',member_order:[3,2]};

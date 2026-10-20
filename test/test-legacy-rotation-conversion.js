@@ -103,9 +103,13 @@ test('a recurrence action already governed by a saved Group resolves its inert l
     const saved=JSON.stringify({task:{rotation_group:null},rotation_user_ids:[],subtasks:[
       {action_key:'wash',task:{rotation_group:'old-label',rotation_slot:1,assignment_group_json:config},assigned_user_ids:[2]}]});
     const id=Number(d.prepare('INSERT INTO task_recurrence_definitions(series_id,effective_generation,definition_json,source_task_id) VALUES(30,1,?,10)').run(saved).lastInsertRowid);
+    const invalid=JSON.stringify({task:{rotation_group:null},rotation_user_ids:[],subtasks:[
+      {action_key:'dry',task:{rotation_group:'old-label',assignment_group_json:JSON.stringify({group_id:group.id,start_mode:'invalid'})},assigned_user_ids:[2]}]});
+    const invalidId=Number(d.prepare('INSERT INTO task_recurrence_definitions(series_id,effective_generation,definition_json,source_task_id) VALUES(30,2,?,10)').run(invalid).lastInsertRowid);
     d.transaction(()=>ALL_MIGRATIONS.find(row=>row.version===10066).up(d))();
     d.transaction(()=>ALL_MIGRATIONS.find(row=>row.version===10067).up(d))();
     assert.equal(d.prepare("SELECT status FROM rotation_compatibility_review WHERE source_type='recurrence_subtasks' AND source_id=?").get(id).status,'resolved');
+    assert.equal(d.prepare("SELECT status FROM rotation_compatibility_review WHERE source_type='recurrence_subtasks' AND source_id=?").get(invalidId).status,'requires_review');
     assert.equal(d.prepare('SELECT definition_json FROM task_recurrence_definitions WHERE id=?').get(id).definition_json,saved);
     assert.equal(d.prepare("SELECT status FROM rotation_compatibility_review WHERE source_type='activity_template'").get().status,'requires_review');
   }finally{d.close();}

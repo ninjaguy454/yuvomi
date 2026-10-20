@@ -190,6 +190,7 @@ test('independent root, subtask and Template keep their own keyboard-editable me
     await page.focus('[data-task-group-order] [data-group-order-move="down"]:not([disabled])');
     await page.keyboard.press('Enter');
     assert.deepEqual(await page.$eval('#task-group-assignment',node=>node.groupOrderEditor.getValue()),[2,1]);
+    assert.equal(await page.evaluate(()=>document.activeElement?.dataset.groupOrderMove),'up');
     await page.click('[data-task-subtask-add]');await set(page,'[data-task-subtask-title]','Ordered action');
     await page.select('[data-task-subtask-group]','31');
     await page.click('[data-task-subtask-group-behavior] summary');
@@ -211,6 +212,28 @@ test('independent root, subtask and Template keep their own keyboard-editable me
     await page.waitForFunction(()=>!document.querySelector('#automation-activity-form'));
     const template=requests.find(row=>row.path==='/automation/admin/activity-templates/17'&&row.method==='PUT')?.body;
     assert.deepEqual(template?.assignment_group.member_order,[2,1]);
+  }finally{await page.dispose();}
+});
+
+test('explicit Activity order survives a matching Group reorder until deliberately reset',async()=>{
+  const page=await mounted({newTask:false,width:390});
+  try{
+    await page.evaluate(async()=>{
+      const root=document.createElement('div');root.id='explicit-order-fixture';document.body.append(root);
+      const {bindGroupAssignmentOrder}=await import('/components/group-assignment-order.js');
+      window.explicitOrder=bindGroupAssignmentOrder(root);
+      const members=[{id:1,display_name:'Alex'},{id:2,display_name:'Eleanor'}];
+      window.explicitOrder.set({id:31,members},[2,1]);
+      window.explicitOrder.set({id:31,members:[members[1],members[0]]});
+    });
+    assert.deepEqual(await page.evaluate(()=>window.explicitOrder.getValue()),[2,1]);
+    await page.evaluate(()=>window.explicitOrder.set({id:31,members:[
+      {id:2,display_name:'Eleanor'},{id:3,display_name:'New member'}]}));
+    assert.deepEqual(await page.evaluate(()=>window.explicitOrder.getValue()),[2,1],
+      'membership changes only affect the displayed projection until the Activity order is edited');
+    await page.focus('#explicit-order-fixture [data-group-order-reset]');
+    await page.keyboard.press('Enter');
+    assert.equal(await page.evaluate(()=>window.explicitOrder.getValue()),null);
   }finally{await page.dispose();}
 });
 

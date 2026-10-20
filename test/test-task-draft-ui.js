@@ -768,10 +768,10 @@ for(const width of [1366,390])test(`one shared Rotation purpose enables particip
   const page=await mounted({width,editTask:seriesEditFixture()});requests.length=0;
   try {
     assert.equal(await page.$eval('[data-task-subtask-assignment]',node=>node.hidden),false);
-    await page.click('[data-rotation-add]');
+    await page.waitForSelector('[data-rotation-choose-group="31"]');
+    await page.click('[data-rotation-choose-group="31"]');
+    await page.click('[data-rotation-open-behavior]');
     await set(page,'[data-rotation-label]','Shower Order');
-    await page.waitForSelector('[data-rotation-group] option[value="31"]');
-    await page.select('[data-rotation-group]','31');
     await page.select('[data-rotation-strategy]','rotating_order');
     await page.select('[data-task-subtask-assignee]','2');
     assert.equal(await page.$eval('[data-task-subtask-assignment]',node=>node.hidden),false);

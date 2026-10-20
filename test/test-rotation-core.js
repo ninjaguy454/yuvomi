@@ -45,6 +45,17 @@ test('three independent consumers share membership without sharing a cursor',wit
   assert.equal(R.getRotationTrack(d,shower.id).advance_count,0);finish(night);
   assert.deepEqual(resolve(shower,'night2').member_ids,[kids[1],kids[2],kids[0]]);assert.equal(R.getRotationTrack(d,meal.id).advance_count,1);
 }));
+test('an independent group can start with its first or a stable random member',withFixture(({d,kids,track,resolve})=>{
+  const first=track('first-start',{start_mode:'first'});
+  const random=track('random-start',{start_mode:'random'});
+  assert.notEqual(random.next_membership_id,null);
+  assert.equal(resolve(first,'first-night').member_ids[0],kids[0]);
+  const selected=resolve(random,'first-night');
+  assert.ok(kids.includes(selected.member_ids[0]));
+  assert.deepEqual(resolve(random,'first-night'),selected);
+  assert.equal(R.getRotationTrack(d,random.id).next_membership_id,
+    R.getRotationGroup(d,random.group_id).members.find(member=>member.id===selected.member_ids[0]).membership_id);
+}));
 test('four rotating-order nights wrap and retries have one result and one advance',withFixture(({d,kids,track,resolve,finish})=>{
   const t=track('Four nights');
   for(let n=0;n<4;n++){const o=resolve(t,`night${n}`);assert.deepEqual(o.member_ids,[...kids.slice(n%3),...kids.slice(0,n%3)]);

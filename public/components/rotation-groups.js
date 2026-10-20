@@ -26,7 +26,7 @@ const dayText = days => days?.length===7?'Every day':(days||[]).map(day=>weekday
 const orderList = (members=[], empty='No members yet') => members.length?`<ol class="rotation-order">${members.map(member=>`<li><span>${esc(memberLabel(member))}</span></li>`).join('')}</ol>`:`<p class="form-hint">${esc(empty)}</p>`;
 const toggle = (name, label, checked, hint='') => `<label class="rotation-switch"><span class="rotation-switch__copy"><strong>${esc(label)}</strong>${hint?`<span class="form-hint">${esc(hint)}</span>`:''}</span><span class="toggle"><input name="${name}" type="checkbox" ${checked?'checked':''} aria-label="${esc(label)}"><span class="toggle__track" aria-hidden="true"></span></span></label>`;
 const localDate = () => { const now=zonedFields(new Date());return `${now.year}-${String(now.month).padStart(2,'0')}-${String(now.day).padStart(2,'0')}`; };
-const sharedConfig = group => { const value={ strategy:'rotating_order',direction:'first_to_last',starting_member_id:group?.members?.[0]?.id||null,
+const sharedConfig = group => { const value={ strategy:'rotating_order',direction:'first_to_last',start_mode:group?.shared_config?.start_mode||(group?.shared_config?.starting_member_id?'explicit':'first'),starting_member_id:group?.members?.[0]?.id||null,
   effective_date:group?.household_today||localDate(),weekdays:[0,1,2,3,4,5,6],active_time:'17:00',finalize_time:'04:00',
   finalize_day_offset:1,advance_on_skip:false,eligibility:{},...(group?.shared_config||{}),...(group?.shared_config?.schedule||{}) };delete value.schedule;return value;};
 function scheduleText(config={}) {
@@ -38,6 +38,7 @@ function sharedFields(group) {
     <div class="rotation-section__heading"><h3>Shared rotation schedule</h3><p class="form-hint">Set the turns once. Every activity using this Group follows this schedule.</p></div>
     <div class="modal-grid modal-grid--2">
       <label class="form-label">Rotation method<select class="form-input" name="shared_strategy">${['round_robin','rotating_order','fixed_order'].map(value=>`<option value="${value}" ${config.strategy===value?'selected':''}>${names[value]}</option>`).join('')}</select></label>
+      <label class="form-label">Start with<select class="form-input" name="shared_start_mode"><option value="first" ${config.start_mode==='first'?'selected':''}>First member in the group</option><option value="random" ${config.start_mode==='random'?'selected':''}>Random member (chosen once)</option><option value="explicit" ${config.start_mode==='explicit'?'selected':''}>Specific member</option></select></label>
       <label class="form-label" data-rotation-starting-field>Starting member<select class="form-input" name="shared_starting_member"><option value="">Choose a member</option>${(group?.members||[]).filter(member=>member.id).map(member=>`<option value="${member.id}" ${Number(config.starting_member_id)===member.id?'selected':''}>${esc(memberLabel(member))}</option>`).join('')}</select></label>
     </div>
     <p class="form-hint" data-rotation-method-help></p>
@@ -108,7 +109,7 @@ const memberIds=list=>[...list.querySelectorAll('[data-rotation-member]')].map(r
 async function editGroup(group,onSaved,live) {
   const {data:members}=await api.get('/automation/rotation-members');
   if(live&&!live.active())return;
-  let modal,dispose;
+  let modal,dispose,savedGroup=null;
   modal=openChildModal({title:group?'Edit Rotation Group':'New Rotation Group',size:'lg',content:`<form class="rotation-editor" data-rotation-group-form novalidate>
     ${errorBox}${draftNotice}
     <section class="rotation-section" aria-label="Group details">
@@ -137,7 +138,7 @@ async function editGroup(group,onSaved,live) {
     window.lucide?.createIcons({ el: panel });
     const form=panel.querySelector('form'),list=panel.querySelector('[data-rotation-member-list]'),select=panel.querySelector('[data-rotation-add-member]');
     const sharedValue=()=>({ ...sharedConfig(group),strategy:form.elements.shared_strategy.value,direction:form.elements.shared_direction.value,
-      starting_member_id:Number(form.elements.shared_starting_member.value)||null,effective_date:form.elements.shared_effective_date.value,
+      start_mode:form.elements.shared_start_mode.value,starting_member_id:form.elements.shared_start_mode.value==='explicit'?Number(form.elements.shared_starting_member.value)||null:null,effective_date:form.elements.shared_effective_date.value,
       weekdays:[...form.querySelectorAll('[data-rotation-weekday]:checked')].map(input=>Number(input.value)),
       active_time:form.elements.shared_active_time.value,finalize_time:form.elements.shared_finalize_time.value,
       finalize_day_offset:Number(form.elements.shared_finalize_day_offset.value),advance_on_skip:form.elements.shared_advance_on_skip.checked });
@@ -148,12 +149,13 @@ async function editGroup(group,onSaved,live) {
       const ids=memberIds(list),starting=form.elements.shared_starting_member,previous=starting.value;
       starting.innerHTML='<option value="">Choose a member</option>'+ids.map(id=>`<option value="${id}">${esc(memberLabel(members.find(member=>member.id===id))||'Former household member')}</option>`).join('');
       starting.value=ids.includes(Number(previous))?previous:String(ids[0]||'');
-      const config=sharedValue(),pivot=Math.max(0,ids.indexOf(config.starting_member_id)),order=config.strategy==='fixed_order'?ids:[...ids.slice(pivot),...ids.slice(0,pivot)];
+      const config=sharedValue(),chosen=config.start_mode==='first'?ids[0]:config.start_mode==='random'?group?.shared_config?.starting_member_id:config.starting_member_id;
+      const pivot=Math.max(0,ids.indexOf(chosen)),order=config.strategy==='fixed_order'?ids:[...ids.slice(pivot),...ids.slice(0,pivot)];
       const text=order.map(id=>memberLabel(members.find(member=>member.id===id))||'Former household member');
-      panel.querySelector('[data-rotation-shared-preview]').textContent=config.strategy==='round_robin'?text[0]||'Add members to preview the first turn.':text.join(' → ')||'Add members to preview the starting order.';
+      panel.querySelector('[data-rotation-shared-preview]').textContent=config.start_mode==='random'&&!ids.includes(chosen)?'A random member will be chosen once when you save.':config.strategy==='round_robin'?text[0]||'Add members to preview the first turn.':text.join(' → ')||'Add members to preview the starting order.';
       panel.querySelector('[data-rotation-method-help]').textContent={round_robin:'Selects one person each turn. To give everyone a position, choose Rotating Order.',rotating_order:'Everyone gets a position; a different person goes first each evening.',fixed_order:'Everyone keeps the same position in the members list.'}[config.strategy];
       panel.querySelector('[data-rotation-finalize-label]').textContent=config.strategy==='fixed_order'?'Evening ends at':'Move to the next turn at';
-      panel.querySelector('[data-rotation-starting-field]').hidden=config.strategy==='fixed_order';
+      panel.querySelector('[data-rotation-starting-field]').hidden=config.strategy==='fixed_order'||config.start_mode!=='explicit';
       panel.querySelector('[data-rotation-direction-field]').hidden=config.strategy!=='rotating_order';
       panel.querySelector('[data-rotation-direction-preview]').textContent=directionExample(config.direction);
       form.elements.shared_advance_on_skip.closest('.rotation-switch').hidden=config.strategy==='fixed_order';
@@ -188,7 +190,7 @@ async function editGroup(group,onSaved,live) {
         payload.shared_config=sharedValue();
         for(const [field,message] of [['shared_effective_date','Choose when the shared schedule starts.'],['shared_active_time','Choose when each evening starts.'],['shared_finalize_time','Choose when each evening ends.']])if(!form.elements[field].value)return errorAt(panel,new Error(message),form.elements[field]);
         if(!payload.shared_config.weekdays.length)return errorAt(panel,new Error('Choose at least one scheduled evening.'),form.querySelector('[data-rotation-weekday]'));
-        if(payload.active&&!payload.shared_config.starting_member_id)return errorAt(panel,new Error('Choose the starting member.'),form.elements.shared_starting_member);
+        if(payload.active&&payload.shared_config.start_mode==='explicit'&&!payload.shared_config.starting_member_id)return errorAt(panel,new Error('Choose the starting member.'),form.elements.shared_starting_member);
         if(!payload.shared_config.finalize_day_offset&&payload.shared_config.finalize_time<=payload.shared_config.active_time)return errorAt(panel,new Error('The evening must end after it starts. Choose the following day for an overnight schedule.'),form.elements.shared_finalize_time);
       }
       const submit=panel.querySelector('[type=submit]');form.dataset.saving='true';submit.disabled=true;
@@ -198,10 +200,18 @@ async function editGroup(group,onSaved,live) {
           Object.assign(payload,confirmed);
         }
         const result=await(group?api.put(`/automation/rotation-groups/${group.id}`,payload):api.post('/automation/rotation-groups',payload));
-        await modal.close({force:true});await onSaved(result.data);
+        savedGroup=result.data;await modal.close({force:true});await onSaved(result.data);
       }catch(error){errorAt(panel,error);}finally{delete form.dataset.saving;submit.disabled=false;}
     });
   },onClose(){dispose?.();}});
+  return {...modal,result:modal.closed.then(()=>savedGroup)};
+}
+
+/** Opens group management above a Task or Template draft. Cancel leaves it untouched. */
+export async function openNewRotationGroup() {
+  if(!canCapability('rotations.manage'))throw new Error('You cannot manage Rotation Groups.');
+  const modal=await editGroup(null,()=>{}, {active:()=>true});
+  return modal.result;
 }
 
 async function confirmUsageChange(group,payload,members) {

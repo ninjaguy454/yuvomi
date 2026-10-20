@@ -399,7 +399,7 @@ function scoringAssignmentIntent(task,body) {
 
 function scoringActivitySnapshot(task,body,binding,existing=getTaskActivityBinding(db.get(),task.id)) {
   const snapshot=existing?.definition_snapshot_json?readTaskActivityDefinition(db.get(),task.id):captureActivityTemplateDefinition(db.get(),binding.activityTemplateId);
-  return overrideTaskActivityAssignees(existing?.definition_snapshot_json?{...snapshot,required_skill_ids:taskSkillInput(body,task.id,binding.activityTemplateId)}:snapshot,binding.assignmentOverrideUserIds);
+  return overrideTaskActivityAssignees({...snapshot,required_skill_ids:taskSkillInput(body,task.id,binding.activityTemplateId)},binding.assignmentOverrideUserIds);
 }
 
 /** Save reconciles the whole helper scope after authored execution changes.
@@ -542,6 +542,7 @@ function compatibleFutureDefinition(req,task,series,before,edited,{normalizeSche
   if(desired)binding={activity_template_id:desired.activityTemplateId,subject_user_id:desired.subjectUserId,
     assignment_override_user_id:desired.assignmentOverrideUserId,snapshot:overrideTaskActivityAssignees(before.binding?.activity_template_id===desired.activityTemplateId
       ?structuredClone(before.binding.snapshot):captureActivityTemplateDefinition(db.get(),desired.activityTemplateId),desired.assignmentOverrideUserIds)};
+  if(binding)binding.snapshot.required_skill_ids=[...skills];
   if(desired&&!sameTaskActivityBinding(desired,existing)) {
     if(task.rotation_group)throw new TaskStateError('Remove this task from its rotation group before attaching an Activity Template.',{},409);
     const error=validateTaskActivityBindingRequest(desired,fields.due_date||todayInHouseholdZone(),{
@@ -983,12 +984,16 @@ function taskSkillInput(body, existingTaskId = null, activityTemplateId = null) 
   if (activityTemplateId) {
     const templateIds = d.prepare('SELECT skill_id FROM activity_template_skills WHERE activity_template_id = ? ORDER BY sort_order')
       .all(activityTemplateId).map((row) => row.skill_id);
-    if (body.skill_ids !== undefined && (ids.length !== templateIds.length || ids.some((id) => !templateIds.includes(id)))) {
-      throw new TaskSkillError('This Task uses the skills on its Activity Template. Edit the template to change them.');
-    }
-    return [];
+    return body.skill_ids === undefined ? templateIds : ids;
   }
   return ids;
+}
+
+function instanceActivitySkillSnapshot(d, templateId, skillIds, existingSnapshot = null) {
+  const snapshot=existingSnapshot?structuredClone(existingSnapshot):captureActivityTemplateDefinition(d,templateId);
+  if(JSON.stringify(snapshot.required_skill_ids)===JSON.stringify(skillIds))return existingSnapshot;
+  snapshot.required_skill_ids=[...skillIds];
+  return snapshot;
 }
 
 function independentlyAssignedTaskMembers(taskId, userIds, previousUserIds, primaryUserId) {
@@ -2386,12 +2391,14 @@ export function createTaskDefinition(req, res) {
     const visibility = normalizeVisibility(req.body.visibility);
 
     const skillIds = taskSkillInput(req.body, null, activityBinding?.activityTemplateId);
+    const activitySkillSnapshot=activityBinding?instanceActivitySkillSnapshot(db.get(),activityBinding.activityTemplateId,
+      skillIds,req[templateLaunchSnapshot]||null):null;
     const initialSubtasks = initialSubtasksInput(req.body);
     for (const child of initialSubtasks || []) assertTaskMutation(db.get(), req, null, {points:child.points}, {operation:'create'});
     if (activityBinding && parent_task_id) {
       return res.status(400).json({ error: 'Activity templates can only be attached to top-level tasks.', code: 400 });
     }
-    const bindingError = validateTaskActivityBindingRequest(activityBinding, due_date || todayInHouseholdZone(), { task: { category,start_date, start_time, due_date, due_time } });
+    const bindingError = validateTaskActivityBindingRequest(activityBinding, due_date || todayInHouseholdZone(), { task: { category,start_date, start_time, due_date, due_time },activitySnapshot:activitySkillSnapshot });
     if (bindingError) return res.status(400).json({ error: bindingError, code: 400 });
 
     const taskLocation = req.body.location === undefined
@@ -2516,7 +2523,7 @@ export function createTaskDefinition(req, res) {
           subjectUserId: activityBinding.subjectUserId,
           assignmentOverrideUserId: activityBinding.assignmentOverrideUserId,
           commitRotation: true,
-          activitySnapshot: req[templateLaunchSnapshot] || null,
+          activitySnapshot: activitySkillSnapshot,
           dateKey: due_date || todayInHouseholdZone(),
           materializeChecklist: initialSubtasks === undefined,
           variableLabels: activityDraft?.variable_labels,
@@ -2769,6 +2776,9 @@ export function updateTaskDefinition(req, res) {
     const skillsBefore = existingActivityBinding?.definition_snapshot_json
       ? JSON.parse(existingActivityBinding.definition_snapshot_json).required_skill_ids : loadTaskSkillIds(db.get(), task.id);
     const skillIds = taskSkillInput(req.body, task.id, desiredActivityBinding?.activityTemplateId);
+    const activitySkillSnapshot=desiredActivityBinding?instanceActivitySkillSnapshot(db.get(),desiredActivityBinding.activityTemplateId,
+      skillIds,existingActivityBinding?.activity_template_id===desiredActivityBinding.activityTemplateId&&existingActivityBinding.definition_snapshot_json
+        ?readTaskActivityDefinition(db.get(),task.id):null):null;
     const editedSubtasks = editedSubtasksInput(task,req.body,req,{definitionOnly:historicalSeriesOnly});
     const bindingChanged = !sameTaskActivityBinding(desiredActivityBinding, existingActivityBinding);
     if (bindingChanged && desiredActivityBinding && task.rotation_group) {
@@ -2779,14 +2789,15 @@ export function updateTaskDefinition(req, res) {
     if (bindingChanged && desiredActivityBinding) {
       const bindingError = validateTaskActivityBindingRequest(desiredActivityBinding, due_date || todayInHouseholdZone(), {
         task: { category,start_date, start_time, due_date, due_time },assigneePolicy:categoryAssigneePolicy(db.get(),category),
-        activitySnapshot:existingActivityBinding?.activity_template_id===desiredActivityBinding.activityTemplateId
-          ? {...readTaskActivityDefinition(db.get(),task.id),required_skill_ids:skillIds}:null });
+        activitySnapshot:activitySkillSnapshot });
       if (bindingError) return res.status(400).json({ error: bindingError, code: 400 });
     }
     const taskWindowChanged = start_time !== task.start_time || start_date !== task.start_date || due_date !== task.due_date || due_time !== task.due_time;
 
     const assignedBefore = db.get().prepare('SELECT user_id FROM task_assignments WHERE task_id = ?')
       .all(task.id).map((r) => r.user_id);
+    if(desiredActivityBinding&&!historicalSeriesOnly&&!sameIdOrder(skillIds,skillsBefore))
+      assertTaskSkillAssignments(db.get(),skillIds,assignedBefore,due_date||todayInHouseholdZone());
     const rotationBefore = loadRotationUserIds(db.get(), task.id);
     const assignmentMode = desiredActivityBinding
       ? 'fixed'
@@ -3059,6 +3070,9 @@ export function updateTaskDefinition(req, res) {
       setAssignments(db.get(), task.id, userIds);
       setTaskSkills(db.get(), task.id, skillIds);
       updateTaskActivitySnapshotSkills(db.get(),task.id,skillIds);
+      if(desiredActivityBinding&&!bindingChanged&&activitySkillSnapshot&&!existingActivityBinding?.definition_snapshot_json)
+        db.get().prepare('UPDATE task_activity_bindings SET definition_snapshot_json=? WHERE task_id=?')
+          .run(JSON.stringify(activitySkillSnapshot),task.id);
       setRotationMembers(db.get(), task.id, assignmentMode === 'round_robin' ? rotationUserIds : []);
       if (taskWindowChanged) {
         // Checklist dates copied from the parent follow its edit. Explicit
@@ -3092,9 +3106,7 @@ export function updateTaskDefinition(req, res) {
             adoptAssigneePolicy: true,
             commitRotation: true,
             dateKey: due_date || todayInHouseholdZone(),
-            activitySnapshot:existingActivityBinding?.activity_template_id===desiredActivityBinding.activityTemplateId
-              ?existingActivityBinding.definition_snapshot_json?readTaskActivityDefinition(db.get(),task.id)
-                :captureActivityTemplateDefinition(db.get(),desiredActivityBinding.activityTemplateId):null,
+            activitySnapshot:activitySkillSnapshot||captureActivityTemplateDefinition(db.get(),desiredActivityBinding.activityTemplateId),
           });
         } else {
           clearTaskActivityBinding(db.get(), task.id);

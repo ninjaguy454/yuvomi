@@ -1272,18 +1272,8 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
 
       <div id="task-round-robin-assignment" class="form-group" style="margin-top:var(--space-4)"${assignmentMode === 'round_robin' && !isSoloHousehold() ? '' : ' hidden'}>
         ${renderUserRotationOrder(users, rotationIds)}
-        <div style="margin-top:var(--space-3)">
-          <label class="label" for="task-rotation-group">Rotation group <span class="text-muted">(optional)</span></label>
-          <input class="input" id="task-rotation-group" name="rotation_group" maxlength="80"
-                 value="${esc(rotationGroup)}" placeholder="e.g. Shower order">
-          <p class="task-field-hint">Tasks with the same group advance together only after every position in the current cycle is complete.</p>
-        </div>
-        <div style="margin-top:var(--space-3)">
-          <label class="label" for="task-rotation-position">Group position</label>
-          <input class="input" id="task-rotation-position" name="rotation_position" type="number" min="1"
-                 value="${rotationPosition}">
-          <p class="task-field-hint">Position 1 uses the first person, position 2 the second, and so on. Each new cycle shifts all positions by one.</p>
-        </div>
+        <input type="hidden" id="task-rotation-group" name="rotation_group" value="${esc(rotationGroup)}">
+        <input type="hidden" id="task-rotation-position" name="rotation_position" value="${rotationPosition}">
       </div>
       <div class="form-group" style="margin-top:var(--space-4)"${isSoloHousehold() ? ' hidden' : ''}>
         <label class="label" for="task-visibility">${t('common.visibility.label')}</label>
@@ -1306,8 +1296,8 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
       </div>
 
 
-      <div id="task-root-skills">${renderSkillPicker({ skills: state.skills, selectedIds: task.skill_ids || task.skills || [], readOnly: !!activityTemplateId && task.recurrence_series_id == null, canCreateSkill: canCapability('skills.manage') && (!activityTemplateId || task.recurrence_series_id != null) })}</div>
-      <p class="task-field-hint">${activityTemplateId && task.recurrence_series_id == null ? 'Required skills and assignment rules come from this Activity Template.' : 'Required skills apply to assignment and claiming. Each subtask has its own requirements.'}</p>
+      <div id="task-root-skills">${renderSkillPicker({ skills: state.skills, selectedIds: task.skill_ids || task.skills || [], canCreateSkill: canCapability('skills.manage') })}</div>
+      <p class="task-field-hint">Required skills apply to assignment and claiming. Changes here belong to this Activity; edit the template to change its reusable defaults.</p>
       ${isEdit && task.task_responsibilities?.length ? `<p class="task-field-hint">Participants: ${task.task_responsibilities.map((person) => esc(memberLabel(person))).join(', ')}</p>` : ''}
       </section>
       ${isTaskScoringOwner(isEdit ? task : null) && !task.is_supervision_projection ? `<section class="task-editor__section" aria-labelledby="task-subtasks-heading"><h3 id="task-subtasks-heading">Subtasks</h3>${renderSubtaskEditor({ subtasks: structuralSubtasks(task), skills: state.skills, users:state.users, canCreateSkill: canCapability('skills.manage') })}</section>` : ''}
@@ -1934,7 +1924,7 @@ function wireActivityTemplatePrefill(panel, { task = null, presetActivityTemplat
     select.addEventListener('change', () => {
       const activity = state.activityTemplates.find((entry) => Number(entry.id) === Number(select.value));
       controls.skills.setValue(activity?.skill_ids || []);
-      controls.skills.setReadOnly((!!activity && task.recurrence_series_id == null) || !canTask(task, 'change_required_skills'));
+      controls.skills.setReadOnly(!canTask(task, 'change_required_skills'));
       if (activity) {
         title.value = renderActivityTemplateText(activity.title_template || activity.name);
         description.value = renderActivityTemplateText(activity.description);
@@ -2970,7 +2960,7 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
   const controls = taskFormControls.get(form);
   const selectedScoringMode = form.querySelector('[name="scoring_mode"]:checked')?.value;
   if (selectedScoringMode && (!taskId || controls?.modeTouched)) body.scoring_mode = selectedScoringMode;
-  if ((!managedActivity || controls?.originalTask?.recurrence_series_id != null) && controls) body.skill_ids = controls.skills.getValue();
+  if (controls) body.skill_ids = controls.skills.getValue();
   if (form.querySelector('[data-rotation-bindings]')) body.rotation_bindings = controls.rotations.getValue();
   // The editor contains source actions only. Archived actions and generated
   // helper projections stay under server reconciliation, not this replace-set.

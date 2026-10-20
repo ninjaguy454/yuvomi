@@ -1,3 +1,12 @@
+import { createHash } from 'node:crypto';
+
+/** A stable starting choice for one definition, including retried saves and previews. */
+export function stableRotationStart(memberIds, seed) {
+  if (!memberIds.length) return null;
+  const digest = createHash('sha256').update(String(seed)).digest();
+  return memberIds[digest.readUInt32BE(0) % memberIds.length];
+}
+
 /** The shared pure strategy implementation. No consumer owns rotation arithmetic. */
 export function orderedRotationSelection({memberIds = [], eligibleIds = memberIds, nextMemberId = null,
   previousMemberId = null, strategy = 'round_robin', direction = 'first_to_last'} = {}) {

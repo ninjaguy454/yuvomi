@@ -2,7 +2,7 @@ import {assertCapability} from '../permissions.js';
 import {householdMembers, effectiveActivityProficiency} from './activity-eligibility.js';
 import {activityPresenceWindow, evaluatePresence} from './presence.js';
 import {todayKey} from '../utils/timezone.js';
-import {orderedRotationSelection} from './rotation-order.js';
+import {orderedRotationSelection,stableRotationStart} from './rotation-order.js';
 export {orderedRotationSelection} from './rotation-order.js';
 
 const NOW = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
@@ -156,6 +156,8 @@ export function configureRotationTrack(d,input,{actorId=null,trusted=false,share
   if(!trusted)assertCapability(d,actorId,'rotations.configure');
   return atomic(d,()=>{
     const consumerType=text(input.consumer_type,'consumer type',80),consumerId=text(String(input.consumer_id??''),'consumer identity',512),purpose=text(input.purpose_key,'rotation purpose',120);
+    const startMode=input.start_mode??'first';
+    if(!['first','random'].includes(startMode)&&!(consumerType==='rotation_group_schedule'&&startMode==='explicit'))fail('Choose first or random for the starting member.');
     if(consumerType==='rotation_group_schedule'&&!sharedSchedule)fail('Configure shared Rotation through its Group schedule.',409,'rotation_shared_owned');
     if(!/^[a-z][a-z0-9_]*$/.test(consumerType)||!/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(purpose))fail('Use a stable rotation purpose key.');
     let old=findRotationTrack(d,{consumer_type:consumerType,consumer_id:consumerId,purpose_key:purpose});
@@ -182,7 +184,9 @@ export function configureRotationTrack(d,input,{actorId=null,trusted=false,share
     const group=getRotationGroup(d,config.group_id);
     if(!group.active)fail('Reactivate this Rotation Group before configuring new rotation work.',409,'rotation_group_inactive');
     let trackId=old?.id;
-    let next=old?.group_id===group.id?old.next_membership_id:group.members[0]?.membership_id??null;
+    let next=old?.group_id===group.id?old.next_membership_id:
+      startMode==='random'?stableRotationStart(group.members.map(member=>member.membership_id),
+        `${consumerType}:${consumerId}:${purpose}:${group.id}`):group.members[0]?.membership_id??null;
     let initialSeed=null;
     if((!old||old.group_id!==group.id)&&usage?.usage_mode==='independent') {
       initialSeed=JSON.parse(usage.independent_starts_json).find(seed=>seed.consumer_type===consumerType&&String(seed.consumer_id)===consumerId&&seed.purpose_key===purpose);

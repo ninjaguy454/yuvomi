@@ -45,6 +45,20 @@ test('shared four-night periods resolve once, preview reads never advance, and o
     assert.equal(d.prepare("SELECT count(*) n FROM rotation_events WHERE event_type='finalized'").get().n,4);check(d);
   }finally{d.close();}
 });
+test('shared start choices resolve once and legacy explicit starts remain valid',()=>{
+  const d=fixture();try{
+    const first=S.saveRotationGroupUsage(d,{name:'First start',member_ids:[2,3,4],usage_mode:'shared',shared_config:{...config(),start_mode:'first',starting_member_id:null}},{actorId:1,now:at('2026-09-19T23:00:00Z')});
+    assert.equal(first.shared_config.starting_member_id,2);
+    const randomInput={name:'Random start',member_ids:[2,3,4],usage_mode:'shared',shared_config:{...config(),start_mode:'random',starting_member_id:null}};
+    const random=S.saveRotationGroupUsage(d,randomInput,{actorId:1,now:at('2026-09-19T23:00:00Z')});
+    assert.equal(random.shared_config.start_mode,'random');
+    assert.ok([2,3,4].includes(random.shared_config.starting_member_id));
+    assert.equal(S.previewSharedRotation(d,random.id,{dateKey:'2026-09-19'}).member_ids[0],random.shared_config.starting_member_id);
+    assert.equal(S.previewSharedRotation(d,random.id,{dateKey:'2026-09-19'}).member_ids[0],random.shared_config.starting_member_id);
+    const legacy=make(d,{},at('2026-09-19T23:00:00Z'));
+    assert.equal(legacy.shared_config.starting_member_id,2);
+  }finally{d.close();}
+});
 test('late Task creation cannot jump unprocessed dates; bounded chronological reconciliation recovers after restart',()=>{
   const d=fixture();try{
     const group=make(d),now=at('2026-09-22T21:00:00-04:00');

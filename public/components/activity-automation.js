@@ -1535,7 +1535,6 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
     <label class="automation-check-row"><input type="checkbox" name="subject_required" ${(activity?.subject_required ?? true) ? 'checked' : ''}> Requires a person this activity is for</label>
     <div id="automation-fixed-user" ${strategy === 'fixed' ? '' : 'hidden'}>${inputRow('Fixed assignee', `<select class="input" name="fixed_user_id">${memberOptions(context.members, activity?.fixed_user_id)}</select>`)}</div>
     <div id="automation-participant-count" ${strategy === 'rotating_multi' ? '' : 'hidden'}>${inputRow('People per occurrence', `<input class="input" type="number" name="participant_count" min="1" max="50" value="${Number(activity?.participant_count || 2)}">`, 'The first person owns the task; everyone selected is recorded as a participant.')}</div>
-    <div id="automation-rotation-group" ${['eligible_round_robin', 'rotating_multi'].includes(strategy) ? '' : 'hidden'}>${inputRow('Legacy assignment rotation key', `<input class="input" name="rotation_group" maxlength="100" value="${h(activity?.rotation_group || '')}">`, 'Compatibility setting for existing shared assignment cursors. Configure reusable ordered membership with Rotation Groups above.')}</div>
     <label class="automation-check-row"><input type="checkbox" name="allow_assignment_override" ${(activity?.allow_assignment_override ?? true) ? 'checked' : ''}> Allow an admin to reassign this activity</label>
     <div data-activity-skills>${renderSkillPicker({ skills: context.skills, selectedIds: selectedSkills, canCreateSkill: canCapability('skills.manage') })}</div>
     ${inputRow('Location', `<select class="input" name="location_mode" id="automation-location-mode"><option value="none" ${locationMode === 'none' ? 'selected' : ''}>No required location</option><option value="fixed" ${locationMode === 'fixed' ? 'selected' : ''}>Fixed Place</option><option value="workflow" ${locationMode === 'workflow' ? 'selected' : ''}>Place chosen by a workflow variable</option></select>`)}
@@ -1618,11 +1617,9 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
       const categorySelect=panel.querySelector('[name=category]'),countInput=panel.querySelector('[name=participant_count]');
       const refreshAssigneeLimit=()=>{const policy=context.categories.find(row=>row.key===categorySelect.value),max=policy?.max_assignees??null;panel.querySelector('[data-template-assignee-limit]').textContent=assigneePolicyLabel({max_assignees:max},t);const changed=!editing||categorySelect.value!==activity.category||strategySelect.value!==(activity.assignment_policy||activity.assignment_strategy)||Number(countInput.value)!==Number(activity.participant_count||1);countInput.setCustomValidity(changed&&strategySelect.value==='rotating_multi'&&max!==null&&Number(countInput.value)>max?t('tasks.assigneeLimitExceeded',{count:max}):'');};
       categorySelect.addEventListener('change',refreshAssigneeLimit);countInput.addEventListener('input',refreshAssigneeLimit);strategySelect.addEventListener('change',refreshAssigneeLimit);refreshAssigneeLimit();
-      const rotationGroup = panel.querySelector('#automation-rotation-group');
       const refreshAssignment = () => {
         fixed.hidden = strategySelect.value !== 'fixed';
         participantCount.hidden = strategySelect.value !== 'rotating_multi';
-        rotationGroup.hidden = !['eligible_round_robin', 'rotating_multi'].includes(strategySelect.value);
       };
       strategySelect?.addEventListener('change', refreshAssignment);
       const locationSelect = panel.querySelector('#automation-location-mode');
@@ -1667,7 +1664,7 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
           fixed_user_id: data.get('fixed_user_id') || null,
           allow_assignment_override: data.has('allow_assignment_override'),
           participant_count: Number(data.get('participant_count')) || 1,
-          rotation_group: data.get('rotation_group') || null,
+          rotation_group: activity?.rotation_group || null,
           rotation_bindings: rotationBindings.getValue(),
           skill_ids: requiredSkills.getValue(),
           supervision_title_template: data.get('supervision_title_template'),

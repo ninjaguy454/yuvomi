@@ -8,6 +8,7 @@ import {getRotationGroup,saveRotationGroup,getRotationTrack,findRotationTrack,co
   normalizeRotationConfiguration,previewRotation,resolveRotation,getRotationOccurrence,finalizeRotation,correctRotationTrack,
   nextRotationMembership,orderedRotationSelection} from './rotation.js';
 import {projectRotationTrack} from './rotation-access.js';
+import {stableRotationStart} from './rotation-order.js';
 
 const callbacks=new Set();
 const usageCollectors=new Set();
@@ -230,11 +231,16 @@ function normalizedInput(d,input,old,now) {
     const active_time=raw.active_time??'00:00',finalize_time=raw.finalize_time??'23:59',offset=raw.finalize_day_offset??0;
     if(!isTime(active_time)||!isTime(finalize_time)||![0,1].includes(offset)||(!offset&&finalize_time<=active_time))fail('The finalization time must follow the active time.');
     if(offset&&finalize_time>active_time)fail('A shared Rotation window cannot exceed one calendar day. Choose a finalization time at or before the next active time.');
-    const starting_member_id=Number(raw.starting_member_id??members[0]);
+    const start_mode=raw.start_mode??(raw.starting_member_id?'explicit':'first');
+    if(!['first','random','explicit'].includes(start_mode))fail('Choose first, random, or a specific starting member.');
+    const previousStart=configOf(savedVersion)?.starting_member_id;
+    const starting_member_id=start_mode==='first'?members[0]:start_mode==='random'
+      ?(savedVersion?.usage_mode==='shared'&&members.includes(previousStart)?previousStart:stableRotationStart(members,`shared:${String(input.name??old?.name??'').trim().toLowerCase()}:${members.join(',')}`))
+      :Number(raw.starting_member_id);
     if(input.active!==false&&!members.includes(starting_member_id))fail('Choose a starting member in this Rotation Group.');
     const direction=raw.direction??'first_to_last';
     if(!['first_to_last','last_to_first'].includes(direction))fail('Choose First to last or Last to first for the rotation direction.');
-    config={strategy:raw.strategy??'rotating_order',direction,starting_member_id,effective_date:effective,weekdays,active_time,finalize_time,finalize_day_offset:offset,
+    config={strategy:raw.strategy??'rotating_order',direction,start_mode,starting_member_id,effective_date:effective,weekdays,active_time,finalize_time,finalize_day_offset:offset,
       advance_on_skip:raw.advance_on_skip??false,override_affects_next:raw.override_affects_next??true,
       eligibility:raw.eligibility??{},eligibility_behavior:raw.eligibility_behavior??'skip_unavailable'};
   }

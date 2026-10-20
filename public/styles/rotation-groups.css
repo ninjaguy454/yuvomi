@@ -20,6 +20,15 @@
 .rotation-bindings .form-hint { margin: 0; }
 .rotation-bindings .form-hint { line-height: 1.5; }
 .rotation-bindings [data-rotation-load-status]:empty { display: none; }
+.rotation-group-choices { display: flex; flex-wrap: wrap; gap: var(--space-3); }
+.rotation-group-choice { display: flex; flex: 0 0 88px; flex-direction: column; align-items: center; gap: var(--space-2); min-width: 88px; padding: var(--space-2); border: 1px solid transparent; border-radius: var(--radius-md); background: transparent; color: var(--color-text-primary); font: inherit; cursor: pointer; }
+.rotation-group-choice:hover { background: var(--color-fill-well); border-color: var(--color-border); }
+.rotation-group-choice:focus-visible { outline: 3px solid var(--color-accent); outline-offset: 2px; }
+.rotation-group-choice__avatar { display: grid; place-items: center; width: 48px; height: 48px; border: 2px solid var(--color-border); border-radius: 50%; background: var(--color-surface); }
+.rotation-group-choice__avatar svg { width: 25px; height: 25px; }
+.rotation-group-choice__name { max-width: 100%; font-size: var(--text-sm); line-height: 1.2; text-align: center; overflow-wrap: anywhere; }
+.rotation-group-choice--assigned { background: var(--color-fill-well); border-color: var(--color-border); }
+.rotation-binding [data-rotation-behavior] { display: grid; gap: var(--space-4); }
 .rotation-binding {
   display: grid;
   gap: var(--space-4);

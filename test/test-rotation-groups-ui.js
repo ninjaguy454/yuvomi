@@ -117,6 +117,21 @@ async function editGroup(page){await openGroup(page);await page.click('[data-rot
 async function openHistory(page){await openGroup(page);await page.click('[data-rotation-history="11"]');await page.waitForSelector('[data-rotation-track-detail]');}
 async function order(page){return page.$$eval(`${active} ${list} [data-rotation-member]`,rows=>rows.map(row=>Number(row.dataset.rotationMember)));}
 async function fill(page,selector,value){await page.$eval(selector,(el,value)=>{el.value=value;el.dispatchEvent(new Event('input',{bubbles:true}));},value);}
+for(const width of [1440,390])test(`an Activity draft survives group creation and selection at ${width}px`,()=>pageTest(async page=>{
+ await page.evaluate(async()=>{await window.fixture.renderBindings([]);const input=document.createElement('input');input.id='unsaved-activity-title';input.value='My unsaved Activity';document.querySelector('#fixture').prepend(input);});
+ await page.click('[data-rotation-create-group]');await page.waitForSelector(form);
+ await page.click(`${active} [data-rotation-cancel]`);await page.waitForFunction(()=>!document.querySelector('[data-rotation-group-form]'));
+ assert.equal(await page.$eval('#unsaved-activity-title',el=>el.value),'My unsaved Activity');
+ assert.equal(await page.$$eval('[data-rotation-binding]',rows=>rows.length),0);
+ await page.click('[data-rotation-create-group]');await page.waitForSelector(form);
+ await fill(page,`${form} [name=name]`,'New team');await page.select('[data-rotation-add-member]','1');await page.select('[data-rotation-add-member]','2');
+ await page.click(submit);await page.waitForSelector('[data-rotation-binding]');
+ assert.equal(await page.$eval('#unsaved-activity-title',el=>el.value),'My unsaved Activity');
+ assert.equal((await page.evaluate(()=>window.bindingEditor.getValue()[0])).group_id,8);
+ assert.equal(await page.$eval('[data-rotation-group-name]',el=>el.textContent),'New team');
+ await page.click('[data-rotation-open-behavior]');assert.equal(await page.$eval('[data-rotation-behavior]',el=>el.hidden),false);
+ await page.select('[data-rotation-start-mode]','random');assert.equal((await page.evaluate(()=>window.bindingEditor.getValue()[0])).start_mode,'random');
+},{width}));
 // The shared toggle pattern deliberately clips its native checkbox. Exercise
 // the visible control rather than Puppeteer's click on a hidden 1 px input.
 async function clickSwitch(page,name){
@@ -359,6 +374,7 @@ for(const width of [1440,390])test(`Shared Group schedule is explicit and saved 
  await page.click('[data-rotation-create]');await page.waitForSelector(form);await wait(180);
  await fill(page,`${form} [name=name]`,'Kids Shower Order');for(const id of ['1','2','3'])await page.select('[data-rotation-add-member]',id);
  await page.select(`${form} [name=usage_mode]`,'shared');assert.equal(await page.$eval('[data-rotation-shared-fields]',el=>el.hidden),false);
+ await page.select(`${form} [name=shared_start_mode]`,'explicit');
  await page.select(`${form} [name=shared_starting_member]`,'3');await fill(page,`${form} [name=shared_effective_date]`,'2026-09-20');
  await fill(page,`${form} [name=shared_active_time]`,'18:00');await fill(page,`${form} [name=shared_finalize_time]`,'03:30');
  await page.select(`${form} [name=shared_finalize_day_offset]`,'1');
@@ -446,6 +462,7 @@ for(const width of [1440,390])test(`Independent rotation direction preserves dra
 
 test('Changing usage requires a preview and explicit confirmation; Cancel preserves the complete draft',()=>pageTest(async page=>{
  await editGroup(page);await wait(180);await fill(page,`${form} [name=description]`,'Preserved draft');await page.select(`${form} [name=usage_mode]`,'shared');
+ await page.select(`${form} [name=shared_start_mode]`,'explicit');
  await page.select(`${form} [name=shared_starting_member]`,'3');await fill(page,`${form} [name=shared_effective_date]`,'2026-09-20');
  await page.click(submit);await page.waitForSelector('[data-rotation-usage-confirm]');
  assert.match(await page.$eval('[data-rotation-usage-confirm]',el=>el.innerText),/Frankie → Grace → Eleanor/);
@@ -462,6 +479,7 @@ test('Changing usage requires a preview and explicit confirmation; Cancel preser
 
 test('Shared binding inherits configuration and exposes resolved-assignee position without internal IDs',()=>pageTest(async page=>{
  await page.evaluate(()=>window.fixture.renderBindings([{purpose_key:'shower_order',label:'Shower Order',group_id:7,strategy:'round_robin',advance_policy:'manual',workflow_operations:['resolve','finalize','skip']}],{workflowOperations:true}));
+ await page.click('[data-rotation-open-behavior]');
  assert.match(await page.$eval('[data-rotation-shared-notice]',el=>el.textContent),/Using shared rotation: Kids/);
  assert.match(await page.$eval('[data-rotation-shared-notice]',el=>el.textContent),/Shares turns with all activities/);
  for(const selector of ['strategy','direction','advance','skip','presence','operation-finalize','operation-skip'])assert.equal(await page.$eval(`[data-rotation-${selector}]`,el=>el.disabled),true);
@@ -474,6 +492,7 @@ test('Shared binding inherits configuration and exposes resolved-assignee positi
 
 for(const width of [1440,390])test(`Rotation purpose shows one shared summary and hides inherited controls at ${width}px`,()=>pageTest(async page=>{
  await page.evaluate(()=>window.fixture.renderBindings([{purpose_key:'shower_order',label:'Shower Order',group_id:7,strategy:'round_robin',advance_policy:'manual'}]));
+ await page.click('[data-rotation-open-behavior]');
  const visible=selector=>page.$eval(selector,el=>el.checkVisibility({visibilityProperty:true}));
  assert.equal(await visible('[data-rotation-shared-notice]'),true);
  for(const selector of ['strategy','advance','skip','eligibility-behavior','skills','supervised','presence','window','place','override-next'])assert.equal(await visible(`[data-rotation-${selector}]`),false,`${selector} must not occupy space for shared settings`);

@@ -13,8 +13,11 @@ function row(binding, groups = [], { skills = [], places = [], workflowOperation
   const eligibility = binding.eligibility || {};
   const groupOptions = [[ '', 'Choose a Rotation Group' ], ...groups.map(group => [group.id, group.name])];
   if (binding.group_id && !groups.some(group => Number(group.id) === Number(binding.group_id))) groupOptions.push([binding.group_id, `Rotation Group ${binding.group_id}`]);
+  const selectedGroup=groups.find(group=>Number(group.id)===Number(binding.group_id));
   return `<fieldset class="rotation-binding" data-rotation-binding>
-    <legend>Rotation purpose</legend><div class="modal-grid modal-grid--2">
+    <legend class="sr-only">Rotation group behavior</legend>
+    <button class="rotation-group-choice rotation-group-choice--assigned" type="button" data-rotation-open-behavior aria-expanded="false" aria-label="Edit ${esc(selectedGroup?.name||`Rotation Group ${binding.group_id}`)} behavior"><span class="rotation-group-choice__avatar" aria-hidden="true"><i data-lucide="users-round"></i></span><span class="rotation-group-choice__name" data-rotation-group-name>${esc(selectedGroup?.name||`Rotation Group ${binding.group_id}`)}</span></button>
+    <div data-rotation-behavior hidden><p class="form-hint">These behavior settings belong to this Activity. Group membership and order are shared.</p>${canCapability('rotations.manage')?'<button type="button" class="btn btn--secondary btn--sm" data-rotation-manage>Manage group members and order</button>':''}<div class="modal-grid modal-grid--2">
       <label class="form-label">Purpose name<input class="form-input" data-rotation-label value="${esc(binding.label || '')}" maxlength="120" placeholder="e.g. Shower Order"></label>
       <label class="form-label">Rotation Group<select class="form-input" data-rotation-group>${options(groupOptions, binding.group_id || '')}</select></label>
     </div>
@@ -24,6 +27,7 @@ function row(binding, groups = [], { skills = [], places = [], workflowOperation
         <label class="form-label">Rotation method<select class="form-input" data-rotation-strategy>${options([['round_robin','Round Robin'],['rotating_order','Rotating Order'],['fixed_order','Fixed Order']], binding.strategy || 'rotating_order')}</select></label>
         <label class="form-label">Move to the next turn<select class="form-input" data-rotation-advance>${options([['on_finalized','After occurrence ends'],['on_completed','After successful completion'],['manual','Manually']], binding.advance_policy || 'on_finalized')}</select></label>
       </div>
+      <label class="form-label">Start with<select class="form-input" data-rotation-start-mode>${options([['first','First member in the group'],['random','Random member (chosen once)']],binding.start_mode||'first')}</select></label>
       <p class="form-hint" data-rotation-method-help>${methodHelp[binding.strategy || 'rotating_order']}</p>
       <div data-rotation-direction-field ${(binding.strategy||'rotating_order')==='rotating_order'?'':'hidden'}>
         <label class="form-label">Rotation direction<select class="form-input" data-rotation-direction>${options(Object.entries(directions),binding.direction||'first_to_last')}</select></label>
@@ -52,13 +56,14 @@ function row(binding, groups = [], { skills = [], places = [], workflowOperation
       <label class="form-label">Expression reference<input class="form-input" data-rotation-key value="${esc(binding.purpose_key || '')}" maxlength="80" pattern="[a-z][a-z0-9_-]*"></label>
     </div>
     </details>
-    <div class="rotation-binding__footer"><button class="btn btn--ghost btn--sm" type="button" data-rotation-remove>Remove purpose</button></div>
+    <div class="rotation-binding__footer"><button class="btn btn--ghost btn--sm" type="button" data-rotation-remove>Remove group from this Activity</button></div></div>
   </fieldset>`;
 }
 export function renderRotationBindings(value = [], config = {}) {
-  return `<section class="rotation-bindings" data-rotation-bindings><div class="rotation-section__heading"><h3>Rotation</h3><p class="form-hint">Use a group to choose whose turn it is or show everyone’s place in an order.</p></div>
+  return `<section class="rotation-bindings" data-rotation-bindings><div class="rotation-section__heading"><h3>Rotation groups</h3><p class="form-hint">Choose a group for this Activity. Group membership and order are shared; the behavior below belongs to this Activity.</p></div>
+    <div class="rotation-group-choices" data-rotation-available role="group" aria-label="Available Rotation Groups"></div>
     <div data-rotation-rows>${bindings(value).map(binding => row(binding, [], config)).join('')}</div>
-    <button class="btn btn--secondary btn--sm" type="button" data-rotation-add>Add rotation purpose</button>
+    ${canCapability('rotations.manage')?'<button class="btn btn--secondary btn--sm" type="button" data-rotation-create-group>Create Rotation Group</button>':''}
     <p class="form-hint" data-rotation-load-status role="status"></p></section>`;
 }
 export function bindRotationBindings(container, { skills = [], places = [], readOnly = false, workflowOperations = false } = {}) {
@@ -67,12 +72,12 @@ export function bindRotationBindings(container, { skills = [], places = [], read
   let groups = [];
   const sharedGroup=element=>groups.find(group=>Number(group.id)===Number(element.querySelector('[data-rotation-group]').value)&&group.usage_mode==='shared');
   const lock = () => {
-    root.querySelectorAll('input,select,button').forEach(control => { control.disabled = readOnly; });
+    root.querySelectorAll('input,select,button').forEach(control => { control.disabled = readOnly && !control.matches('[data-rotation-open-behavior]'); });
     for(const element of root.querySelectorAll('[data-rotation-binding]')) {
       const group=sharedGroup(element),notice=element.querySelector('[data-rotation-shared-notice]');
       notice.hidden=!group;element.querySelector('[data-rotation-period-field]').hidden=!group;
       element.querySelector('[data-rotation-independent-settings]').hidden=!!group;
-      for(const key of ['strategy','direction','advance','skip','eligibility-behavior','skills','supervised','presence','window','place','override-next']) {
+      for(const key of ['strategy','direction','advance','start-mode','skip','eligibility-behavior','skills','supervised','presence','window','place','override-next']) {
         const label=element.querySelector(`[data-rotation-${key}]`)?.closest('label');if(label)label.hidden=!!group;
       }
       element.querySelector('[data-rotation-direction-field]').hidden=!!group||element.querySelector('[data-rotation-strategy]').value!=='rotating_order';
@@ -80,7 +85,8 @@ export function bindRotationBindings(container, { skills = [], places = [], read
       if(!group)continue;
       const config=group.shared_config||{},method={round_robin:'Round Robin',rotating_order:'Rotating Order',fixed_order:'Fixed Order'}[config.strategy]||'Shared rotation';
       notice.innerHTML=`<div class="rotation-heading"><div><strong>Using shared rotation: ${esc(group.name)}</strong><p class="form-hint">${esc(method)}${config.strategy==='rotating_order'?` · ${esc(directions[config.direction||'first_to_last'])}`:''} · Scheduled by the Group</p></div>${canCapability('rotations.manage')?'<button type="button" class="btn btn--secondary btn--sm" data-rotation-manage>Manage rotation</button>':''}</div><p class="form-hint">Shares turns with all activities using this Group.</p>${config.strategy==='round_robin'?`<p class="form-hint" data-rotation-single-selection>${methodHelp.round_robin}</p>`:''}`;
-      for(const key of ['strategy','direction','advance','skip','eligibility-behavior','skills','supervised','presence','window','place','override-next','operation-finalize','operation-skip']) {
+      notice.querySelector('[data-rotation-manage]')?.remove();
+      for(const key of ['strategy','direction','advance','start-mode','skip','eligibility-behavior','skills','supervised','presence','window','place','override-next','operation-finalize','operation-skip']) {
         const control=element.querySelector(`[data-rotation-${key}]`);if(control)control.disabled=true;
       }
       element.querySelector('[data-workflow-rotation-operations]')?.setAttribute('hidden','');
@@ -89,15 +95,22 @@ export function bindRotationBindings(container, { skills = [], places = [], read
   };
   const changed = () => root.dispatchEvent(new Event('input', { bubbles: true }));
   root.addEventListener('click', event => {
+    const opener=event.target.closest('[data-rotation-open-behavior]');
+    if(opener){const panel=opener.closest('[data-rotation-binding]').querySelector('[data-rotation-behavior]');panel.hidden=!panel.hidden;opener.setAttribute('aria-expanded',String(!panel.hidden));if(!panel.hidden)panel.querySelector('[data-rotation-strategy]')?.focus();return;}
     if (readOnly) return;
-    if (event.target.closest('[data-rotation-remove]')) { event.target.closest('[data-rotation-binding]').remove(); changed(); }
-    if (event.target.closest('[data-rotation-add]')) {
-      const key = `purpose_${crypto.randomUUID().replaceAll('-','').slice(0,12)}`;
-      root.querySelector('[data-rotation-rows]').insertAdjacentHTML('beforeend', row({purpose_key:key}, groups, {skills,places,workflowOperations}));
-      root.querySelector('[data-rotation-binding]:last-child [data-rotation-label]').focus(); lock();changed();
+    const choice=event.target.closest('[data-rotation-choose-group]');
+    if(choice){const group=groups.find(item=>Number(item.id)===Number(choice.dataset.rotationChooseGroup));if(!group)return;
+      const key=`purpose_${crypto.randomUUID().replaceAll('-','').slice(0,12)}`;
+      root.querySelector('[data-rotation-rows]').insertAdjacentHTML('beforeend',row({purpose_key:key,label:group.name,group_id:group.id,start_mode:'first'},groups,{skills,places,workflowOperations}));
+      lock();changed();root.querySelector('[data-rotation-binding]:last-child [data-rotation-open-behavior]')?.focus();return;}
+    if(event.target.closest('[data-rotation-create-group]')){
+      import('/components/rotation-groups.js').then(async module=>{const group=await module.openNewRotationGroup();await loadGroups();
+        if(group&&root.isConnected){const target=root.querySelector(`[data-rotation-choose-group="${Number(group.id)}"]`);target?.click();target?.focus({preventScroll:true});}
+      }).catch(error=>{root.querySelector('[data-rotation-load-status]').textContent=error.message;});return;
     }
+    if (event.target.closest('[data-rotation-remove]')) { event.target.closest('[data-rotation-binding]').remove(); changed(); }
     if(event.target.closest('[data-rotation-manage]')) {
-      const group=sharedGroup(event.target.closest('[data-rotation-binding]'));
+      const group=groups.find(item=>Number(item.id)===Number(event.target.closest('[data-rotation-binding]').querySelector('[data-rotation-group]').value));
       if(group)import('/components/rotation-groups.js').then(module=>module.openRotationGroup(group.id,{onChanged:loadGroups})).catch(error=>{root.querySelector('[data-rotation-load-status]').textContent=error.message;});
     }
   });
@@ -110,6 +123,8 @@ export function bindRotationBindings(container, { skills = [], places = [], read
   const loadGroups=()=>api.get('/automation/rotation-groups').then(result => {
     if(!root.isConnected)return;
     groups = result.data || [];
+    root.querySelector('[data-rotation-available]').innerHTML=groups.filter(group=>group.active!==0).map(group=>`<button class="rotation-group-choice" type="button" data-rotation-choose-group="${Number(group.id)}" aria-label="Add ${esc(group.name)} to this Activity"><span class="rotation-group-choice__avatar" aria-hidden="true"><i data-lucide="users-round"></i></span><span class="rotation-group-choice__name">${esc(group.name)}</span></button>`).join('')||'<p class="form-hint">No Rotation Groups yet. Create one to get started.</p>';
+    window.lucide?.createIcons({el:root});
     for (const select of root.querySelectorAll('[data-rotation-group]')) {
       const chosen = select.value;
       for (const group of groups) {
@@ -118,6 +133,8 @@ export function bindRotationBindings(container, { skills = [], places = [], read
         else option.textContent = group.name;
       }
       select.value = chosen;
+      const selected=groups.find(group=>String(group.id)===chosen),element=select.closest('[data-rotation-binding]');
+      if(selected&&element){element.querySelector('[data-rotation-group-name]').textContent=selected.name;element.querySelector('[data-rotation-open-behavior]').setAttribute('aria-label',`Edit ${selected.name} behavior`);}
     }
     lock();
   }).catch(() => { root.querySelector('[data-rotation-load-status]').textContent = 'Rotation Groups could not be loaded. Your draft has been preserved.'; });
@@ -132,7 +149,7 @@ export function bindRotationBindings(container, { skills = [], places = [], read
         const group=sharedGroup(element),shared=group?.shared_config;
         const result={ purpose_key: value('key').trim(), label: value('label').trim(), group_id: Number(value('group')),
           ...(workflowOperations?{workflow_operations:['resolve',...['finalize','skip'].filter(operation=>checked(`operation-${operation}`))]}:{}),
-          strategy: value('strategy'), direction: value('direction'), advance_policy: value('advance'), advance_on_skip: checked('skip'), override_affects_next: checked('override-next'),
+          strategy: value('strategy'), direction: value('direction'), start_mode:value('start-mode'), advance_policy: value('advance'), advance_on_skip: checked('skip'), override_affects_next: checked('override-next'),
           eligibility_behavior: value('eligibility-behavior'),
           eligibility: { skill_ids: [...element.querySelector('[data-rotation-skills]').selectedOptions].map(option => Number(option.value)),
             include_supervised: checked('supervised'), presence_policy: value('presence'), presence_window: value('window'), place_id: Number(value('place')) || null } };

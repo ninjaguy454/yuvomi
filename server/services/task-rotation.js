@@ -13,7 +13,7 @@ const invalid = message => Object.assign(new Error(message), { status: 400 });
 const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === 'object'
   ? Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;
 const json = value => JSON.stringify(stable(value));
-const comparableBinding=binding=>binding?{...binding,direction:binding.direction??'first_to_last'}:binding;
+const comparableBinding=binding=>binding?{...binding,direction:binding.direction??'first_to_last',start_mode:binding.start_mode??'first'}:binding;
 const comparableBindings=value=>parseRotationBindings(value).map(comparableBinding);
 export const rotationBindingsEqual=(left,right)=>json(comparableBindings(left))===json(comparableBindings(right));
 export function parseRotationBindings(value) {
@@ -31,8 +31,10 @@ export function normalizeRotationBindings(d, input) {
     if (keys.has(purpose_key)) throw invalid('Rotation purpose keys must be unique.');
     keys.add(purpose_key);
     const normalized = normalizeRotationConfiguration(d, value);
+    const start_mode=value.start_mode??'first';
+    if(!['first','random'].includes(start_mode))throw invalid('Choose first or random for the starting member.');
     return { purpose_key, label: String(value.label || purpose_key).trim().slice(0, 120),
-      group_id: normalized.group_id, strategy: normalized.strategy, direction: normalized.direction, advance_policy: normalized.advance_policy,
+      group_id: normalized.group_id, start_mode, strategy: normalized.strategy, direction: normalized.direction, advance_policy: normalized.advance_policy,
       advance_on_skip: !!normalized.advance_on_skip, override_affects_next: !!normalized.override_affects_next,
       eligibility_behavior: normalized.eligibility_behavior,
       eligibility: normalized.eligibility,
@@ -153,7 +155,7 @@ export function bindTaskRotations(d, taskId, { config, previousConfig, actorId =
       // Reconfiguration governs subsequent resolution, never silently edits it.
       const configuration=normalizeRotationConfiguration(d,binding,{allowMissingReferences:true});
       const context=taskRotationContext(d,task);
-      if(json(configuration)!==json(comparableBinding(ownSnapshot.config)) || Object.keys(context).some(key=>(context[key]??null)!==(ownSnapshot.context[key]??null)))
+      if(json(configuration)!==json({...ownSnapshot.config,direction:ownSnapshot.config.direction??'first_to_last'}) || Object.keys(context).some(key=>(context[key]??null)!==(ownSnapshot.context[key]??null)))
         preserved.push({ purpose_key: binding.purpose_key, occurrence_id: ownSnapshot.id });
       continue;
     }

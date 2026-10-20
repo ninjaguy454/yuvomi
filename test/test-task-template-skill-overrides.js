@@ -22,13 +22,13 @@ test('a template Activity can keep instance skills without changing reusable def
   assert.equal(invalid.status,400,JSON.stringify(invalid));assert.equal(f.snapshot(),before);
 });
 
-test('a standalone template Activity creates its skill snapshot only after an instance edit',async t=>{
+test('a standalone template Activity retains its policy snapshot through an instance skill edit',async t=>{
   const f=await scoringFixture(t),d=f.d;
   const template=Number(d.prepare("INSERT INTO activity_templates(name,title_template,category,assignment_strategy,assignment_policy,fixed_user_id,subject_required,presence_policy,created_by,points) VALUES('Synthetic template','Work','misc','fixed','fixed',2,0,'ignore',1,0)").run().lastInsertRowid);
   const skill=Number(d.prepare("INSERT INTO skills(name,minimum_age,age_promotion,created_by) VALUES('Added skill',0,'normal',1)").run().lastInsertRowid);
   const created=await f.create({activity_template_id:template,due_date:'2026-11-01'});assert.equal(created.status,201,JSON.stringify(created));
   const id=created.data.id;
-  assert.equal(d.prepare('SELECT definition_snapshot_json FROM task_activity_bindings WHERE task_id=?').get(id).definition_snapshot_json,null);
+  assert.deepEqual(JSON.parse(d.prepare('SELECT definition_snapshot_json FROM task_activity_bindings WHERE task_id=?').get(id).definition_snapshot_json).required_skill_ids,[]);
   const edited=await f.edit(id,{skill_ids:[skill]});assert.equal(edited.status,200,JSON.stringify(edited));
   assert.deepEqual(JSON.parse(d.prepare('SELECT definition_snapshot_json FROM task_activity_bindings WHERE task_id=?').get(id).definition_snapshot_json).required_skill_ids,[skill]);
   assert.deepEqual(d.prepare('SELECT skill_id FROM activity_template_skills WHERE activity_template_id=?').all(template),[]);

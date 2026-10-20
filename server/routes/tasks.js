@@ -1615,19 +1615,21 @@ export function hydrateTask(task, me, supervisionViews = new Map(), starts = nul
   task = db.get().prepare(`SELECT t.*,u.display_name AS assigned_name,u.avatar_color AS assigned_color,
     u.avatar_data AS assigned_avatar,${ASSIGNED_USERS_SQL}
     FROM tasks t LEFT JOIN users u ON u.id=t.assigned_to WHERE t.id=?`).get(task.id);
-  const savedGroupId=task.assignment_group_json?Number(JSON.parse(task.assignment_group_json)?.group_id):null;
-  if((task.rotation_group||savedGroupId)&&!supervisionViews.has(legacyGroupReadCacheKey))
-    supervisionViews.set(legacyGroupReadCacheKey,hasCapability(db.get(),me,'rotations.view')
-      ?mappedLegacyRotationGroups(db.get()):new Map());
-  if(savedGroupId&&!supervisionViews.has(legacyGroupByIdCacheKey))
-    supervisionViews.set(legacyGroupByIdCacheKey,new Map([...supervisionViews.get(legacyGroupReadCacheKey).values()]
-      .map(group=>[Number(group.group_id),group])));
-  const legacyGroup=task.rotation_group?supervisionViews.get(legacyGroupReadCacheKey)?.get(task.rotation_group.replace(/[A-Z]/g,letter=>letter.toLowerCase())):null;
-  task.legacy_rotation_group=legacyGroup?{group_id:legacyGroup.group_id,compatibility_mode:legacyGroup.compatibility_mode,
-    name:legacyGroup.name,slot:Number(task.rotation_slot||0)+1}:null;
-  const savedImported=savedGroupId?supervisionViews.get(legacyGroupByIdCacheKey).get(savedGroupId):null;
-  task.legacy_assignment_group=savedImported?{group_id:savedImported.group_id,name:savedImported.name,
-    compatibility_mode:savedImported.compatibility_mode}:null;
+  if(task.rotation_group||task.assignment_group_json){
+    const savedGroupId=task.assignment_group_json?Number(JSON.parse(task.assignment_group_json)?.group_id):null;
+    if(!supervisionViews.has(legacyGroupReadCacheKey))
+      supervisionViews.set(legacyGroupReadCacheKey,hasCapability(db.get(),me,'rotations.view')
+        ?mappedLegacyRotationGroups(db.get()):new Map());
+    if(savedGroupId&&!supervisionViews.has(legacyGroupByIdCacheKey))
+      supervisionViews.set(legacyGroupByIdCacheKey,new Map([...supervisionViews.get(legacyGroupReadCacheKey).values()]
+        .map(group=>[Number(group.group_id),group])));
+    const legacyGroup=task.rotation_group?supervisionViews.get(legacyGroupReadCacheKey)?.get(task.rotation_group.replace(/[A-Z]/g,letter=>letter.toLowerCase())):null;
+    task.legacy_rotation_group=legacyGroup?{group_id:legacyGroup.group_id,compatibility_mode:legacyGroup.compatibility_mode,
+      name:legacyGroup.name,slot:Number(task.rotation_slot||0)+1}:null;
+    const savedImported=savedGroupId?supervisionViews.get(legacyGroupByIdCacheKey).get(savedGroupId):null;
+    task.legacy_assignment_group=savedImported?{group_id:savedImported.group_id,name:savedImported.name,
+      compatibility_mode:savedImported.compatibility_mode}:null;
+  }
   const offer=taskOfferState(db.get(),me,task,{starts});
   addAssignedUsers(task);
   task.subtasks=loadSubtasks(task.id,me,supervisionViews);

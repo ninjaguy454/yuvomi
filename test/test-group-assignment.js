@@ -5,6 +5,7 @@ import {saveRotationGroup} from '../server/services/rotation.js';
 import {saveRotationGroupUsage} from '../server/services/rotation-shared.js';
 import {chooseGroupAssignee} from '../server/services/group-assignment.js';
 import {replaceSubjectPermissions} from '../server/permissions.js';
+import {taskCapabilities} from '../server/services/task-access.js';
 
 const group=(d,name='Synthetic group')=>saveRotationGroup(d,{name,member_ids:[2,3]},{actorId:1});
 
@@ -50,6 +51,27 @@ test('private Task Group use blocks a manager without Task visibility from chang
   assert.equal(created.status,201,JSON.stringify(created));
   replaceSubjectPermissions(f.d,'user',3,{capabilities:{'rotations.manage':'allow','rotations.view':'allow',
     'tasks.view_own':'allow','tasks.view_household':'none'}});
+  assert.throws(()=>saveRotationGroupUsage(f.d,{name:g.name,member_ids:[3,2],usage_mode:'independent'},
+    {id:g.id,actorId:3,expectedRevision:g.revision}),error=>error.status===403);
+  assert.equal(saveRotationGroupUsage(f.d,{name:g.name,member_ids:[3,2],usage_mode:'independent'},
+    {id:g.id,actorId:1,expectedRevision:g.revision}).members[0].id,3);
+});
+
+test('future-private Group use blocks a manager who can see the current recurring Task',async t=>{
+  const {ensureSeriesDefinition,appendSeriesDefinition}=await import('../server/services/task-series.js');
+  const f=await scoringFixture(t),g=group(f.d,'Future private use');
+  const created=await f.create({title:'Currently public',visibility:'all',due_date:'2026-11-01',
+    is_recurring:1,recurrence_rule:'FREQ=DAILY',assignment_group:{group_id:g.id,start_mode:'first'},assigned_to:[]});
+  assert.equal(created.status,201,JSON.stringify(created));
+  const task=f.row(created.data.id),state=ensureSeriesDefinition(f.d,task.id);
+  assert.ok(state?.definition?.data);
+  const definition=structuredClone(state.definition.data);
+  definition.task.visibility='private';
+  appendSeriesDefinition(f.d,task.id,{expectedRevision:state.revision,effectiveGeneration:1,
+    definition,actorId:1});
+  replaceSubjectPermissions(f.d,'user',3,{capabilities:{'rotations.manage':'allow','rotations.view':'allow',
+    'tasks.view_own':'allow','tasks.view_household':'allow'}});
+  assert.equal(taskCapabilities(f.d,3,task).view,true);
   assert.throws(()=>saveRotationGroupUsage(f.d,{name:g.name,member_ids:[3,2],usage_mode:'independent'},
     {id:g.id,actorId:3,expectedRevision:g.revision}),error=>error.status===403);
   assert.equal(saveRotationGroupUsage(f.d,{name:g.name,member_ids:[3,2],usage_mode:'independent'},

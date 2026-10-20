@@ -318,7 +318,45 @@ test('a view-only caller cannot preview or attach an imported Group by guessed I
  try{
    const response=await fetch(`http://127.0.0.1:${server.address().port}/automation/rotation-groups/${group.id}/preview`,
      {method:'POST',headers:{'Content-Type':'application/json','Idempotency-Key':'imported-preview-guard'},body:JSON.stringify({dateKey:'2026-09-19'})});
-   assert.equal(response.status,403,await response.text());
+   assert.equal(response.status,404,await response.text());
+ }finally{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
+});
+
+test('a Group manager cannot list or preview an imported Group with a hidden legacy Task',async()=>{
+ const viewer=kids[0],key='private legacy cohort';
+ replaceSubjectPermissions(d,'user',viewer,{capabilities:{'rotations.manage':'allow','rotations.view':'allow',
+   'tasks.view_household':'allow','tasks.view_own':'allow'}});
+ d.prepare('INSERT INTO legacy_rotation_group_mappings(source_key,group_id,roster_json,compatibility_mode) VALUES(?,?,?,?)')
+   .run(key,group.id,JSON.stringify(kids),'synchronized_slots');
+ const taskId=Number(d.prepare("INSERT INTO tasks(title,visibility,created_by,rotation_group) VALUES('Hidden cohort Task','private',?,?)")
+   .run(admin,key).lastInsertRowid);
+ const app=express();app.use(express.json());app.use((req,_res,next)=>{req.authUserId=viewer;req.authRole='member';req.session={userId:viewer,role:'member'};next();});app.use(idempotencyMiddleware);app.use('/automation',rotationRouter);
+ const server=app.listen(0,'127.0.0.1');await new Promise(resolve=>server.once('listening',resolve));
+ const base=`http://127.0.0.1:${server.address().port}/automation/rotation-groups`;
+ try{
+   const list=await fetch(base);assert.equal(list.status,200);assert.equal((await list.json()).data.some(item=>item.id===group.id),false);
+   const detail=await fetch(`${base}/${group.id}`);assert.equal(detail.status,404);
+   const usage=await fetch(`${base}/${group.id}/usage-preview`,{method:'POST',headers:{'Content-Type':'application/json',
+     'Idempotency-Key':'hidden-imported-usage'},body:JSON.stringify({usage_mode:'independent',effective_date:'2026-09-20',independent_starts:[]})});
+   assert.equal(usage.status,404);
+   const rename=await fetch(`${base}/${group.id}`,{method:'PUT',headers:{'Content-Type':'application/json',
+     'Idempotency-Key':'hidden-imported-rename'},body:JSON.stringify({name:'Leaked rename',expected_revision:group.revision})});
+   assert.equal(rename.status,404);assert.equal(R.getRotationGroup(d,group.id).name,group.name);
+   const preview=await fetch(`${base}/${group.id}/preview`,{method:'POST',headers:{'Content-Type':'application/json',
+     'Idempotency-Key':'hidden-imported-preview'},body:JSON.stringify({dateKey:'2026-09-19'})});
+   assert.equal(preview.status,404);
+   d.prepare("UPDATE tasks SET visibility='all' WHERE id=?").run(taskId);
+   const visible=await fetch(base);assert.equal((await visible.json()).data.some(item=>item.id===group.id),true);
+   d.prepare("UPDATE tasks SET visibility='assignees' WHERE id=?").run(taskId);
+   const notAssigned=await fetch(base);assert.equal((await notAssigned.json()).data.some(item=>item.id===group.id),false);
+   d.prepare('UPDATE tasks SET assigned_to=? WHERE id=?').run(viewer,taskId);
+   const legacyAssignee=await fetch(base);assert.equal((await legacyAssignee.json()).data.some(item=>item.id===group.id),true);
+   d.prepare('UPDATE tasks SET assigned_to=NULL WHERE id=?').run(taskId);
+   d.prepare('INSERT INTO task_assignments(task_id,user_id) VALUES(?,?)').run(taskId,viewer);
+   const assigned=await fetch(base);assert.equal((await assigned.json()).data.some(item=>item.id===group.id),true);
+   d.prepare("UPDATE tasks SET visibility='' WHERE id=?").run(taskId);
+   d.prepare('DELETE FROM task_assignments WHERE task_id=?').run(taskId);
+   const legacyPublic=await fetch(base);assert.equal((await legacyPublic.json()).data.some(item=>item.id===group.id),true);
  }finally{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
 });
 

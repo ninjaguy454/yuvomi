@@ -4,7 +4,7 @@ import {actorId,assertCapability,hasCapability,actorPermissions} from '../permis
 import {householdMembers} from '../services/activity-eligibility.js';
 import {createChangesStream} from '../services/change-stream.js';
 import {refreshRotationTaskRendering} from '../services/task-rotation-rendering.js';
-import {taskCapabilities,withTaskReadProjection} from '../services/task-access.js';
+import {taskCapabilities,taskDevicePrincipal,taskVisibilityWhere,withTaskReadProjection} from '../services/task-access.js';
 import {projectRotationTrack,readRotationTrack,readRotationOccurrence,projectRotationOccurrence,sharedRotationUsage} from '../services/rotation-access.js';
 import {rotationGroupUsage,saveRotationGroupUsage,previewRotationGroupUsage,previewSharedRotation,sharedGroupConfiguration,notifySharedRotationReconciliation} from '../services/rotation-shared.js';
 import {listRotationGroups,getRotationGroup,saveRotationGroup,getRotationTrack,inspectRotationTrack,
@@ -18,6 +18,33 @@ function handle(capability,fn) {
   };
 }
 function found(value) {if(!value){const e=new Error('Rotation not found.');e.status=404;throw e;}return value;}
+function importedTaskViews(d,req,groupId=null){
+  if(taskDevicePrincipal(req)){
+    const views=new Map();
+    for(const row of d.prepare(`SELECT m.group_id,t.* FROM legacy_rotation_group_mappings m
+      JOIN tasks t ON t.rotation_group=m.source_key COLLATE NOCASE
+      ${groupId==null?'':'WHERE m.group_id=?'} ORDER BY m.group_id,t.id`).all(...(groupId==null?[]:[groupId]))){
+      views.set(row.group_id,(views.get(row.group_id)??true)&&taskCapabilities(d,req,row).view);
+    }
+    return views;
+  }
+  // The Task list's SQL visibility boundary evaluates whole cohorts in one
+  // query. A single hidden Task hides the imported Group and its roster.
+  const visible=taskVisibilityWhere(d,req,'t','@me',{legacyStoredFields:true});
+  return new Map(d.prepare(`SELECT m.group_id,COUNT(t.id) task_count,
+    SUM(CASE WHEN ${visible} THEN 0 ELSE 1 END) hidden_count
+    FROM legacy_rotation_group_mappings m LEFT JOIN tasks t
+      ON t.rotation_group=m.source_key COLLATE NOCASE
+    ${groupId==null?'':'WHERE m.group_id=@groupId'} GROUP BY m.group_id`)
+    .all(groupId==null?{me:actorId(req)}:{me:actorId(req),groupId})
+    .map(row=>[row.group_id,row.task_count>0&&row.hidden_count===0]));
+}
+function canViewImportedGroup(d,req,group,views=null){
+  if(!group.legacy_compatibility)return true;
+  if(!hasCapability(d,req,'rotations.manage'))return false;
+  if(views)return views.get(group.id)===true;
+  return importedTaskViews(d,req,group.id).get(group.id)===true;
+}
 function reconciliationSummary(d,req,result) {
   const visible=(result?.preserved||[]).filter(item=>item.consumer_type==='meal'?actorPermissions(d,req).modules.meals!=='none'
     :item.consumer_type==='task'&&taskCapabilities(d,req,{id:Number(item.consumer_id)}).view);
@@ -35,13 +62,18 @@ function authorizedPreviewContext(d,req,context={}) {
 const clock=createChangesStream({table:'rotation_change_clock',deniedMessage:'Rotation access is not enabled.',
   canRead:(d,req)=>hasCapability(d,req,'rotations.view')});
 router.get('/rotation-changes',clock);
-router.get('/rotation-groups',handle('view',(d,req,res)=>res.json({data:listRotationGroups(d,{includeInactive:req.query.include_inactive==='1',
-  includeLegacy:hasCapability(d,req,'rotations.manage')}).map(group=>({...group,...rotationGroupUsage(d,group.id)}))})));
+router.get('/rotation-groups',handle('view',(d,req,res)=>{
+  const groups=listRotationGroups(d,{includeInactive:req.query.include_inactive==='1',
+    includeLegacy:hasCapability(d,req,'rotations.manage')});
+  const views=groups.some(group=>group.legacy_compatibility)?importedTaskViews(d,req):null;
+  res.json({data:groups.filter(group=>canViewImportedGroup(d,req,group,views))
+    .map(group=>({...group,...rotationGroupUsage(d,group.id)}))});
+}));
 router.get('/rotation-members',handle('view',(d,_req,res)=>res.json({data:householdMembers(d).map(({id,display_name})=>({id,display_name}))})));
 router.post('/rotation-groups',handle('manage',(d,req,res)=>res.status(201).json({data:saveRotationGroupUsage(d,req.body,{actorId:actorId(req)})})));
 router.get('/rotation-groups/:id',handle('view',(d,req,res)=>{
   const group=found(getRotationGroup(d,req.params.id));
-  if(group.legacy_compatibility)assertCapability(d,req,'rotations.manage');
+  found(canViewImportedGroup(d,req,group));
   const tracks=d.prepare('SELECT id FROM rotation_tracks WHERE group_id=? ORDER BY label,id').all(group.id).map(row=>{
     const visible=projectRotationTrack(d,req,getRotationTrack(d,row.id));if(!visible)return null;
     const track={...inspectRotationTrack(d,row.id),...visible};
@@ -52,11 +84,17 @@ router.get('/rotation-groups/:id',handle('view',(d,req,res)=>{
   }).filter(Boolean);
   res.json({data:{...group,...rotationGroupUsage(d,group.id),tracks}});
 }));
-router.put('/rotation-groups/:id',handle('manage',(d,req,res)=>res.json({data:saveRotationGroupUsage(d,req.body,{id:req.params.id,actorId:actorId(req),expectedRevision:req.body.expected_revision})})));
-router.post('/rotation-groups/:id/usage-preview',handle('manage',(d,req,res)=>res.json({data:previewRotationGroupUsage(d,req.params.id,req.body,{actorId:actorId(req)})})));
+router.put('/rotation-groups/:id',handle('manage',(d,req,res)=>{
+  found(canViewImportedGroup(d,req,found(getRotationGroup(d,req.params.id))));
+  res.json({data:saveRotationGroupUsage(d,req.body,{id:req.params.id,actorId:actorId(req),expectedRevision:req.body.expected_revision})});
+}));
+router.post('/rotation-groups/:id/usage-preview',handle('manage',(d,req,res)=>{
+  found(canViewImportedGroup(d,req,found(getRotationGroup(d,req.params.id))));
+  res.json({data:previewRotationGroupUsage(d,req.params.id,req.body,{actorId:actorId(req)})});
+}));
 router.post('/rotation-groups/:id/preview',handle('view',(d,req,res)=>{
   const group=found(getRotationGroup(d,req.params.id));
-  if(group.legacy_compatibility)assertCapability(d,req,'rotations.manage');
+  found(canViewImportedGroup(d,req,group));
   const dateKey=req.body.dateKey??req.body.context?.dateKey;
   const shared=sharedGroupConfiguration(d,Number(req.params.id),dateKey);
   res.json({data:shared?previewSharedRotation(d,Number(req.params.id),{dateKey}):previewRotation(d,{...req.body,group_id:Number(req.params.id)},{context:authorizedPreviewContext(d,req,req.body.context)})});

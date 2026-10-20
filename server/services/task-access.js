@@ -163,10 +163,17 @@ function ownSql(alias, me, projectionGuard = '') {
 }
 
 /** Adds no binds to the existing visibility fragment. Actor ID is strictly numeric. */
-export function taskVisibilityWhere(d, actor, alias = 't', bind = '?') {
+export function taskVisibilityWhere(d, actor, alias = 't', bind = '?', {legacyStoredFields=false}={}) {
   const me = actorId(actor);
-  const originalVisibility = visibilityWhere(alias, 'task_assignments', 'task_id', bind);
-  const sourceVisible = visibilityWhere('mapped_source', 'task_assignments', 'task_id', String(Number.isSafeInteger(me) ? me : 0));
+  // Legacy Task rows can hold their only assignee in tasks.assigned_to. Match
+  // taskCapabilities for callers that must decide visibility for a whole cohort.
+  const rowVisibility=(name,user)=>legacyStoredFields?`(
+    ${name}.visibility IN ('all','') OR ${name}.visibility IS NULL OR ${name}.created_by=${user}
+    OR (${name}.visibility='assignees' AND (${name}.assigned_to=${user}
+      OR EXISTS (SELECT 1 FROM task_assignments vx WHERE vx.task_id=${name}.id AND vx.user_id=${user}))))`
+    :visibilityWhere(name,'task_assignments','task_id',user);
+  const originalVisibility = rowVisibility(alias,bind);
+  const sourceVisible = rowVisibility('mapped_source',String(Number.isSafeInteger(me) ? me : 0));
   const base = supervisionTable(d) ? `(${originalVisibility} AND NOT EXISTS (
     SELECT 1 FROM task_supervision_actions mapped JOIN tasks mapped_source ON mapped_source.id=mapped.action_task_id
     WHERE mapped.counterpart_task_id=${alias}.id AND NOT ${sourceVisible}))` : originalVisibility;

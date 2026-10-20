@@ -311,9 +311,9 @@ registerSharedRotationUsageCollector((d,groupId,actor)=>{
   const direct=new Map(d.prepare(`SELECT t.* FROM tasks t
     WHERE json_extract(t.assignment_group_json,'$.group_id')=? AND t.archived_at IS NULL
       AND (t.status IN ('open','in_progress') OR t.is_recurring=1) ORDER BY t.id`).all(groupId)
-    .map(task=>[task.id,task]));
+    .map(task=>[task.id,{task,currentUse:true,futureDefinition:null}]));
   const seenSeries=new Set();
-  for(const row of d.prepare(`SELECT o.series_id,t.* FROM task_recurrence_definitions rd
+  for(const row of d.prepare(`SELECT o.series_id,rd.definition_json,t.* FROM task_recurrence_definitions rd
     JOIN task_recurrence_occurrences o ON o.series_id=rd.series_id
     JOIN tasks t ON t.id=o.task_id
     WHERE rd.id=(SELECT MAX(id) FROM task_recurrence_definitions WHERE series_id=rd.series_id)
@@ -321,10 +321,19 @@ registerSharedRotationUsageCollector((d,groupId,actor)=>{
       AND o.state='materialized' AND t.archived_at IS NULL
     ORDER BY o.generation DESC,t.id DESC`).all(groupId)){
     if(seenSeries.has(row.series_id))continue;
-    seenSeries.add(row.series_id);direct.set(row.id,row);
+    seenSeries.add(row.series_id);
+    const prior=direct.get(row.id);
+    direct.set(row.id,{task:row,currentUse:prior?.currentUse??false,futureDefinition:JSON.parse(row.definition_json)});
   }
-  for(const task of direct.values()){
-    if(!taskCapabilities(d,actor,task).view){entries.push({restricted:true,key:`task-assignment:${task.id}`});continue;}
+  for(const {task,currentUse,futureDefinition} of direct.values()){
+    const currentVisible=!currentUse||taskCapabilities(d,actor,task).view;
+    // A future-only edit may narrow visibility without changing the current
+    // materialized Task. Authorize the captured future Task, not its source.
+    const futureAuth=futureDefinition?.authorization;
+    const futureVisible=!futureDefinition||taskCapabilities(d,actor,{...futureDefinition.task,
+      created_by:futureAuth?.created_by??task.created_by,
+      assigned_to:futureAuth?.assigned_user_ids??[],parent_task_id:null}).view;
+    if(!currentVisible||!futureVisible){entries.push({restricted:true,key:`task-assignment:${task.id}`});continue;}
     entries.push({consumer_type:'task_assignment',consumer_id:String(task.id),purpose_key:'assignee',
       label:`${task.title} - assignee`,revision:task.revision,task_id:task.id});
   }

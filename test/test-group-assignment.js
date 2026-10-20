@@ -365,3 +365,63 @@ test('shared Group Template instances use Group order and reject Activity order 
   const manual=await f.create({due_date:'2026-11-01',assignment_group:{...config,member_order:[3,2]}});
   assert.equal(manual.status,400);
 });
+
+test('future-only Group order uses the next Activity date and cannot override shared order',async t=>{
+  const f=await scoringFixture(t);
+  const shared=saveRotationGroupUsage(f.d,{name:'Future scope',member_ids:[2,3],usage_mode:'shared',
+    shared_config:{strategy:'rotating_order',start_mode:'first',effective_date:'2026-11-03',weekdays:[0,1,2,3,4,5,6],
+      active_time:'10:00',finalize_time:'23:00',finalize_day_offset:0,eligibility:{}}},{actorId:1,now:new Date('2026-11-01T12:00:00Z')});
+  const config={group_id:shared.id,start_mode:'first',member_order:[3,2]};
+  const template=Number(f.d.prepare(`INSERT INTO activity_templates(name,title_template,category,assignment_strategy,assignment_policy,
+    subject_required,presence_policy,created_by,points,assignment_group_json)
+    VALUES('Future scope template','Future work','misc','eligible_round_robin','group_rotation',0,'ignore',1,0,?)`)
+    .run(JSON.stringify({group_id:shared.id,start_mode:'first'})).lastInsertRowid);
+  f.d.prepare('INSERT INTO activity_template_checklist_items(activity_template_id,title_template,sort_order,is_optional,points,assignment_group_json) VALUES(?,?,0,0,0,?)')
+    .run(template,'Future group action',JSON.stringify({group_id:shared.id,start_mode:'first'}));
+  const first=await f.create({activity_template_id:template,start_date:'2026-11-01',due_date:'2026-11-01',
+    is_recurring:1,recurrence_rule:'FREQ=DAILY'});
+  assert.equal(first.status,201,JSON.stringify(first));
+  const independent=await f.edit(first.data.id,{edit_scope:'future_only',future_patch:{fields:{assignment_group:config}}});
+  assert.equal(independent.status,200,JSON.stringify(independent));
+  const second=await f.create({activity_template_id:template,start_date:'2026-11-02',due_date:'2026-11-02',
+    is_recurring:1,recurrence_rule:'FREQ=DAILY'});
+  assert.equal(second.status,201,JSON.stringify(second));
+  const {taskSeriesState}=await import('../server/services/task-series.js');
+  const actionKey=taskSeriesState(f.d,second.data.id).definition.data.subtasks[0].action_key;
+  const unchanged=f.snapshot();
+  for(const request of [()=>f.preview(second.data.id,{edit_scope:'future_only',future_patch:{fields:{assignment_group:config}}}),
+    ()=>f.edit(second.data.id,{edit_scope:'future_only',future_patch:{fields:{assignment_group:config}}}),
+    ()=>f.edit(second.data.id,{edit_scope:'future_only',future_patch:{actions:{update:[{action_key:actionKey,fields:{assignment_group:config}}]}}})]){
+    const denied=await request();assert.equal(denied.status,400,JSON.stringify(denied));assert.match(denied.error,/shared Group.*order/);
+    assert.equal(f.snapshot(),unchanged);
+  }
+  const older=await f.create({activity_template_id:template,start_date:'2026-11-02',due_date:'2026-11-02',
+    is_recurring:1,recurrence_rule:'FREQ=DAILY',assignment_group:config});
+  assert.equal(older.status,201,JSON.stringify(older));
+  const echoed=await f.edit(older.data.id,{edit_scope:'future_only',future_patch:{fields:{title:'Future work renamed',assignment_group:config}}});
+  assert.equal(echoed.status,200,JSON.stringify(echoed));
+});
+
+test('future-only checklist order follows a signed recurrence date shift',async t=>{
+  const f=await scoringFixture(t);
+  const shared=saveRotationGroupUsage(f.d,{name:'Shifted future scope',member_ids:[2,3],usage_mode:'shared',
+    shared_config:{strategy:'rotating_order',start_mode:'first',effective_date:'2026-11-02',weekdays:[0,1,2,3,4,5,6],
+      active_time:'10:00',finalize_time:'23:00',finalize_day_offset:0,eligibility:{}}},{actorId:1,now:new Date('2026-11-01T12:00:00Z')});
+  const template=Number(f.d.prepare(`INSERT INTO activity_templates(name,title_template,category,assignment_strategy,assignment_policy,
+    subject_required,presence_policy,created_by,points,assignment_group_json)
+    VALUES('Shifted future template','Shifted work','misc','eligible_round_robin','group_rotation',0,'ignore',1,0,?)`)
+    .run(JSON.stringify({group_id:shared.id,start_mode:'first'})).lastInsertRowid);
+  f.d.prepare('INSERT INTO activity_template_checklist_items(activity_template_id,title_template,sort_order,is_optional,points,assignment_group_json) VALUES(?,?,0,0,0,?)')
+    .run(template,'Shifted child',JSON.stringify({group_id:shared.id,start_mode:'first'}));
+  const created=await f.create({activity_template_id:template,start_date:'2026-11-01',due_date:'2026-11-01',
+    is_recurring:1,recurrence_rule:'FREQ=DAILY',recurrence_from_completion:1});
+  assert.equal(created.status,201,JSON.stringify(created));
+  const {taskSeriesState}=await import('../server/services/task-series.js');
+  const actionKey=taskSeriesState(f.d,created.data.id).definition.data.subtasks[0].action_key;
+  const config={group_id:shared.id,start_mode:'first',member_order:[3,2]};
+  const patch={edit_scope:'future_only',future_patch:{fields:{due_date:'2026-11-10'},
+    actions:{update:[{action_key:actionKey,fields:{due_date:'2026-11-10',assignment_group:config}}]}}};
+  const preview=await f.preview(created.data.id,patch);
+  assert.equal(preview.status,400,JSON.stringify(preview));
+  assert.match(preview.error,/shared Group.*order/);
+});

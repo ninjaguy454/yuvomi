@@ -29,7 +29,7 @@ import { registerRecurrenceOccurrence, registerRecurrenceAction, recurrenceFront
 import { ensureSeriesDefinition, seriesMaterializationPlan, recordOccurrenceDefinition, registerSeriesAction, authoritativeTaskRecurrence,
   seriesMetadata, taskSeriesState, captureSeriesDefinition, appendSeriesDefinition, definitionEqual, seriesDefinitionForGeneration,
   normalizeSeriesSchedule, effectiveSeriesScoringDefinition, seriesActionAuthorization, planSeriesOccurrence,
-  prepareSeriesOccurrenceWork, seriesRotationAssignment } from '../services/task-series.js';
+  prepareSeriesOccurrenceWork, seriesRotationAssignment, translatedSeriesDate } from '../services/task-series.js';
 import { proposedSeriesDefinition, proposedFutureSeriesDefinition, resolveSeriesDraftClientKeys, sameSeriesBindingPolicy, futureActionCapabilities, futureRootCapabilities, assertSeriesEdit, assertSeriesDefinitionMutation, reconcileSeriesFuture, seriesOccurrencePreservationReason } from '../services/task-series-edit.js';
 import {taskScoringSummary,previewTaskScoring,assertTaskScoringMutation,taskScoringRoot,taskScoringRows,taskScoringIdentity} from '../services/task-scoring.js';
 import { readTaskActivityDefinition, updateTaskActivitySnapshotSkills, captureActivityTemplateDefinition } from '../services/task-activity-snapshot.js';
@@ -314,8 +314,54 @@ function futureEditContext(req,task) {
   assertSeriesDefinitionMutation(db.get(),req,task,before,definition,{futureOnly:true});
   validateFutureDefinitionWindows(req,task,definition);
   validateFutureDefinitionConfiguration(task,before,definition);
+  assertFutureSharedGroupOrder(req,task,state,stored,before,definition);
   assertFutureIndependentAssignmentIntent(req,task,state,stored,before,definition);
   return {state,stored,before,definition};
+}
+
+function assertFutureSharedGroupOrder(req,task,state,stored,before,definition) {
+  const requested=[{fields:req.body.future_patch?.fields,action:null},
+    ...(req.body.future_patch?.actions?.update||[]).map(action=>({fields:action.fields,action})),
+    ...(req.body.future_patch?.actions?.add||[]).map(action=>({fields:action.fields,action}))]
+    .filter(item=>item.fields&&Object.hasOwn(item.fields,'assignment_group'));
+  const ordered=requested.filter(item=>{
+    const raw=item.fields.assignment_group;
+    const config=typeof raw==='string'?JSON.parse(raw):raw;
+    if(!Array.isArray(config?.member_order)||!config.member_order.length)return false;
+    const previous=item.action?before.subtasks.find(row=>row.action_key===item.action.action_key)?.task:before.task;
+    const old=previous?.assignment_group_json?JSON.parse(previous.assignment_group_json):null;
+    const same=group=>JSON.stringify(group&&{
+      group_id:Number(group.group_id),start_mode:group.start_mode??'first',direction:group.direction??'first_to_last',
+      member_order:group.member_order?.map(Number),legacy_exact_next:group.legacy_exact_next??false
+    });
+    return same(config)!==same(old);
+  });
+  if(!ordered.length)return;
+  const d=db.get(),asOfDate=todayInHouseholdZone();
+  const canonicalUnchanged=!!stored&&definitionEqual(stored.data,definition);
+  const record=canonicalUnchanged?{...stored,data:definition}:{...stored,id:null,data:definition};
+  const occurrence=d.prepare("SELECT * FROM task_recurrence_occurrences WHERE series_id=? AND generation=? AND state='materialized'")
+    .get(state.series_id,state.occurrence.generation+1);
+  const actual=occurrence&&d.prepare('SELECT * FROM tasks WHERE id=?').get(occurrence.task_id);
+  const target=actual&&!seriesOccurrencePreservationReason(d,occurrence,actual)?{occurrence,task:actual}:null;
+  let window;
+  try{window=prospectiveRootWindow(task,state,record,definition,asOfDate,target,{preserveActual:canonicalUnchanged});}
+  catch{throw prospectiveUnavailable('projection_evidence_unavailable');}
+  if(!window)throw prospectiveUnavailable(definition.task.is_recurring?'next_occurrence_unavailable':'recurrence_ended');
+  for(const item of ordered){
+    const action=item.action&&definition.subtasks.find(row=>row.action_key===item.action.action_key
+      ||row.action_key===`new:${item.action.client_key}`);
+    const fields=action?.task||definition.task;
+    const group=JSON.parse(fields.assignment_group_json||'null');
+    const relative=definition.task.due_date_offset_days!=null;
+    const priorAnchor=relative?definition.task.start_date:definition.task.due_date;
+    const nextAnchor=relative?window.start_date:window.due_date;
+    const date=action&&fields.due_date&&priorAnchor&&nextAnchor
+      ?translatedSeriesDate(fields.due_date,priorAnchor,nextAnchor)
+      :action?fields.due_date||asOfDate:window.due_date||asOfDate;
+    if(group&&sharedGroupOnDate(d,group.group_id,date))
+      throw new TaskStateError('This shared Group uses its Group-owned order.',{},400);
+  }
 }
 
 /** Explicit independent selections must qualify before generation filters them.
@@ -2499,7 +2545,8 @@ export function createTaskDefinition(req, res) {
     if (activityBinding && parent_task_id) {
       return res.status(400).json({ error: 'Activity templates can only be attached to top-level tasks.', code: 400 });
     }
-    const bindingError = validateTaskActivityBindingRequest(activityBinding, due_date || todayInHouseholdZone(), { task: { category,start_date, start_time, due_date, due_time },activitySnapshot:activitySkillSnapshot });
+    const bindingError = validateTaskActivityBindingRequest(activityBinding, due_date || todayInHouseholdZone(), { task: { category,start_date, start_time, due_date, due_time },
+      activitySnapshot:activitySkillSnapshot,assigneePolicy:categoryAssigneePolicy(db.get(),category) });
     if (bindingError) return res.status(400).json({ error: bindingError, code: 400 });
 
     const taskLocation = req.body.location === undefined
@@ -2625,6 +2672,7 @@ export function createTaskDefinition(req, res) {
           activityTemplateId: activityBinding.activityTemplateId,
           subjectUserId: activityBinding.subjectUserId,
           assignmentOverrideUserId: activityBinding.assignmentOverrideUserId,
+          adoptAssigneePolicy: true,
           commitRotation: true,
           activitySnapshot:(activitySkillSnapshot.assignment_policy||activitySkillSnapshot.assignment_strategy)==='group_rotation'
             ?{...activitySkillSnapshot,rotation_scope:groupSeriesId?`series:${groupSeriesId}`:`task:${result.lastInsertRowid}`}

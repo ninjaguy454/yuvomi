@@ -284,7 +284,7 @@ export function seriesRotationAssignment(source,definition,{advance=false}={}) {
     primary_user_id:primary,assigned_user_ids:rotating?[primary]:[...definition.assigned_user_ids]};
 }
 
-function translatedSeriesDate(date,oldAnchor,newAnchor) {
+export function translatedSeriesDate(date,oldAnchor,newAnchor) {
   if(!date||!oldAnchor||!newAnchor)return null;
   const delta=Date.parse(`${newAnchor}T00:00:00Z`)-Date.parse(`${oldAnchor}T00:00:00Z`);
   return Number.isFinite(delta)?new Date(Date.parse(`${date}T00:00:00Z`)+delta).toISOString().slice(0,10):null;

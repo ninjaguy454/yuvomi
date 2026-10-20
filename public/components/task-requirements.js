@@ -3,6 +3,7 @@ import { esc } from '../utils/html-escape.js';
 import { bindSubtaskReorder } from '../utils/subtask-reorder.js';
 import { bindSubtaskPeople } from './task-subtask-people.js';
 import { api } from '/api.js';
+import {bindGroupAssignmentOrder} from '/components/group-assignment-order.js';
 
 export function assignmentGroupBehavior(group,{dateKey=null,template=false}={}) {
   if(!group||!Array.isArray(group.usage_versions))return group;
@@ -17,8 +18,8 @@ export function assignmentGroupBehavior(group,{dateKey=null,template=false}={}) 
 
 export function assignmentGroupSummary(group,{scope='Activity'}={}) {
   const members=group?.members?.filter(member=>member.active==null||Boolean(member.active)).map(member=>member.display_name).filter(Boolean).join(', ');
-  if(group?.usage_mode==='mixed')return `${members||group.name} · This Group changes between independent and shared rotations by Activity date. Set a start and direction for independent dates; shared dates use the Group schedule. Presence and skills on this ${scope} also apply.`;
-  if(group?.usage_mode!=='shared')return `${members||'Group members and order are shared.'} · This ${scope} chooses its starting member and direction. Presence and skills follow this ${scope}.`;
+  if(group?.usage_mode==='mixed')return `${members||group.name} · This Group changes between independent and shared rotations by Activity date. Set an order, start and direction for independent dates; shared dates use the Group schedule. Presence and skills on this ${scope} also apply.`;
+  if(group?.usage_mode!=='shared')return `${members||'Group membership is shared.'} · This ${scope} chooses its member order, starting member and direction. Presence and skills follow this ${scope}.`;
   const config=group.shared_config||{};
   const method={round_robin:'Round Robin',rotating_order:'Rotating Order',fixed_order:'Fixed Order'}[config.strategy]||'Shared rotation';
   const start=config.start_mode==='random'?'Random member':config.start_mode==='explicit'
@@ -156,10 +157,11 @@ function subtaskRow(subtask, skills, template, index, canCreateSkill = false, us
         value="${esc(subtask.title ?? subtask.title_template ?? '')}">
       ${assignment}
       ${groups.length||canCreateGroup||group?`<details class="task-subtask-editor__group" data-task-subtask-group-behavior><summary>${group?`Group: ${esc(groups.find(item=>Number(item.id)===Number(group.group_id))?.name||'Rotation Group')}`:'Assign a Rotation Group'}</summary>
-        <p class="form-hint" data-task-subtask-group-summary>${selectedGroup?.members?.filter(member=>member.active).map(member=>esc(member.display_name)).join(' → ')||'Group members and order are shared.'} ${selectedGroup?.usage_mode==='shared'?'The shared Group schedule controls direction, start and timing.':'This subtask chooses its starting member and direction.'} Presence follows this Activity's window and required skills.</p>
+        <p class="form-hint" data-task-subtask-group-summary>${selectedGroup?.members?.filter(member=>member.active).map(member=>esc(member.display_name)).join(' → ')||'Group membership is shared.'} ${selectedGroup?.usage_mode==='shared'?'The shared Group schedule controls direction, start and timing.':'This subtask chooses its member order, starting member and direction.'} Presence follows this Activity's window and required skills.</p>
         <label class="form-label">Group<select class="input" data-task-subtask-group><option value="">No Group</option>${group&&!groups.some(item=>Number(item.id)===Number(group.group_id))?`<option value="${Number(group.group_id)}" selected>Saved Rotation Group</option>`:''}${groups.map(item=>`<option value="${Number(item.id)}" ${Number(item.id)===Number(group?.group_id)?'selected':''} ${item.active||Number(item.id)===Number(group?.group_id)?'':'disabled'}>${esc(item.name)}${item.active?'':' (inactive)'}</option>`).join('')}</select></label>
         <label class="form-label">Start with<select class="input" data-task-subtask-group-start><option value="first" ${group?.start_mode!=='random'?'selected':''}>First member</option><option value="random" ${group?.start_mode==='random'?'selected':''}>Random member, chosen once</option></select></label>
         <label class="form-label">Rotation direction<select class="input" data-task-subtask-group-direction><option value="first_to_last" ${group?.direction!=='last_to_first'?'selected':''}>First to last</option><option value="last_to_first" ${group?.direction==='last_to_first'?'selected':''}>Last to first</option></select></label>
+        <div data-task-subtask-group-order></div>
         ${canCreateGroup?'<button class="btn btn--secondary btn--sm" type="button" data-task-subtask-manage-group>Manage Group members and order</button>':''}
       </details>`:''}
       <label class="task-subtask-editor__points">Points<input class="input" type="number" name="subtask_points" data-task-subtask-points ${template ? 'required' : ''}
@@ -193,6 +195,7 @@ export function bindSubtaskEditor(root, { skills = [], template = false, dateKey
   if (!editor) throw new Error('Subtask editor is not mounted.');
   const rows = editor.querySelector('[data-task-subtask-rows]');
   const pickers = new Map();
+  const groupOrders=new Map();
   const originals = new WeakMap();
   let readOnly = false;
   let preserveAssignmentHistory = true;
@@ -209,7 +212,8 @@ export function bindSubtaskEditor(root, { skills = [], template = false, dateKey
     const previous=oldIds||original.assigned_users?.map(user=>user.id)||(original.assigned_to?[original.assigned_to]:[]);
     const groupId=Number(row.querySelector('[data-task-subtask-group]')?.value)||null;
     const groupConfig=groupId?{group_id:groupId,start_mode:row.querySelector('[data-task-subtask-group-start]').value,
-      direction:row.querySelector('[data-task-subtask-group-direction]').value}:null;
+      direction:row.querySelector('[data-task-subtask-group-direction]').value,
+      ...(groupOrders.get(row)?.getValue()?{member_order:groupOrders.get(row).getValue()}:{})}:null;
     const originalGroup=typeof original.assignment_group_json==='string'?JSON.parse(original.assignment_group_json):original.assignment_group||original.assignment_group_json||null;
     const groupChanged=JSON.stringify(groupConfig)!==JSON.stringify(originalGroup);
     const selected=groupId&&!groupChanged?(Number(original.assigned_to||previous[0])||null)
@@ -249,6 +253,7 @@ export function bindSubtaskEditor(root, { skills = [], template = false, dateKey
       const selectedGroup=assignmentGroupBehavior(groups.find(group=>String(group.id)===row.querySelector('[data-task-subtask-group]')?.value),
         {dateKey:typeof dateKey==='function'?dateKey():dateKey,template});
       const shared=selectedGroup?.usage_mode==='shared';
+      groupOrders.get(row)?.set(selectedGroup,undefined,{readOnly:rowReadOnly||closedAssignment||!canAssign||permissions?.change_assignment===false});
       row.querySelectorAll('[data-task-subtask-group], [data-task-subtask-group-start], [data-task-subtask-group-direction]').forEach(control=>control.disabled=rowReadOnly||closedAssignment||!canAssign||permissions?.change_assignment===false||(shared&&!control.matches('[data-task-subtask-group]')));
       const summary=row.querySelector('[data-task-subtask-group-summary]');if(summary)summary.textContent=assignmentGroupSummary(selectedGroup,{scope:'subtask'});
       for(const field of ['start','direction']){const label=row.querySelector(`[data-task-subtask-group-${field}]`)?.closest('label');if(label)label.hidden=shared;}
@@ -283,9 +288,18 @@ export function bindSubtaskEditor(root, { skills = [], template = false, dateKey
     return skill;
   } : null;
   const bindRow = (row) => {
-    originals.set(row, JSON.parse(row.dataset.subtaskValue || '{}'));
+    const original=JSON.parse(row.dataset.subtaskValue || '{}');
+    originals.set(row,original);
     delete row.dataset.subtaskValue;
     pickers.set(row, bindSkillPicker(row, { onChange: changed, onCreateSkill: createSkill }));
+    const orderRoot=row.querySelector('[data-task-subtask-group-order]');
+    if(orderRoot){
+      const config=typeof original.assignment_group_json==='string'?JSON.parse(original.assignment_group_json):original.assignment_group||original.assignment_group_json;
+      const order=bindGroupAssignmentOrder(orderRoot,{onChange:()=>row.dispatchEvent(new Event('input',{bubbles:true}))});
+      order.set(assignmentGroupBehavior(groups.find(group=>Number(group.id)===Number(config?.group_id)),
+        {dateKey:typeof dateKey==='function'?dateKey():dateKey,template}),config?.member_order||[]);
+      groupOrders.set(row,order);
+    }
   };
   const click = (event) => {
     if (readOnly) { if (event.target.closest('.task-subtask-editor__actions')) event.preventDefault(); return; }
@@ -318,6 +332,8 @@ export function bindSubtaskEditor(root, { skills = [], template = false, dateKey
       const target = row.nextElementSibling || row.previousElementSibling;
       pickers.get(row).dispose();
       pickers.delete(row);
+      groupOrders.get(row)?.dispose();
+      groupOrders.delete(row);
       row.remove();
       (target?.querySelector('[data-task-subtask-title]') || editor.querySelector('[data-task-subtask-add]')).focus();
     }
@@ -351,6 +367,7 @@ export function bindSubtaskEditor(root, { skills = [], template = false, dateKey
     setValue(subtasks = []) {
       pickers.forEach((picker) => picker.dispose());
       pickers.clear();
+      groupOrders.forEach(order=>order.dispose());groupOrders.clear();
       rows.replaceChildren();
       rows.insertAdjacentHTML('beforeend', subtasks.map((subtask, index) => subtaskRow(subtask, skills, template, index, !!onCreateSkill, users,groups,canCreateGroup)).join(''));
       [...rows.children].forEach(bindRow);
@@ -367,6 +384,7 @@ export function bindSubtaskEditor(root, { skills = [], template = false, dateKey
       reorder.dispose();
       assignments?.dispose();
       pickers.forEach((picker) => picker.dispose());
+      groupOrders.forEach(order=>order.dispose());
     },
   };
 }

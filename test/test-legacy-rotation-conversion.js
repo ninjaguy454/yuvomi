@@ -81,6 +81,36 @@ test('ordinary legacy cohorts map to Groups while slots, cursors and dynamic key
   }finally{d.close();}
 });
 
+test('legacy Template and recurrence subtask keys without a proven roster remain for review',()=>{
+  const d=fixture();
+  try{
+    const saved='{"task":{"rotation_group":null},"rotation_user_ids":[],"subtasks":[{"action_key":"wash","task":{"rotation_group":"unproven-action","rotation_slot":1},"assigned_user_ids":[2]}]}';
+    const id=Number(d.prepare('INSERT INTO task_recurrence_definitions(series_id,effective_generation,definition_json,source_task_id) VALUES(30,1,?,10)').run(saved).lastInsertRowid);
+    d.transaction(()=>ALL_MIGRATIONS.find(row=>row.version===10066).up(d))();
+    d.transaction(()=>ALL_MIGRATIONS.find(row=>row.version===10067).up(d))();
+    assert.equal(d.prepare('SELECT definition_json FROM task_recurrence_definitions WHERE id=?').get(id).definition_json,saved);
+    assert.deepEqual(d.prepare("SELECT source_type,status FROM rotation_compatibility_review WHERE source_type IN ('activity_template','recurrence_subtasks') ORDER BY source_type").all(),
+      [{source_type:'activity_template',status:'requires_review'},{source_type:'recurrence_subtasks',status:'requires_review'}]);
+    assert.equal(d.prepare('SELECT rotation_group FROM activity_templates WHERE id=40').get().rotation_group,'template-cursor');
+  }finally{d.close();}
+});
+
+test('a recurrence action already governed by a saved Group resolves its inert legacy-key review',()=>{
+  const d=fixture();
+  try{
+    const group=saveRotationGroup(d,{name:'Action Group',member_ids:[2,3]},{actorId:1});
+    const config=JSON.stringify({group_id:group.id,start_mode:'first',direction:'first_to_last'});
+    const saved=JSON.stringify({task:{rotation_group:null},rotation_user_ids:[],subtasks:[
+      {action_key:'wash',task:{rotation_group:'old-label',rotation_slot:1,assignment_group_json:config},assigned_user_ids:[2]}]});
+    const id=Number(d.prepare('INSERT INTO task_recurrence_definitions(series_id,effective_generation,definition_json,source_task_id) VALUES(30,1,?,10)').run(saved).lastInsertRowid);
+    d.transaction(()=>ALL_MIGRATIONS.find(row=>row.version===10066).up(d))();
+    d.transaction(()=>ALL_MIGRATIONS.find(row=>row.version===10067).up(d))();
+    assert.equal(d.prepare("SELECT status FROM rotation_compatibility_review WHERE source_type='recurrence_subtasks' AND source_id=?").get(id).status,'resolved');
+    assert.equal(d.prepare('SELECT definition_json FROM task_recurrence_definitions WHERE id=?').get(id).definition_json,saved);
+    assert.equal(d.prepare("SELECT status FROM rotation_compatibility_review WHERE source_type='activity_template'").get().status,'requires_review');
+  }finally{d.close();}
+});
+
 test('a failed legacy conversion rolls back its Group and mapping',()=>{
   const d=fixture();
   try{

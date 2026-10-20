@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {scoringFixture} from './helpers/task-scoring-route-fixture.js';
 import {saveRotationGroup} from '../server/services/rotation.js';
 import {saveRotationGroupUsage} from '../server/services/rotation-shared.js';
-import {chooseGroupAssignee} from '../server/services/group-assignment.js';
+import {chooseGroupAssignee,normalizeGroupAssignment} from '../server/services/group-assignment.js';
 import {replaceSubjectPermissions} from '../server/permissions.js';
 import {taskCapabilities} from '../server/services/task-access.js';
 
@@ -42,6 +42,23 @@ test('later Group membership order changes affect the next independent turn only
   assert.equal(changed.id,g.id);
   assert.equal(chooseGroupAssignee(f.d,config,{consumerKey:'ordered',eligibleIds:[1,2,3]}),1);
   assert.equal(chooseGroupAssignee(f.d,config,{consumerKey:'ordered',eligibleIds:[1,2,3],commit:true}),1);
+});
+
+test('independent Activities can save distinct member orders without changing Group membership or other cursors',async t=>{
+  const f=await scoringFixture(t),g=group(f.d,'Independent order');
+  const custom={group_id:g.id,start_mode:'first',direction:'first_to_last',member_order:[3,2]};
+  const first=await f.create({title:'Reverse order',due_date:'2026-11-01',assignment_group:custom,assigned_to:[]});
+  const second=await f.create({title:'Default order',due_date:'2026-11-01',assignment_group:{group_id:g.id,start_mode:'first'},assigned_to:[]});
+  assert.equal(first.status,201,JSON.stringify(first));assert.equal(second.status,201,JSON.stringify(second));
+  assert.equal(f.row(first.data.id).assigned_to,3);assert.equal(f.row(second.data.id).assigned_to,2);
+  assert.deepEqual(JSON.parse(f.row(first.data.id).assignment_group_json).member_order,[3,2]);
+  assert.deepEqual(g.members.map(member=>member.id),[2,3]);
+  assert.equal(chooseGroupAssignee(f.d,custom,{consumerKey:`task:${first.data.id}`,eligibleIds:[2,3]}),2);
+  assert.equal(chooseGroupAssignee(f.d,{group_id:g.id,start_mode:'first'},
+    {consumerKey:`task:${second.data.id}`,eligibleIds:[2,3]}),3);
+  const invalid=await f.create({assignment_group:{...custom,member_order:[3,3]},assigned_to:[]});
+  assert.equal(invalid.status,400);
+  assert.throws(()=>normalizeGroupAssignment(f.d,{...custom,member_order:[3,999]},{allowInactive:true}),/members of this Group/);
 });
 
 test('private Task Group use blocks a manager without Task visibility from changing shared member order',async t=>{
@@ -115,16 +132,17 @@ test('editing one independent Group assignment leaves another Activity and its c
 
 test('template root and checklist Group defaults materialize separately and preserve reusable definitions',async t=>{
   const f=await scoringFixture(t),g=group(f.d);
-  const config=JSON.stringify({group_id:g.id,start_mode:'first',direction:'first_to_last'});
+  const config=JSON.stringify({group_id:g.id,start_mode:'first',direction:'first_to_last',member_order:[3,2]});
+  const actionConfig=JSON.stringify({group_id:g.id,start_mode:'first',direction:'first_to_last',member_order:[2,3]});
   const template=Number(f.d.prepare(`INSERT INTO activity_templates(name,title_template,category,assignment_strategy,assignment_policy,
     subject_required,presence_policy,created_by,points,assignment_group_json)
     VALUES('Group template','Group work','misc','eligible_round_robin','group_rotation',0,'ignore',1,0,?)`).run(config).lastInsertRowid);
   f.d.prepare('INSERT INTO activity_template_checklist_items(activity_template_id,title_template,sort_order,is_optional,points,assignment_group_json) VALUES(?,?,0,0,0,?)')
-    .run(template,'Group subtask',config);
+    .run(template,'Group subtask',actionConfig);
   const created=await f.create({activity_template_id:template,due_date:'2026-11-01'});
   assert.equal(created.status,201,JSON.stringify(created));
   const id=created.data.id,child=f.d.prepare('SELECT * FROM tasks WHERE parent_task_id=? AND activity_template_checklist_item_id IS NOT NULL').get(id);
-  assert.equal(f.row(id).assigned_to,2);
+  assert.equal(f.row(id).assigned_to,3);
   assert.ok(child);assert.equal(child.assigned_to,2);
   assert.equal(f.d.prepare('SELECT count(*) n FROM task_group_assignment_decisions WHERE task_id IN (?,?)').get(id,child.id).n,2);
   assert.equal(f.d.prepare('SELECT assignment_group_json FROM activity_templates WHERE id=?').get(template).assignment_group_json,config);
@@ -176,15 +194,16 @@ test('a saved Group survives unrelated edits when its viewer permission and acti
 
 test('recurrence resolves the next Group member for root and subtask from captured choices',async t=>{
   const f=await scoringFixture(t),g=group(f.d);
-  const config={group_id:g.id,start_mode:'first',direction:'first_to_last'};
+  const config={group_id:g.id,start_mode:'first',direction:'first_to_last',member_order:[3,2]};
+  const actionConfig={...config,member_order:[2,3]};
   const created=await f.create({start_date:'2026-11-01',due_date:'2026-11-01',is_recurring:1,recurrence_rule:'FREQ=DAILY',
-    assignment_group:config,assigned_to:[],subtasks:[{title:'Action',points:0,assignment_group:config,assigned_user_ids:[]}]});
+    assignment_group:config,assigned_to:[],subtasks:[{title:'Action',points:0,assignment_group:actionConfig,assigned_user_ids:[]}]});
   assert.equal(created.status,201,JSON.stringify(created));
   const source=created.data.id,firstChild=f.d.prepare('SELECT * FROM tasks WHERE parent_task_id=?').get(source);
-  assert.equal(f.row(source).assigned_to,2);assert.equal(firstChild.assigned_to,2);
+  assert.equal(f.row(source).assigned_to,3);assert.equal(firstChild.assigned_to,2);
   const finished=await f.finish(source);assert.equal(finished.status,200,JSON.stringify(finished));
   const next=f.d.prepare('SELECT * FROM tasks WHERE recurrence_origin_id=? AND parent_task_id IS NULL').get(source);
-  assert.ok(next);assert.equal(next.assigned_to,3);
+  assert.ok(next);assert.equal(next.assigned_to,2);
   const nextChild=f.d.prepare('SELECT * FROM tasks WHERE parent_task_id=?').get(next.id);
   assert.equal(nextChild.assigned_to,3);
   assert.equal(f.d.prepare('SELECT count(*) n FROM task_group_assignment_decisions WHERE task_id IN (?,?)').get(next.id,nextChild.id).n,2);

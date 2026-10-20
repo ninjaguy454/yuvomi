@@ -111,6 +111,7 @@ test.before(async () => {
 });
 test.after(async () => {
   await browser?.close();
+  server?.closeAllConnections();
   await new Promise((resolve) => server?.close(resolve) || resolve());
 });
 
@@ -177,6 +178,39 @@ for(const width of [1366,390])test(`Group chips and subtask picker save first/ra
     const body=requests.find(row=>row.path==='/tasks'&&row.method==='POST').body;
     assert.deepEqual(body.assignment_group,{group_id:31,start_mode:'first',direction:'first_to_last'});
     assert.deepEqual(body.subtasks[0].assignment_group,{group_id:31,start_mode:'random',direction:'last_to_first'});
+  }finally{await page.dispose();}
+});
+
+test('independent root, subtask and Template keep their own keyboard-editable member orders',async()=>{
+  requests.length=0;createReceipts.clear();
+  const page=await mounted({width:390});
+  try{
+    await set(page,'#task-title','Ordered independently');
+    await page.click('[data-task-group-choice="31"]');
+    await page.focus('[data-task-group-order] [data-group-order-move="down"]:not([disabled])');
+    await page.keyboard.press('Enter');
+    assert.deepEqual(await page.$eval('#task-group-assignment',node=>node.groupOrderEditor.getValue()),[2,1]);
+    await page.click('[data-task-subtask-add]');await set(page,'[data-task-subtask-title]','Ordered action');
+    await page.select('[data-task-subtask-group]','31');
+    await page.click('[data-task-subtask-group-behavior] summary');
+    await page.focus('[data-task-subtask-group-order] [data-group-order-move="down"]:not([disabled])');
+    await page.keyboard.press('Enter');
+    assert.deepEqual(await page.$$eval('[data-task-subtask-group-order] [data-group-order-id]',nodes=>nodes.map(node=>Number(node.dataset.groupOrderId))),[2,1]);
+    await page.click('#task-submit-btn');await page.waitForFunction(()=>!document.querySelector('#task-form'));
+    const created=requests.find(row=>row.path==='/tasks'&&row.method==='POST').body;
+    assert.deepEqual(created.assignment_group.member_order,[2,1]);
+    assert.deepEqual(created.subtasks[0].assignment_group.member_order,[2,1]);
+    await page.evaluate(async()=>{const root=document.createElement('div');document.body.append(root);
+      const {renderAutomationManager}=await import('/components/activity-automation.js');await renderAutomationManager(root,{tab:'activities'});});
+    await page.click('[data-edit-activity="17"]');await page.waitForSelector('#automation-activity-form');
+    await page.select('#automation-assignment-strategy','group_rotation');
+    await page.select('[name="assignment_group_id"]','31');
+    await page.focus('[data-template-group-order] [data-group-order-move="down"]:not([disabled])');
+    await page.keyboard.press('Enter');
+    await page.click('#shared-modal-overlay [type="submit"]');
+    await page.waitForFunction(()=>!document.querySelector('#automation-activity-form'));
+    const template=requests.find(row=>row.path==='/automation/admin/activity-templates/17'&&row.method==='PUT')?.body;
+    assert.deepEqual(template?.assignment_group.member_order,[2,1]);
   }finally{await page.dispose();}
 });
 

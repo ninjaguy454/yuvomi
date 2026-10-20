@@ -18,7 +18,7 @@
 const APP_RELEASE   = '2.54.0-kitchen.5';
 
 // Release explicit activity closure with preserved progress and points.
-const CACHE_VERSION = `${APP_RELEASE}-vidamia.92`;
+const CACHE_VERSION = `${APP_RELEASE}-vidamia.93`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;
@@ -205,6 +205,7 @@ const APP_SHELL = [
   '/utils/variable-expressions.js',
   '/components/detail-view.js',
   '/components/document-attach.js',
+  '/components/group-assignment-order.js',
   '/components/modal.js',
   '/components/photo-screensaver.js',
   '/components/quick-links-manager.js',

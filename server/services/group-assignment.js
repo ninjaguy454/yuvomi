@@ -1,5 +1,5 @@
 /** Concrete assignees selected from a reusable Group. The Group owns its
- * membership and order; each Activity owns this small selection policy. */
+ * membership; an independent Activity may choose its own member order. */
 import {orderedRotationSelection,stableRotationStart} from './rotation-order.js';
 import {previewSharedRotation} from './rotation-shared.js';
 import {todayKey} from '../utils/timezone.js';
@@ -21,13 +21,32 @@ export function normalizeGroupAssignment(d,value,{allowInactive=false,allowImpor
   if(!['first_to_last','last_to_first'].includes(direction))fail('Choose a valid rotation direction.');
   const legacyExact=group.compatibility_mode==='converted_independent';
   if(value.legacy_exact_next&&!legacyExact)fail('This Group does not use the imported Task turn policy.');
-  return {group_id:groupId,start_mode:startMode,direction,...(legacyExact?{legacy_exact_next:true}:{})};
+  const rawOrder=value.member_order;
+  if(rawOrder!==undefined&&(!Array.isArray(rawOrder)||rawOrder.length>100
+    ||rawOrder.some(id=>!Number.isSafeInteger(Number(id))||Number(id)<1)
+    ||new Set(rawOrder.map(Number)).size!==rawOrder.length))fail('Choose each Group member once in this Activity order.');
+  if(rawOrder?.length&&legacyExact)fail('Imported Task turns keep their saved member order.');
+  const memberOrder=rawOrder?.map(Number);
+  if(memberOrder?.length&&allowInactive){
+    const known=new Set(d.prepare('SELECT user_id FROM rotation_group_members WHERE group_id=?').all(groupId).map(row=>row.user_id));
+    if(memberOrder.some(id=>!known.has(id)))fail('Activity order must use members of this Group.');
+  }
+  if(memberOrder?.length&&!allowInactive){
+    const members=new Set(groupAssignmentMembers(d,{group_id:groupId}));
+    if(memberOrder.length!==members.size||memberOrder.some(id=>!members.has(id)))
+      fail('Activity order must include every current Group member once.');
+  }
+  return {group_id:groupId,start_mode:startMode,direction,
+    ...(memberOrder?.length?{member_order:memberOrder}:{}),...(legacyExact?{legacy_exact_next:true}:{})};
 }
 
 export function groupAssignmentMembers(d,configuration) {
-  return d.prepare(`SELECT m.user_id id FROM rotation_group_members m
+  const members=d.prepare(`SELECT m.user_id id FROM rotation_group_members m
     JOIN users u ON u.id=m.user_id
     WHERE m.group_id=? AND m.active=1 ORDER BY m.sort_order,m.id`).all(configuration.group_id).map(row=>row.id);
+  if(!configuration.member_order?.length)return members;
+  const available=new Set(members),preferred=configuration.member_order.map(Number).filter(id=>available.has(id));
+  return [...preferred,...members.filter(id=>!preferred.includes(id))];
 }
 
 /** The caller supplies the same qualified/present candidates used for an

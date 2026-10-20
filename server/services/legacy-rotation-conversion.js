@@ -6,6 +6,13 @@ const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
 const keyOf=value=>typeof value==='string'?value.replace(/[A-Z]/g,letter=>letter.toLowerCase()):'';
 const ids=value=>Array.isArray(value)&&value.length&&value.every(id=>Number.isSafeInteger(Number(id))&&Number(id)>0)
   ?value.map(Number):null;
+const hasGroupAssignment=(d,json)=>{
+  try{
+    const config=typeof json==='string'?JSON.parse(json):json;
+    return Number.isSafeInteger(Number(config?.group_id))&&Number(config.group_id)>0
+      &&!!d.prepare('SELECT 1 FROM rotation_groups WHERE id=?').get(Number(config.group_id));
+  }catch{return false;}
+};
 
 function soloFuturePlan(d,cohort,roster){
   if(cohort.tasks.some(task=>Number(task.rotation_slot||0)!==0))return null;
@@ -53,7 +60,6 @@ export function convertLegacyRotationGroups(d){
     if(!cohorts.has(key))cohorts.set(key,{sourceKey:task.rotation_group,name:task.rotation_group.trim(),tasks:[],definitions:[],subtask:false});
     cohorts.get(key).tasks.push(task);
   }
-  if(!cohorts.size)return;
   for(const row of d.prepare('SELECT id,definition_json FROM task_recurrence_definitions ORDER BY id').all()){
     const definition=JSON.parse(row.definition_json);
     const root=cohorts.get(keyOf(definition?.task?.rotation_group));
@@ -121,6 +127,15 @@ export function convertLegacyRotationGroups(d){
       WHERE source_type='task' AND source_value=? COLLATE NOCASE`).run(cohort.sourceKey);
     for(const definition of cohort.definitions)d.prepare(`UPDATE rotation_compatibility_review SET status='resolved'
       WHERE source_type='recurrence_definition' AND source_id=?`).run(definition.id);
+  }
+  // A retained text key on an action is inert once that action already has
+  // its own Group assignment. Keep the definition intact; resolve its review
+  // only when every legacy-keyed action has a valid authoritative Group.
+  for(const row of d.prepare("SELECT id,definition_json FROM task_recurrence_definitions WHERE id IN (SELECT source_id FROM rotation_compatibility_review WHERE source_type='recurrence_subtasks' AND status='requires_review')").all()){
+    const actions=JSON.parse(row.definition_json).subtasks||[];
+    const keyed=actions.filter(action=>typeof action?.task?.rotation_group==='string'&&action.task.rotation_group.trim());
+    if(keyed.length&&keyed.every(action=>hasGroupAssignment(d,action.task.assignment_group_json)))
+      d.prepare("UPDATE rotation_compatibility_review SET status='resolved' WHERE source_type='recurrence_subtasks' AND source_id=?").run(row.id);
   }
 }
 

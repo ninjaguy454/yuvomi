@@ -211,6 +211,7 @@
 .rotation-order li > span { overflow-wrap: anywhere; }
 .rotation-order [data-group-order-id] { display: grid; grid-template-columns: 1.5em minmax(0, 1fr) 2.75rem 2.75rem; align-items: center; }
 [data-group-order-id] > button { min-width: 2.75rem; min-height: 2.75rem; }
+[data-group-order-reset] { min-height: 2.75rem; }
 .rotation-usage { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); padding: var(--space-3) 0; border-bottom: 1px solid var(--color-border-subtle); }
 .rotation-usage > div { flex: 1 1 16rem; min-width: 0; overflow-wrap: anywhere; }
 .rotation-usage .form-hint { margin-top: var(--space-1); }

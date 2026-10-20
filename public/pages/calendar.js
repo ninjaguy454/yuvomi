@@ -7,6 +7,7 @@ import { memberLabel } from '/utils/member-label.js';
  */
 
 import { api } from '/api.js';
+import { canCapability } from '/permissions.js';
 import { renderMonthYearPicker, dateInSelectedMonth } from '/components/month-year-picker.js';
 import { installPopoverMenus } from '/utils/popover-menu.js';
 import { renderRRuleFields, bindRRuleEvents, getRRuleValues, recurrenceRow } from '/rrule-ui.js';
@@ -41,7 +42,7 @@ import { findPageFab } from '/utils/fab.js';
 import { nowFields, todayKey, zonedDateKey, zonedTimeKey } from '/utils/timezone.js';
 import { maxUploadBytes, maxUploadMb } from '/utils/upload-limit.js';
 import { emptyStateHTML, emptyHintHTML, mountLoadError } from '/utils/empty-state.js';
-import { renderAvailabilityManager, renderTripsManager } from '/components/activity-automation.js';
+import { renderAvailabilityManager, renderTripsManager, openPlaceForm } from '/components/activity-automation.js';
 import { routineEntriesOnDay, routineSegmentTimeLabel } from '/utils/availability-calendar.js';
 import { renderTaskCountdown, bindTaskCountdowns } from '/utils/task-countdown.js';
 
@@ -3949,6 +3950,23 @@ function wireEventForm(panel, { mode, event = null, reminder = null }) {
   bindUserMultiSelect(panel, 'cal_assigned');
   wireVisibilityWarning(panel, '#modal-visibility', 'cal_assigned', '#modal-visibility-warning');
 
+  // The Place editor sits above this live form. Its return path updates only
+  // the place controls; dates, participants, notes and other draft fields stay put.
+  panel.querySelector('#modal-add-place')?.addEventListener('click', () => {
+    if (!canCapability('places.manage')) return;
+    openPlaceForm(null, state.places, null, { child: true, showSuccessToast: false, onSaved(saved) {
+      state.places = [...state.places.filter(place => Number(place.id) !== Number(saved.id)), saved];
+      for (const select of panel.querySelectorAll('#modal-place, #modal-travel-destination, #modal-travel-lodging')) {
+        let option = [...select.options].find(item => Number(item.value) === Number(saved.id));
+        if (!option) { option = document.createElement('option'); option.value = String(saved.id); select.append(option); }
+        option.textContent = saved.path_label || saved.name;
+        option.disabled = false;
+      }
+      panel.querySelector('#modal-place').value = String(saved.id);
+      panel.querySelector('#modal-place-status').textContent = `${saved.path_label || saved.name} selected. Save this Event to link it.`;
+    } });
+  });
+
   // Travel is an explicit Event designation. Ordinary events with a location
   // remain ordinary advisory Calendar signals; only this choice creates or
   // updates a planning context.
@@ -4463,14 +4481,18 @@ function buildEventModalContent({ mode, event, date, reminder = null, time = nul
              placeholder="${t('calendar.locationPlaceholder')}" value="${esc(isEdit && event.location ? event.location : '')}">
     </div>
 
-    ${state.places.length ? `<div class="form-group">
+    <div class="form-group">
       <label class="form-label" for="modal-place">Planner Place</label>
-      <select class="form-input" id="modal-place">
-        <option value="">No linked Place</option>
-        ${state.places.map((place) => `<option value="${place.id}" ${Number(event?.place_id) === Number(place.id) ? 'selected' : ''} ${!place.active && Number(event?.place_id) !== Number(place.id) ? 'disabled' : ''}>${esc(place.path_label || place.name)}${place.active ? '' : ' (inactive)'}</option>`).join('')}
-      </select>
+      <div class="calendar-place-control">
+        <select class="form-input" id="modal-place">
+          <option value="">No linked Place</option>
+          ${state.places.map((place) => `<option value="${place.id}" ${Number(event?.place_id) === Number(place.id) ? 'selected' : ''} ${!place.active && Number(event?.place_id) !== Number(place.id) ? 'disabled' : ''}>${esc(place.path_label || place.name)}${place.active ? '' : ' (inactive)'}</option>`).join('')}
+        </select>
+        ${canCapability('places.manage') ? '<button class="btn btn--secondary btn--sm" type="button" id="modal-add-place">+ Add Place</button>' : ''}
+      </div>
       <small class="cal-field-hint">Linking a Place lets availability treat this calendar event as an advisory location signal.</small>
-    </div>` : ''}
+      <small class="cal-field-hint" id="modal-place-status" role="status" aria-live="polite"></small>
+    </div>
 
     <section class="calendar-travel-fields" id="modal-travel-fields" ${eventKind === 'travel' ? '' : 'hidden'} aria-label="Travel planning">
       <div class="calendar-travel-fields__heading">

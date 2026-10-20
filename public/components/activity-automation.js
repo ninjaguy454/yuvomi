@@ -1033,7 +1033,7 @@ export function openTripForm(trip, context, manager) {
   }});
 }
 
-function openPlaceForm(place, places, manager, {child = false, onSaved} = {}) {
+export function openPlaceForm(place, places, manager, {child = false, onSaved, showSuccessToast = true} = {}) {
   const parents = places.filter((candidate) => Number(candidate.id) !== Number(place?.id));
   const content = `<form id="automation-place-form">
     ${inputRow('Name', `<input class="input" name="name" required maxlength="120" value="${h(place?.name || '')}">`)}
@@ -1060,7 +1060,7 @@ function openPlaceForm(place, places, manager, {child = false, onSaved} = {}) {
       if (submit.disabled) return; submit.disabled = true;
       try {
         const response = place ? await api.put(`/planning/admin/places/${place.id}`, payload) : await api.post('/planning/admin/places', payload);
-        toast('Place saved.');
+        if (showSuccessToast) toast('Place saved.');
         if (child) { if (open && await waitForPlaceDialog(panel)) { onSaved?.(response.data); await dialog.close({force:true}); } }
         else await refreshAutomationManager(manager, 'places');
       } catch (error) { toast(error.message, 'danger'); }

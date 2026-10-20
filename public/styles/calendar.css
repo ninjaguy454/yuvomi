@@ -2085,3 +2085,16 @@
   font-variant-numeric: tabular-nums;
   opacity: .82;
 }
+
+.calendar-place-control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.calendar-place-control select {
+  flex: 1 1 13rem;
+  min-width: 0;
+}

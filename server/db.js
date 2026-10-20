@@ -9135,6 +9135,23 @@ FORK_MIGRATIONS.push({version:10061,description:'Prospective category assignee l
 FORK_MIGRATIONS.push({version:10062,description:'Reversible subtask completion credits with append-only audit',up:addTaskScoringCompletionSchema});
 FORK_MIGRATIONS.push({version:10063,description:'Atomic per-person Activity Template launch receipts',up:addTaskTemplateLaunchSchema});
 FORK_MIGRATIONS.push({version:10064,description:'Explicit activity closure without completing remaining subtasks',foreignKeysOff:true,up:addTaskCloseSchema});
+FORK_MIGRATIONS.push({version:10065,description:'Persist Rotation Group assignment choices separately from legacy rotation keys',up(database){
+  database.exec(`
+    ALTER TABLE activity_templates ADD COLUMN assignment_group_json TEXT CHECK(assignment_group_json IS NULL OR json_valid(assignment_group_json));
+    ALTER TABLE activity_template_checklist_items ADD COLUMN assignment_group_json TEXT CHECK(assignment_group_json IS NULL OR json_valid(assignment_group_json));
+    ALTER TABLE tasks ADD COLUMN assignment_group_json TEXT CHECK(assignment_group_json IS NULL OR json_valid(assignment_group_json));
+    CREATE TABLE task_group_assignment_decisions (
+      id INTEGER PRIMARY KEY,
+      task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      group_id INTEGER NOT NULL REFERENCES rotation_groups(id),
+      selected_user_id INTEGER NOT NULL REFERENCES users(id),
+      configuration_json TEXT NOT NULL CHECK(json_valid(configuration_json)),
+      superseded_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    );
+    CREATE UNIQUE INDEX task_group_assignment_current ON task_group_assignment_decisions(task_id) WHERE superseded_at IS NULL;
+  `);
+}});
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];
 
 const FORK_MIGRATION_REMAPS = [

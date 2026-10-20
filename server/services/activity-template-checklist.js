@@ -8,11 +8,15 @@ import {persistNewTaskAssignees} from './task-assignee-policy.js';
  */
 
 import { setTaskSkills } from './task-skills.js';
+import {assertTaskSkillAssignments,TaskSkillError} from './task-skills.js';
+import {chooseGroupAssignee,groupAssignmentMembers,recordGroupAssignment} from './group-assignment.js';
+import {assertTaskAssignmentAvailability,TaskAssignmentAvailabilityError} from './assignment-responsibilities.js';
+import {setTaskAssignments} from './task-assignments.js';
 import { substituteVariableTemplate } from './variable-resolution.js';
 
 export function loadActivityChecklist(d, activityTemplateId) {
   const items = d.prepare(`
-    SELECT id, title_template, sort_order, is_optional, points
+    SELECT id, title_template, sort_order, is_optional, points, assignment_group_json
       FROM activity_template_checklist_items
      WHERE activity_template_id = ?
      ORDER BY sort_order ASC, id ASC
@@ -81,6 +85,19 @@ export function materializeActivityChecklist(d, {
     assignNewTaskCardColor(d,taskId,{inheritFrom:parent.id});
     persistNewTaskAssignees(d,taskId,[]);
     setTaskSkills(d, taskId, item.skill_ids || item.skills?.map((skill) => skill.id) || []);
+    if(item.assignment_group_json){
+      const group=JSON.parse(item.assignment_group_json),skills=item.skill_ids||item.skills?.map(skill=>skill.id)||[];
+      const date=parent.due_date||undefined;
+      const candidates=groupAssignmentMembers(d,group).filter(userId=>{
+        try{assertTaskSkillAssignments(d,skills,[userId],date,{allowDelegation:true});assertTaskAssignmentAvailability(d,taskId,[userId]);return true;}
+        catch(error){if(error instanceof TaskSkillError||error instanceof TaskAssignmentAvailabilityError)return false;throw error;}
+      });
+      const selected=chooseGroupAssignee(d,group,{consumerKey:`template-checklist:${item.id}`,eligibleIds:candidates,commit:true,dateKey:date});
+      d.prepare('UPDATE tasks SET assigned_to=? WHERE id=?').run(selected,taskId);
+      setTaskAssignments(d,taskId,[selected]);
+      persistNewTaskAssignees(d,taskId,[selected]);
+      recordGroupAssignment(d,taskId,group,selected);
+    }
     if (sourceItemId) d.prepare(`INSERT INTO task_activity_events(task_id,action_task_id,actor_user_id,event_type,details_json)
       VALUES(?,?,?,'template_action_created',?)`).run(parent.id, taskId, createdBy || parent.created_by,
         JSON.stringify({title: renderActivityChecklistTitle(item, activity, subject, variableLabels),

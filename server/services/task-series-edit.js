@@ -17,12 +17,13 @@ import { assertTaskAssignmentAvailability } from './assignment-responsibilities.
 import { setTaskLocation } from './task-locations.js';
 import { bindTaskRotations, assertRotationBindingsChange } from './task-rotation.js';
 import { applyTaskRotationRendering } from './task-rotation-rendering.js';
+import {normalizeGroupAssignment} from './group-assignment.js';
 
 const ROOT_FIELDS = ['title','description','category','priority','start_date','start_time','due_date','due_time',
   'due_date_offset_days','is_recurring','recurrence_rule','recurrence_from_completion','assignment_mode',
-  'rotation_group','rotation_slot','rotation_bindings_json','points','visibility','countdown','locked','expiration_policy','scoring_mode','scoring_review_required'];
+  'rotation_group','rotation_slot','rotation_bindings_json','assignment_group_json','points','visibility','countdown','locked','expiration_policy','scoring_mode','scoring_review_required'];
 const ACTION_FIELDS = ['title','description','category','priority','start_date','start_time','due_date','due_time',
-  'points','visibility','locked','expiration_policy','is_optional','sort_order'];
+  'points','visibility','locked','expiration_policy','is_optional','sort_order','assignment_group_json'];
 const actorId = actor => typeof actor === 'number' ? actor : actor.authUserId || actor.session?.userId;
 const read = (d,id) => d.prepare('SELECT * FROM tasks WHERE id=?').get(id);
 const clone = value => JSON.parse(JSON.stringify(value));
@@ -62,8 +63,8 @@ export function proposedFutureSeriesDefinition(d,actor,root,before,patch,{valida
   if(!object(patch)||Object.keys(patch).some(key=>!['fields','actions'].includes(key)))bad();
   const after=clone(before),fields=patch.fields??{},operations=patch.actions??{};
   if(!object(fields)||!object(operations)||Object.keys(operations).some(key=>!['update','add','remove','order'].includes(key)))bad();
-  const rootAllowed=ROOT_FIELDS.filter(key=>!['scoring_review_required','rotation_bindings_json'].includes(key)).concat(['assigned_to','rotation_user_ids','skill_ids','tags','location','rotation_bindings','card_color_choice']);
-  const actionAllowed=ACTION_FIELDS.filter(key=>key!=='sort_order').concat(['assigned_user_ids','skill_ids','tags']);
+  const rootAllowed=ROOT_FIELDS.filter(key=>!['scoring_review_required','rotation_bindings_json','assignment_group_json'].includes(key)).concat(['assigned_to','rotation_user_ids','skill_ids','tags','location','rotation_bindings','card_color_choice','assignment_group']);
+  const actionAllowed=ACTION_FIELDS.filter(key=>!['sort_order','assignment_group_json'].includes(key)).concat(['assigned_user_ids','skill_ids','tags','assignment_group']);
   const apply=(target,input,allowed)=>{
     if(!object(input)||Object.keys(input).some(key=>!allowed.includes(key)))bad();input=validateFields(input)||input;
     for(const [key,value] of Object.entries(input)) {
@@ -71,6 +72,7 @@ export function proposedFutureSeriesDefinition(d,actor,root,before,patch,{valida
       else if(['rotation_user_ids','skill_ids','tags','location'].includes(key))target[key]=clone(value);
       else if(key==='card_color_choice')target.task.card_color_policy=validateCardColorChoice(value);
       else if(key==='rotation_bindings')target.task.rotation_bindings_json=JSON.stringify(value);
+      else if(key==='assignment_group'){const group=normalizeGroupAssignment(d,value);target.task.assignment_group_json=group?JSON.stringify(group):null;}
       else target.task[key]=key==='title'?value.trim():key==='points'?Number(value):value;
     }
     if(Object.hasOwn(input,'scoring_mode'))target.task.scoring_review_required=0;
@@ -154,7 +156,8 @@ export function proposedSeriesDefinition(before, { fields, editedSubtasks, assig
         expiration_policy:'keep_overdue',is_recurring:0,recurrence_rule:null,recurrence_from_completion:0,
         assignment_mode:'fixed',rotation_group:null,rotation_slot:0,countdown:0,due_date_offset_days:null},
       assigned_user_ids:[],tags:[],authorization:{created_by:authorId,assigned_user_ids:[]}};
-    Object.assign(row.task,{title:step.title,sort_order:order,is_optional:step.isOptional,points:step.points});
+    Object.assign(row.task,{title:step.title,sort_order:order,is_optional:step.isOptional,points:step.points,
+      assignment_group_json:step.assignmentGroup?JSON.stringify(step.assignmentGroup):null});
     if(step.assignedUsers!==undefined){row.assigned_user_ids=[...step.assignedUsers];row.authorization={...(row.authorization||{created_by:null}),assigned_user_ids:[...step.assignedUsers]};}
     row.skill_ids=[...step.skillIds];return row;
   });
@@ -196,14 +199,17 @@ export function assertSeriesDefinitionMutation(d,actor,task,before,after,{future
     if(!capabilities[key])throw new TaskStateError('Your household permissions do not allow changing this recurring Activity setting.',
       {reason:'series_definition_permission',capability:`tasks.${key}`},403);
   };
+  const requireGroupView=()=>{if(actorPermissions(d,actor).capabilities['rotations.view']!=='allow')
+    throw new TaskStateError('You cannot use Rotation Groups.',{reason:'series_definition_permission',capability:'rotations.view'},403);};
   const fields={change_points:['points','scoring_mode'],change_priority:['priority'],change_category_tags:['category'],
     change_dates:['calendar_lead_days','due_date_offset_days','start_time','due_time','expiration_policy','is_recurring','recurrence_rule','recurrence_from_completion'],
-    change_assignment:['assignment_mode','rotation_group','rotation_slot']};
+    change_assignment:['assignment_mode','rotation_group','rotation_slot','assignment_group_json']};
   const assertConfiguration=(old,newValue,capabilities)=>{
     if(!same(old.task?.card_color_policy,newValue.task?.card_color_policy))requireCapability(capabilities,'edit');
     for(const [permission,names] of Object.entries(fields))if(names.some(name=>!same(old.task?.[name],newValue.task?.[name]))) {
       requireCapability(capabilities,permission);
       if(permission==='change_assignment')requireCapability(capabilities,'reassign');
+      if(permission==='change_assignment'&&nameGroupChanged(old,newValue)&&newValue.task?.assignment_group_json)requireGroupView();
     }
     if(!same(old.binding?.snapshot?.required_skill_ids??old.skill_ids,newValue.binding?.snapshot?.required_skill_ids??newValue.skill_ids))
       requireCapability(capabilities,'change_required_skills');
@@ -214,6 +220,7 @@ export function assertSeriesDefinitionMutation(d,actor,task,before,after,{future
       requireCapability(capabilities,'change_assignment');requireCapability(capabilities,'reassign');
     }
   };
+  function nameGroupChanged(old,newValue){return !same(old.task?.assignment_group_json,newValue.task?.assignment_group_json);}
   assertConfiguration(previous,next,rootCapabilities);
   if(!sameSeriesBindingPolicy(previous.binding,next.binding)) {
     requireCapability(rootCapabilities,'change_assignment');requireCapability(rootCapabilities,'reassign');
@@ -238,7 +245,8 @@ export function assertSeriesDefinitionMutation(d,actor,task,before,after,{future
     if(!old) {
       requireCapability(rootCapabilities,'create');
       if(action.skill_ids?.length)requireCapability(rootCapabilities,'change_required_skills');
-      if(action.assigned_user_ids?.length){requireCapability(rootCapabilities,'change_assignment');requireCapability(rootCapabilities,'reassign');}
+      if(action.assigned_user_ids?.length||action.task.assignment_group_json){requireCapability(rootCapabilities,'change_assignment');requireCapability(rootCapabilities,'reassign');}
+      if(action.task.assignment_group_json)requireGroupView();
       if(action.task.points)requireCapability(rootCapabilities,'change_points');
       continue;
     }
@@ -297,10 +305,13 @@ function shiftDate(date,oldAnchor,newAnchor) {
 
 function reconcileOccurrence(d,task,definition,window,actor) {
   const data=definition.data,fields={...data.task,rotation_bindings_json:data.task.rotation_bindings_json||'[]',start_date:window.start_date,due_date:window.due_date};
+  if((fields.assignment_group_json||null)!==(task.assignment_group_json||null))
+    throw new TaskStateError('This future Activity has a different Group assignment plan. Preserve it and apply the new plan to later occurrences.',{reason:'rotation_snapshot'},409);
   const existingBinding=data.binding?captureTaskActivityBindingDefinition(d,task.id):null;
   const retainBinding=!!existingBinding&&sameSeriesBindingPolicy(existingBinding,data.binding,{includeRequirements:true});
   const actualAssigned=retainBinding?d.prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(task.id).map(row=>row.user_id):[];
-  const assigned=retainBinding?(task.assigned_to?[task.assigned_to,...actualAssigned.filter(id=>id!==task.assigned_to)]:actualAssigned)
+  const assigned=retainBinding||fields.assignment_group_json
+    ?(task.assigned_to?[task.assigned_to,...(retainBinding?actualAssigned:d.prepare('SELECT user_id FROM task_assignments WHERE task_id=?').all(task.id).map(row=>row.user_id)).filter(id=>id!==task.assigned_to)]:actualAssigned)
     :seriesRotationAssignment(task,data).assigned_user_ids;
   const body={...fields,assigned_to:assigned,skill_ids:data.skill_ids,tags:data.tags,subtasks:[]};
   persistCapturedTaskAssignees(d,task.id,data.assignee_policy,assigned,{rotating:fields.assignment_mode==='round_robin'});
@@ -312,10 +323,19 @@ function reconcileOccurrence(d,task,definition,window,actor) {
   const children=d.prepare(`SELECT t.*,a.action_key FROM tasks t LEFT JOIN task_recurrence_actions a ON a.task_id=t.id
     WHERE t.parent_task_id=? AND NOT EXISTS(SELECT 1 FROM task_activity_support_tasks s WHERE s.task_id=t.id)
     AND NOT EXISTS(SELECT 1 FROM task_supervision_actions s WHERE s.counterpart_task_id=t.id)`).all(task.id);
+  for(const action of data.subtasks){const existing=children.find(row=>row.action_key===action.action_key&&!row.archived_at);
+    if(action.task.assignment_group_json&&(action.task.assignment_group_json||null)!==(existing?.assignment_group_json||null))
+      throw new TaskStateError('This future subtask has a different Group assignment plan. Preserve it and apply the new plan to later occurrences.',{reason:'rotation_snapshot'},409);}
+  const actionAssignments=action=>{
+    const existing=children.find(row=>row.action_key===action.action_key&&!row.archived_at);
+    return action.task.assignment_group_json&&existing
+      ?[existing.assigned_to,...d.prepare('SELECT user_id FROM task_assignments WHERE task_id=?').all(existing.id).map(row=>row.user_id).filter(id=>id!==existing.assigned_to)].filter(Boolean)
+      :action.assigned_user_ids;
+  };
   assertTaskScoringMutation(d,task.id,{points:fields.points,assigned_to:assigned,
     ...(['whole_task','subtasks'].includes(fields.scoring_mode)?{scoring_mode:fields.scoring_mode}:{}),
     subtasks:data.subtasks.map(action=>{const existing=children.find(row=>row.action_key===action.action_key&&!row.archived_at);
-      return {...(existing?{id:existing.id}:{}),title:action.task.title,points:action.task.points,assigned_user_ids:action.assigned_user_ids};})});
+      return {...(existing?{id:existing.id}:{}),title:action.task.title,points:action.task.points,assigned_user_ids:actionAssignments(action)};})});
   d.prepare(`UPDATE tasks SET ${ROOT_FIELDS.map(key=>`${key}=?`).join(',')} WHERE id=?`)
     .run(...ROOT_FIELDS.map(key=>fields[key]??null),task.id);
   assignments(d,task.id,assigned);setTaskSkills(d,task.id,data.skill_ids);setTags(d,task.id,data.tags);
@@ -330,11 +350,12 @@ function reconcileOccurrence(d,task,definition,window,actor) {
   const newAnchor=data.task.due_date_offset_days!=null?window.start_date:window.due_date;
   for(const [order,action] of data.subtasks.entries()) {
     const existing=children.find(row=>row.action_key===action.action_key&&!row.archived_at);
+    const actionAssigned=actionAssignments(action);
     const value={...action.task,start_date:shiftDate(action.task.start_date,oldAnchor,newAnchor),
       due_date:shiftDate(action.task.due_date,oldAnchor,newAnchor),sort_order:order};
-    assertTaskMutation(d,actor,existing||null,{...value,parent_task_id:task.id,skill_ids:action.skill_ids,assigned_to:action.assigned_user_ids},
+    assertTaskMutation(d,actor,existing||null,{...value,parent_task_id:task.id,skill_ids:action.skill_ids,assigned_to:actionAssigned},
       {operation:existing?'update':'create'});
-    assertTaskSkillAssignments(d,action.skill_ids,action.assigned_user_ids,value.due_date,{allowDelegation:true});
+    assertTaskSkillAssignments(d,action.skill_ids,actionAssigned,value.due_date,{allowDelegation:true});
     let id=existing?.id;
     const originalCreator=seriesActionAuthorization(d,action).created_by;
     const creator=originalCreator==null?null:d.prepare('SELECT id FROM users WHERE id=?').get(originalCreator)?.id??null;
@@ -342,8 +363,8 @@ function reconcileOccurrence(d,task,definition,window,actor) {
     else {id=Number(d.prepare(`INSERT INTO tasks(${ACTION_FIELDS.join(',')},status,parent_task_id,created_by)
       VALUES(${ACTION_FIELDS.map(()=>'?').join(',')},'open',?,?)`).run(...ACTION_FIELDS.map(key=>value[key]??null),task.id,creator).lastInsertRowid);assignNewTaskCardColor(d,id,action.task.card_color_policy?{choice:action.task.card_color_policy}:{inheritFrom:task.id});}
     registerSeriesAction(d,id,task.id,action.action_key);
-    assignments(d,id,action.assigned_user_ids);setTaskSkills(d,id,action.skill_ids);setTags(d,id,action.tags);
-    persistCapturedTaskAssignees(d,id,action.assignee_policy,action.assigned_user_ids);
+    assignments(d,id,actionAssigned);setTaskSkills(d,id,action.skill_ids);setTags(d,id,action.tags);
+    persistCapturedTaskAssignees(d,id,action.assignee_policy,actionAssigned);
   }
   // A pristine bound target already consumed its turn. Preserve that actual
   // assignment when its policy is unchanged, then re-evaluate supervision

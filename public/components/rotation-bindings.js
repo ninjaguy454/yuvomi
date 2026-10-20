@@ -137,6 +137,7 @@ export function bindRotationBindings(container, { skills = [], places = [], read
       if(selected&&element){element.querySelector('[data-rotation-group-name]').textContent=selected.name;element.querySelector('[data-rotation-open-behavior]').setAttribute('aria-label',`Edit ${selected.name} behavior`);}
     }
     lock();
+    root.dispatchEvent(new CustomEvent('rotation-groups-loaded',{bubbles:true,detail:{groups}}));
   }).catch(() => { root.querySelector('[data-rotation-load-status]').textContent = 'Rotation Groups could not be loaded. Your draft has been preserved.'; });
   const ready = readOnly&&!canCapability('rotations.view') ? Promise.resolve() : loadGroups();
   return {

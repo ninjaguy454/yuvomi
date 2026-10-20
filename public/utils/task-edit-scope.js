@@ -7,6 +7,7 @@ import { validTaskPoints } from './task-form-validation.js';
 const ids = values => [...new Set((values || []).map(Number))].sort((a, b) => a - b);
 const text = value => String(value ?? '').trim();
 const point = value => value === undefined ? 0 : validTaskPoints(value) ? Number(value) : value;
+const assignmentGroup=value=>typeof value==='string'?JSON.parse(value):value||null;
 
 /** Compare reusable form intent, excluding status and occurrence-only dates. */
 export function taskEditDefinition(value) {
@@ -19,9 +20,10 @@ export function taskEditDefinition(value) {
     subtasks: (value.subtasks || []).filter(step => text(step.title)).map(step => ({
       id: Number(step.id) || null, ...(step.action_key ? {action_key:step.action_key} : {}), ...(step.client_key ? {client_key:step.client_key} : {}), title: text(step.title), points: point(step.points), is_optional: !!step.is_optional, skill_ids: ids(step.skill_ids),
       ...(step.assigned_user_ids===undefined?{}:{assigned_user_ids:ids(step.assigned_user_ids)}),
+      assignment_group:assignmentGroup(step.assignment_group??step.assignment_group_json),
     })),
     skill_ids: ids(value.skill_ids), assigned_to: ids(value.assigned_to),
-    assignment_mode: value.assignment_mode || 'fixed', rotation_user_ids: (value.rotation_user_ids || []).map(Number),
+    assignment_mode: value.assignment_mode || 'fixed',assignment_group:assignmentGroup(value.assignment_group??value.assignment_group_json), rotation_user_ids: (value.rotation_user_ids || []).map(Number),
     rotation_group: text(value.rotation_group), rotation_slot: Number(value.rotation_slot) || 0,
     rotation_bindings:(value.rotation_bindings||[]).map(({direction,...binding}) =>
       !direction || direction === 'first_to_last' ? binding : {...binding,direction}),
@@ -63,8 +65,8 @@ export function taskEditResultMessage(result, fallback) {
     pending?`${pending} future ${pending===1?'occurrence is':'occurrences are'} waiting for rotation resolution.`:''].filter(Boolean).join(' ');
 }
 
-const futureFields = ['card_color_choice','title','description','category','priority','start_date','start_time','due_date','due_time','due_date_offset_days','is_recurring','recurrence_rule','recurrence_from_completion','assignment_mode','rotation_group','rotation_slot','points','visibility','countdown','locked','expiration_policy','scoring_mode','assigned_to','rotation_user_ids','skill_ids','tags','rotation_bindings'];
-const actionFields = ['title','description','category','priority','start_date','start_time','due_date','due_time','points','visibility','locked','expiration_policy','is_optional','assigned_user_ids','skill_ids','tags'];
+const futureFields = ['card_color_choice','title','description','category','priority','start_date','start_time','due_date','due_time','due_date_offset_days','is_recurring','recurrence_rule','recurrence_from_completion','assignment_mode','assignment_group','rotation_group','rotation_slot','points','visibility','countdown','locked','expiration_policy','scoring_mode','assigned_to','rotation_user_ids','skill_ids','tags','rotation_bindings'];
+const actionFields = ['title','description','category','priority','start_date','start_time','due_date','due_time','points','visibility','locked','expiration_policy','is_optional','assigned_user_ids','assignment_group','skill_ids','tags'];
 const comparable = (key, value) => ['is_optional','is_recurring','countdown','locked','recurrence_from_completion'].includes(key) ? !!value
   : key === 'points' ? point(value) : value;
 const writable = (key, value) => value !== undefined && (key !== 'points' || validTaskPoints(value)) && (key !== 'scoring_mode' || ['whole_task','subtasks'].includes(value));
@@ -96,8 +98,8 @@ export function taskFuturePatch(definition, draft, rootIntent = []) {
 /** Editing intent only: no status, recipient eligibility or reward calculation. */
 export function hasTaskScoringChanges(before, after) {
   const terms = value => [value.scoring_mode,point(value.points),value.assigned_to,value.assignment_mode,value.rotation_user_ids,
-    value.rotation_group,value.rotation_slot,value.rotation_bindings,value.skill_ids,
-    (value.subtasks || []).map(row => [row.id || row.action_key || row.client_key,point(row.points),row.assigned_user_ids,row.skill_ids])];
+    value.rotation_group,value.rotation_slot,value.rotation_bindings,value.assignment_group,value.skill_ids,
+    (value.subtasks || []).map(row => [row.id || row.action_key || row.client_key,point(row.points),row.assigned_user_ids,row.assignment_group,row.skill_ids])];
   return JSON.stringify(terms(before)) !== JSON.stringify(terms(after));
 }
 

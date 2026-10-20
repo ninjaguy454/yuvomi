@@ -1058,6 +1058,8 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
   const rotationIds = task?.rotation_user_ids ?? [];
   const assignmentMode = task?.assignment_mode || 'fixed';
   const rotationGroup = task?.rotation_group || '';
+  const savedAssignmentGroup=typeof task?.assignment_group_json==='string'?JSON.parse(task.assignment_group_json):task?.assignment_group_json;
+  const missingSavedGroup=savedAssignmentGroup&&!state.rotationGroups.some(group=>Number(group.id)===Number(savedAssignmentGroup.group_id));
   const rotationPosition = Number(task?.rotation_slot ?? 0) + 1;
   const visibility  = task?.visibility || 'all';
   const activityTemplateId = task?.activity_template_id
@@ -1269,6 +1271,18 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
         ${renderUserMultiSelect(users, selectedIds, 'task_assigned', 'tasks.assignedLabel', { variant: 'people' })}
         <p id="task-template-assignment-hint" class="task-field-hint" hidden></p>
       </div>
+      ${state.rotationGroups.length||canCapability('rotations.manage')||savedAssignmentGroup?`<div id="task-group-assignment" class="form-group"><strong>Rotation Groups</strong>
+        <p class="task-field-hint">Choose a Group for this Activity's assignee. Group members and order are shared; this Activity keeps its own starting choice.</p>
+        <div class="rotation-group-choices" role="group" aria-label="Rotation Groups for assignment">${state.rotationGroups.filter(group=>group.active).map(group=>`<button type="button" class="rotation-group-choice" data-task-group-choice="${Number(group.id)}"><span class="rotation-group-choice__avatar" aria-hidden="true"><i data-lucide="users-round"></i></span><span class="rotation-group-choice__name">${esc(group.name)}</span></button>`).join('')}</div>
+        <details data-task-group-behavior><summary>Edit assigned Group behavior</summary>
+          <p class="task-field-hint" data-task-group-summary>Group membership and order are shared. This Activity's starting choice and direction apply to independent Groups.</p>
+          <label class="form-label">Group<select class="input" data-task-assignment-group><option value="">No Group</option>${missingSavedGroup?`<option value="${Number(savedAssignmentGroup.group_id)}">Saved Rotation Group</option>`:''}${state.rotationGroups.map(group=>`<option value="${Number(group.id)}" ${group.active||Number(group.id)===Number(savedAssignmentGroup?.group_id)?'':'disabled'}>${esc(group.name)}${group.active?'':' (inactive)'}</option>`).join('')}</select></label>
+          <label class="form-label">Start with<select class="input" data-task-assignment-group-start><option value="first">First member</option><option value="random">Random member, chosen once</option></select></label>
+          <label class="form-label">Rotation direction<select class="input" data-task-assignment-group-direction><option value="first_to_last">First to last</option><option value="last_to_first">Last to first</option></select></label>
+          ${canCapability('rotations.manage')?'<button type="button" class="btn btn--secondary btn--sm" data-task-manage-group>Manage Group members and order</button>':''}
+        </details>
+        ${canCapability('rotations.manage')?'<button type="button" class="btn btn--secondary btn--sm" data-task-create-group>Create Rotation Group</button>':''}
+      </div>`:''}
 
       <div id="task-round-robin-assignment" class="form-group" style="margin-top:var(--space-4)"${assignmentMode === 'round_robin' && !isSoloHousehold() ? '' : ' hidden'}>
         ${renderUserRotationOrder(users, rotationIds)}
@@ -1300,7 +1314,7 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
       <p class="task-field-hint">Required skills apply to assignment and claiming. Changes here belong to this Activity; edit the template to change its reusable defaults.</p>
       ${isEdit && task.task_responsibilities?.length ? `<p class="task-field-hint">Participants: ${task.task_responsibilities.map((person) => esc(memberLabel(person))).join(', ')}</p>` : ''}
       </section>
-      ${isTaskScoringOwner(isEdit ? task : null) && !task.is_supervision_projection ? `<section class="task-editor__section" aria-labelledby="task-subtasks-heading"><h3 id="task-subtasks-heading">Subtasks</h3>${renderSubtaskEditor({ subtasks: structuralSubtasks(task), skills: state.skills, users:state.users, canCreateSkill: canCapability('skills.manage') })}</section>` : ''}
+      ${isTaskScoringOwner(isEdit ? task : null) && !task.is_supervision_projection ? `<section class="task-editor__section" aria-labelledby="task-subtasks-heading"><h3 id="task-subtasks-heading">Subtasks</h3>${renderSubtaskEditor({ subtasks: structuralSubtasks(task), skills: state.skills, users:state.users,groups:state.rotationGroups, canCreateSkill: canCapability('skills.manage'),canCreateGroup:canCapability('rotations.manage') })}</section>` : ''}
       ${!task.parent_task_id && !task.is_supervision_projection && (canCapability('rotations.configure') || task.rotation_bindings?.length) ? `<section id="task-rotations">${renderRotationBindings(task.rotation_bindings || task.rotation_bindings_json, {skills:state.skills,places:state.places})}</section>` : ''}
       <section class="task-editor__section" aria-labelledby="task-where-heading">
       <h3 id="task-where-heading">Where</h3>
@@ -1348,6 +1362,7 @@ let state = {
   allTags:         [],       // [{ tag, count }] für Filterleiste und Vorschläge (#586)
   defaultPoints:   0,        // Haushalt-Standard für neue Aufgaben (#578), 0 = aus
   activityTemplates: [],
+  rotationGroups: [],
   skills: [],
   templateSwitchWarning: true,
   assignmentRequests: [],
@@ -1856,6 +1871,41 @@ function wireAssignmentMode(panel, task) {
   const mode = panel.querySelector('#task-assignment-mode');
   const fixed = panel.querySelector('#task-fixed-assignment');
   const rotation = panel.querySelector('#task-round-robin-assignment');
+  const groupPanel=panel.querySelector('#task-group-assignment'),groupSelect=groupPanel?.querySelector('[data-task-assignment-group]');
+  const storedGroup=typeof task?.assignment_group_json==='string'?JSON.parse(task.assignment_group_json):task?.assignment_group_json;
+  if(groupSelect){groupSelect.value=String(storedGroup?.group_id||'');groupPanel.querySelector('[data-task-assignment-group-start]').value=storedGroup?.start_mode||'first';
+    groupPanel.querySelector('[data-task-assignment-group-direction]').value=storedGroup?.direction||'first_to_last';}
+  const updateGroup=()=>{groupPanel?.querySelectorAll('[data-task-group-choice]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.taskGroupChoice===groupSelect.value)));
+    const chosen=state.rotationGroups.find(group=>String(group.id)===groupSelect?.value),shared=chosen?.usage_mode==='shared';
+    const names=chosen?.members?.filter(member=>member.active).map(member=>member.display_name).join(' → ');
+    if(groupPanel)groupPanel.querySelector('[data-task-group-summary]').textContent=shared
+      ?`${names||chosen.name} · Shared schedule controls order, direction, start and timing for this Group. Activity presence and purpose settings remain below.`
+      :`${names||'Group members and order are shared.'} · This Activity chooses its starting member and direction. Availability follows its skills and Activity window.`;
+    for(const field of ['start','direction']){const control=groupPanel?.querySelector(`[data-task-assignment-group-${field}]`);if(control)control.disabled=shared;}
+    const manage=groupPanel?.querySelector('[data-task-manage-group]');if(manage)manage.disabled=!chosen;
+    if(groupSelect?.value)groupPanel.querySelector('[data-task-group-behavior]').open=true;};
+  groupPanel?.querySelectorAll('[data-task-group-choice]').forEach(button=>button.addEventListener('click',()=>{if(button.dataset.taskGroupChoice===groupSelect.value){groupPanel.querySelector('[data-task-group-behavior]').open=true;return;}
+    groupSelect.value=button.dataset.taskGroupChoice;mode.value='fixed';panel.querySelectorAll('[data-ms-input="task_assigned"]').forEach(input=>{input.checked=false;});updateGroup();update();groupPanel.querySelector('[data-task-assignment-group-start]').focus();}));
+  groupPanel?.querySelector('[data-task-create-group]')?.addEventListener('click',async()=>{
+    try{const {openNewRotationGroup}=await import('/components/rotation-groups.js');const group=await openNewRotationGroup();
+      if(!group||!groupPanel.isConnected)return;
+      const subtaskEditor=taskFormControls.get(panel.querySelector('#task-form'))?.subtasks;
+      if(subtaskEditor)subtaskEditor.addGroup(group);else if(!state.rotationGroups.some(item=>Number(item.id)===Number(group.id)))state.rotationGroups.push(group);
+      const option=new Option(group.name,String(group.id));groupSelect.add(option);
+      const chip=document.createElement('button');chip.type='button';chip.className='rotation-group-choice';chip.dataset.taskGroupChoice=String(group.id);
+      chip.innerHTML=`<span class="rotation-group-choice__avatar" aria-hidden="true"><i data-lucide="users-round"></i></span><span class="rotation-group-choice__name">${esc(group.name)}</span>`;
+      groupPanel.querySelector('.rotation-group-choices').append(chip);chip.addEventListener('click',()=>{groupSelect.value=String(group.id);mode.value='fixed';updateGroup();update();groupPanel.querySelector('[data-task-assignment-group-start]').focus();});
+      window.lucide?.createIcons({el:chip});chip.click();
+    }catch(error){window.yuvomi?.showToast(error.message,'danger');}
+  });
+  groupPanel?.querySelector('[data-task-manage-group]')?.addEventListener('click',async()=>{
+    if(!groupSelect?.value)return;
+    try{const {openRotationGroup}=await import('/components/rotation-groups.js');await openRotationGroup(Number(groupSelect.value),
+      {onChanged:async()=>{const result=await api.get('/automation/activity-options');state.rotationGroups=result.data?.rotation_groups||[];updateGroup();}});
+      groupPanel.querySelector('[data-task-manage-group]')?.focus({preventScroll:true});}
+    catch(error){toast(error.message,'danger');}
+  });
+  groupSelect?.addEventListener('change',()=>{updateGroup();update();});updateGroup();
   if (!mode || !fixed || !rotation) return;
   const update = () => {
     const managed = !!activity?.value;
@@ -1866,10 +1916,11 @@ function wireAssignmentMode(panel, task) {
     const requiresSubject = managed
       && activity.selectedOptions?.[0]?.dataset.subjectRequired === '1';
     const manualVisible = !managed && !isSoloHousehold();
+    if(groupPanel)groupPanel.hidden=managed||!assignmentAllowed;
     if (subject) subject.hidden = !requiresSubject;
     if (modeWrap) modeWrap.hidden = !manualVisible;
     const roundRobin = manualVisible && mode.value === 'round_robin';
-    fixed.hidden = (!manualVisible && !templateFixed) || roundRobin;
+    fixed.hidden = (!manualVisible && !templateFixed) || roundRobin||!!groupSelect?.value;
     fixed.querySelectorAll('[data-ms-input="task_assigned"]').forEach(input => {
       input.disabled = !assignmentAllowed || (templateFixed && !overrideAllowed);
     });
@@ -1884,6 +1935,7 @@ function wireAssignmentMode(panel, task) {
   };
   activity?.addEventListener('change', update);
   mode.addEventListener('change', update);
+  fixed.addEventListener('change',event=>{if(event.target.matches('[data-ms-input="task_assigned"]')&&groupSelect?.value){groupSelect.value='';updateGroup();update();}});
   update();
   return update;
 }
@@ -2327,7 +2379,7 @@ function wireTaskForm(panel, {
     return skill;
   };
   const skills = bindSkillPicker(panel.querySelector('#task-root-skills'), { onCreateSkill: canCapability('skills.manage') ? createSkill : null });
-  const subtasks = form.querySelector('[data-task-subtask-editor]') ? bindSubtaskEditor(form, { skills: state.skills, users:state.users,
+  const subtasks = form.querySelector('[data-task-subtask-editor]') ? bindSubtaskEditor(form, { skills: state.skills, users:state.users,groups:state.rotationGroups,canCreateGroup:canCapability('rotations.manage'),
     onChange: () => {
       const controls = taskFormControls.get(form);
       if (!form.isConnected || !controls || controls.rebasing || controls.scoringLoading) return;
@@ -2417,6 +2469,7 @@ function bindTaskScoringForm(form, controls) {
     if (key) controls.rootIntent.add(key);
     if (event.target.name === 'scoring_mode') controls.rootIntent.add('scoring_mode');
     if (event.target.matches('[data-ms-input="task_assigned"]')) controls.rootIntent.add('assigned_to');
+    if (event.target.closest('#task-group-assignment')) controls.rootIntent.add('assignment_group');
     if (event.target.closest('#task-root-skills')) controls.rootIntent.add('skill_ids');
     if (event.target.closest('#task-tags-editor')) controls.rootIntent.add('tags');
     if (event.target.closest('#task-rotations')) controls.rootIntent.add('rotation_bindings');
@@ -2444,6 +2497,9 @@ const taskScoringSubmitButton = form => form.closest('.modal-panel')?.querySelec
 
 function snapshotTaskScoringForm(form, controls) {
   return {colorChoice:controls.colorPicker?.getValue(),colorChanged:controls.colorPicker?.isChanged(), fields: Object.fromEntries(Object.keys(scoringFormFields).map(id=>{const node=form.querySelector(`#${id}`);return [id,node?.type==='checkbox'?node.checked:node?.value];})),
+    group:{group_id:Number(form.querySelector('[data-task-assignment-group]')?.value)||null,
+      start_mode:form.querySelector('[data-task-assignment-group-start]')?.value||'first',
+      direction:form.querySelector('[data-task-assignment-group-direction]')?.value||'first_to_last'},
     mode:form.querySelector('[name="scoring_mode"]:checked')?.value, assigned:getSelectedUserIds(form,'task_assigned'), skills:controls.skills.getValue(),
     subtasks:controls.subtasks?.getValue({withKeys:true}) || [], rotationIds:getRotationUserIds(form), bindings:controls.rotations.getValue(), tags:[...modalTags], recurrence:getRRuleValues(form,'task'), intent:[...controls.rootIntent], modeTouched:controls.modeTouched };
 }
@@ -2452,6 +2508,10 @@ function applyScoringFormSnapshot(form, controls, snapshot) {
   controls.rebasing=true;
   controls.colorPicker?.setValue(snapshot.colorChoice??snapshot.fields['task-card-color-choice'],{dirty:snapshot.colorChanged??false});
   for (const [id,value] of Object.entries(snapshot.fields)) {const node=form.querySelector(`#${id}`);if(!node)continue;if(node.type==='checkbox')node.checked=!!value;else node.value=value??'';}
+  const group=form.querySelector('[data-task-assignment-group]');if(group){group.value=String(snapshot.group?.group_id||'');
+    form.querySelector('[data-task-assignment-group-start]').value=snapshot.group?.start_mode||'first';
+    form.querySelector('[data-task-assignment-group-direction]').value=snapshot.group?.direction||'first_to_last';
+    group.dispatchEvent(new Event('change',{bubbles:true}));}
   for(const node of form.querySelectorAll('[name="scoring_mode"]'))node.checked=node.value===snapshot.mode;
   for(const node of form.querySelectorAll('[data-ms-input="task_assigned"]'))node.checked=snapshot.assigned.includes(Number(node.value));
   const none=form.querySelector('.user-ms__none');if(none)none.checked=!snapshot.assigned.length;
@@ -2485,6 +2545,7 @@ async function changeTaskScoringScope(form, controls, scope) {
       controls.futureDefinition=definition;
       const fields=definition.fields;
       const future=controls.scopeSnapshots.get('future_only') || { fields:Object.fromEntries(Object.entries(scoringFormFields).map(([id,key])=>[id,key==='rotation_slot'?Number(fields[key]||0)+1:fields[key]])),
+        group:fields.assignment_group,
         mode:fields.scoring_mode,assigned:fields.direct_assignee_ids??fields.assigned_to??[],skills:fields.skill_ids||[],subtasks:definition.actions.map(action=>({...action.fields,action_key:action.action_key,permissions:action.permissions})),
         rotationIds:fields.rotation_user_ids||[],bindings:fields.rotation_bindings||[],tags:fields.tags||[],recurrence:fields,intent:[],modeTouched:false };
       applyScoringFormSnapshot(form,controls,future);
@@ -2555,7 +2616,7 @@ function applyTaskFormPermissions(panel, task, controls) {
     change_priority: '#task-priority', change_points: '#task-points',
     change_category_tags: '#task-category, #task-tag-input, #task-tags',
     change_dates: '[name="start_date"], [name="start_time"], [name="due_date"], [name="due_time"], #task-expiration-policy, #task-rrule-fields input, #task-rrule-fields select, #task-rrule-fields button, #task-rrule-fields yuvomi-datepicker, #task-countdown',
-    change_assignment: '#task-assignment-mode, #task-activity-subject-user, [data-ms-input="task_assigned"], #task-rotation-order input, #task-rotation-group, #task-rotation-position, #task-activity-template, [data-activity-reassign], [data-activity-reassign-submit]',
+    change_assignment: '#task-assignment-mode, #task-activity-subject-user, [data-ms-input="task_assigned"], #task-rotation-order input, #task-rotation-group, #task-rotation-position, #task-activity-template, [data-activity-reassign], [data-activity-reassign-submit], #task-group-assignment button, #task-group-assignment select',
     complete: '#task-status',
   };
   for (const [action, selectors] of Object.entries(gates)) {
@@ -2782,6 +2843,9 @@ function readTaskEditState(form, controls) {
     tags: normalizeTagList([...modalTags, ...value('task-tag-input').split(',')]),
     subtasks: controls.subtasks?.getValue() || [], skill_ids: controls.skills.getValue(),
     assigned_to: getSelectedUserIds(form, 'task_assigned'), assignment_mode: value('task-assignment-mode'),
+    assignment_group:Number(form.querySelector('[data-task-assignment-group]')?.value)?{
+      group_id:Number(form.querySelector('[data-task-assignment-group]').value),start_mode:form.querySelector('[data-task-assignment-group-start]').value,
+      direction:form.querySelector('[data-task-assignment-group-direction]').value}:null,
     rotation_user_ids: getRotationUserIds(form), rotation_group: value('task-rotation-group'), rotation_slot: Number(value('task-rotation-position') || 1) - 1,
     rotation_bindings: controls.rotations.getValue(),
     activity_template_id: value('task-activity-template'), activity_subject_user_id: value('task-activity-subject-user'),
@@ -2928,6 +2992,7 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
   const assignmentMode = managedActivity ? 'fixed' : (form.querySelector('#task-assignment-mode')?.value || 'fixed');
   const rotationUserIds = managedActivity ? [] : getRotationUserIds(form);
   const rotationGroup = managedActivity ? '' : (form.querySelector('#task-rotation-group')?.value.trim() || '');
+  const selectedGroupId=!managedActivity?Number(form.querySelector('[data-task-assignment-group]')?.value)||null:null;
   const rotationPosition = Number(form.querySelector('#task-rotation-position')?.value || 1);
 
   const body = {
@@ -2940,6 +3005,8 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
     start_date:      startDate || null,
     due_date:        dueDate || null,
     assigned_to:     (!managedActivity || overrideAssignment) && assignmentMode === 'fixed' ? getSelectedUserIds(form, 'task_assigned') : [],
+    assignment_group:selectedGroupId?{group_id:selectedGroupId,start_mode:form.querySelector('[data-task-assignment-group-start]').value,
+      direction:form.querySelector('[data-task-assignment-group-direction]').value}:null,
     activity_template_id: managedActivity ? activityTemplateId : null,
     activity_subject_user_id: managedActivity ? activitySubjectUserId : null,
     ...(managedActivity && variableValues ? { activity_inputs: variableValues.inputs() } : {}),
@@ -5618,6 +5685,7 @@ export async function openTaskById(taskId, { user = null, container = null, onCh
     api.get('/preferences').catch(() => ({ data: {} })),
   ]);
   state.activityTemplates = activityData.data?.activities ?? state.activityTemplates;
+  state.rotationGroups=activityData.data?.rotation_groups??state.rotationGroups;
   state.skills = activityData.data?.skills ?? state.skills;
   state.places = placesData.data ?? state.places;
   state.placeSearchStatus = placeStatusData.data ?? state.placeSearchStatus ?? { configured: false };
@@ -5915,6 +5983,7 @@ export async function render(container, { user }) {
     state.allTags = metaData.tags ?? [];
     state.defaultPoints = Number(metaData.default_points) || 0;
     state.activityTemplates = activityData.data?.activities ?? [];
+    state.rotationGroups=activityData.data?.rotation_groups??[];
     state.skills = activityData.data?.skills ?? [];
     state.assignmentRequests = assignmentData.data ?? [];
     state.places = placesData.data ?? [];

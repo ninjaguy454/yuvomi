@@ -10,6 +10,7 @@ import {categoryAssigneePolicy,readTaskAssigneePolicy,persistTaskAssigneePolicy,
  */
 
 import { resolveActivityAssignment } from './activity-eligibility.js';
+import {recordGroupAssignment} from './group-assignment.js';
 import { reconcileTaskSupervision } from './task-supervision.js';
 import { activityPresenceWindow } from './presence.js';
 import { listTaskResponsibilities, recordTaskAssignment } from './assignment-responsibilities.js';
@@ -421,6 +422,8 @@ export function applyTaskActivityBinding(d, taskId, {
       rotation_group = NULL, rotation_slot = 0, rotation_cycle = 0
      WHERE id = ?
   `).run(resolution.primary?.id ?? null, task.id);
+  if((preview.activity.assignment_policy||preview.activity.assignment_strategy)==='group_rotation'&&!preview.assignmentOverrideUserId)
+    recordGroupAssignment(d,task.id,preview.activity.assignment_group_json,resolution.primary?.id);
   d.prepare('DELETE FROM task_rotation_members WHERE task_id = ?').run(task.id);
   setAssignments(d, task.id, resolution.primary?.id ? [resolution.primary.id] : []);
 

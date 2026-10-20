@@ -21,7 +21,7 @@ function avatar(person) {
 }
 
 /** Adapt concrete Task draft fields to the bounty chooser and gesture controller. */
-export function bindSubtaskPeople(editor, { users = [] } = {}) {
+export function bindSubtaskPeople(editor, { users = [],groups=[] } = {}) {
   const pool = editor.querySelector('[data-task-subtask-people]');
   if (!pool) return null;
   const listeners = new AbortController(), options = { signal: listeners.signal };
@@ -50,8 +50,16 @@ export function bindSubtaskPeople(editor, { users = [] } = {}) {
       select.value = value;
       select.dispatchEvent(new Event('change', { bubbles: true }));
     }
+    if(userId!==null){const group=row.querySelector('[data-task-subtask-group]');if(group&&group.value){group.value='';group.dispatchEvent(new Event('change',{bubbles:true}));}}
     refresh(); row.querySelector('[data-task-subtask-target]').focus({ preventScroll: true });
     return true;
+  }
+  function assignGroup(id,groupId){
+    const row=rowFor(id),control=row?.querySelector('[data-task-subtask-group]');
+    if(!row||!enabled(row)||!control||!groups.some(group=>Number(group.id)===groupId))return false;
+    control.value=String(groupId);control.dispatchEvent(new Event('change',{bubbles:true}));
+    row.querySelector('[data-task-subtask-group-behavior]').open=true;
+    refresh();row.querySelector('[data-task-subtask-group-start]').focus({preventScroll:true});return true;
   }
   function showPerson(id, anchor) {
     if (!valid() || pool.hidden || anchor.disabled || !people.has(id)) return;
@@ -105,14 +113,16 @@ export function bindSubtaskPeople(editor, { users = [] } = {}) {
       const target = row.querySelector('[data-task-subtask-target]'), select = selectFor(row);
       if (!target || !select) continue;
       const userId = Number(select.value) || null, person = people.get(userId);
-      const name = person ? memberLabel(person, users) : userId ? t('tasks.acceptMember') : t('tasks.acceptUnassigned');
+      const group=groups.find(item=>Number(item.id)===Number(row.querySelector('[data-task-subtask-group]')?.value));
+      const name = group?.name|| (person ? memberLabel(person, users) : userId ? t('tasks.acceptMember') : t('tasks.acceptUnassigned'));
       const title = row.querySelector('[data-task-subtask-title]').value;
       target.dataset.taskSubtaskTarget = String(key(row)); target.dataset.assignee = userId === null ? '' : String(userId);
       target.disabled = !enabled(row);
       target.classList.toggle('task-allocation__target--empty', userId === null);
       target.setAttribute('aria-label', t('tasks.acceptAssignedTo', { title, name }));
       target.title = target.getAttribute('aria-label'); target.replaceChildren();
-      if (person) target.append(avatar(person));
+      if(group){target.innerHTML='<span class="task-allocation__avatar" aria-hidden="true"><i data-lucide="users-round"></i></span>';window.lucide?.createIcons({el:target});}
+      else if (person) target.append(avatar(person));
       else { const mark = document.createElement('span'); mark.textContent = '?'; mark.setAttribute('aria-hidden', 'true'); target.append(mark); }
     }
     if (!available) { gesture.pointerCancel(); personCard?.dispose(); }
@@ -123,13 +133,15 @@ export function bindSubtaskPeople(editor, { users = [] } = {}) {
     if (source) { showPerson(Number(source.dataset.taskSubtaskPerson), source); return; }
     const anchor = event.target.closest('[data-task-subtask-target]'), row = anchor?.closest('[data-task-subtask-row]');
     if (!anchor || !enabled(row)) return;
+    if(row.querySelector('[data-task-subtask-group]')?.value){const behavior=row.querySelector('[data-task-subtask-group-behavior]');behavior.open=true;behavior.querySelector('[data-task-subtask-group-start]').focus({preventScroll:true});return;}
     const id = key(row), selected = Number(selectFor(row).value) || null;
     const child = { id, title: row.querySelector('[data-task-subtask-title]').value, eligible_assignee_ids: eligible(row) };
     // The shared chooser uses this small local adapter only; no acceptance write occurs.
     const draft = { primary: null, helpers: [...people.keys()], assignments: { [id]: selected },
       projection: { primary_candidates: [], coassignee_candidates: [...people.values()] } };
     picker?.dispose(); personCard?.dispose();
-    picker = openAllocationPicker({ host: modalHost, anchor, child, draft, onAssign: assign, signal: listeners.signal });
+    picker = openAllocationPicker({ host: modalHost, anchor, child, draft, onAssign: assign,groups,
+      selectedGroupId:Number(row.querySelector('[data-task-subtask-group]')?.value)||null,onAssignGroup:assignGroup, signal: listeners.signal });
   }, options);
   document.addEventListener('pointerdown', () => { suppressClick = false; }, { ...options, capture: true });
   document.addEventListener('click', event => {
@@ -146,7 +158,7 @@ export function bindSubtaskPeople(editor, { users = [] } = {}) {
   editor.addEventListener('keydown', event => {
     if (event.key === 'Escape' && gesture.pointerCancel()) { event.preventDefault(); event.stopImmediatePropagation(); suppressClick = true; }
   }, options);
-  editor.addEventListener('change', event => { if (event.target.matches('[data-task-subtask-assignee]')) refresh(); }, options);
+  editor.addEventListener('change', event => { if (event.target.matches('[data-task-subtask-assignee], [data-task-subtask-group]')) refresh(); }, options);
   for (const name of ['auth:context-ending', 'auth:expired', 'auth:context-rejected']) window.addEventListener(name, dispose, options);
   window.addEventListener('vidamia:auth-context', () => { if (!sameAuthentication(authentication)) dispose(); }, options);
   function dispose() {

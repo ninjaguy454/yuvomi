@@ -14,6 +14,7 @@ const { default: automationRouter } = await import('../server/routes/automation.
 const { default: tasksRouter } = await import('../server/routes/tasks.js');
 const { changeTaskStatus, expireTask } = await import('../server/services/task-lifecycle.js');
 const { taskStartMs, taskDeadlineMs } = await import('../server/services/task-window.js');
+const {saveRotationGroup}=await import('../server/services/rotation.js');
 
 function buildTestDb() {
   const database = new Database(':memory:');
@@ -76,6 +77,35 @@ async function call(method, path, body, actorId = admin) {
   const raw = await response.text();
   return { status: response.status, body: raw ? JSON.parse(raw) : null };
 }
+
+test('Activity Template Group choices persist through create and edit without changing older templates',async()=>{
+  const group=saveRotationGroup(db,{name:'Template group',member_ids:[grace,frank]},{actorId:admin});
+  const assignment={group_id:group.id,start_mode:'random',direction:'last_to_first'};
+  const created=await call('POST','/automation/admin/activity-templates',{
+    name:'Group routine',assignment_strategy:'group_rotation',assignment_group:assignment,subject_required:false,
+    checklist:[{title_template:'Group step',skill_ids:[],assignment_group:assignment},{title_template:'Plain step',skill_ids:[]}],
+  });
+  assert.equal(created.status,201,JSON.stringify(created.body));const id=created.body.data.id;
+  assert.deepEqual(JSON.parse(created.body.data.assignment_group_json),assignment);
+  assert.deepEqual(JSON.parse(created.body.data.checklist[0].assignment_group_json),assignment);
+  const checklistId=created.body.data.checklist[0].id;
+  const updated=await call('PUT',`/automation/admin/activity-templates/${id}`,{description:'Keep Group settings'});
+  assert.equal(updated.status,200,JSON.stringify(updated.body));
+  assert.deepEqual(JSON.parse(updated.body.data.assignment_group_json),assignment);
+  assert.deepEqual(JSON.parse(updated.body.data.checklist[0].assignment_group_json),assignment);
+  assert.equal(updated.body.data.checklist[0].id,checklistId,'unrelated template edits retain the checklist rotation cursor identity');
+  const reordered=await call('PUT',`/automation/admin/activity-templates/${id}`,{checklist:[
+    {id:created.body.data.checklist[1].id,title_template:'Plain step',skill_ids:[]},
+    {id:checklistId,title_template:'Group step',skill_ids:[],assignment_group:assignment},
+  ]});
+  assert.equal(reordered.status,200,JSON.stringify(reordered.body));
+  assert.equal(reordered.body.data.checklist[1].id,checklistId,'reordering retains the same Group rotation cursor identity');
+  const invalid=await call('PUT',`/automation/admin/activity-templates/${id}`,{assignment_group:{group_id:999999}});
+  assert.equal(invalid.status,400,JSON.stringify(invalid.body));
+  assert.deepEqual(JSON.parse(db.prepare('SELECT assignment_group_json FROM activity_templates WHERE id=?').get(id).assignment_group_json),assignment);
+  const options=await call('GET','/automation/activity-options');
+  assert.deepEqual(JSON.parse(options.body.data.activities.find(item=>item.id===id).assignment_group_json),assignment);
+});
 
 test('Activity expiration defaults, validation, authorization and Task snapshots use the existing editor capabilities', async () => {
   const created = await call('POST', '/automation/admin/activity-templates', {

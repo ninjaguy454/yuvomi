@@ -40,7 +40,7 @@ export const TASK_SERIES_SCHEMA_SQL = `
 
 const TASK_FIELDS = ['title','description','category','priority','start_date','start_time','due_date','due_time',
   'due_date_offset_days','is_recurring','recurrence_rule','recurrence_from_completion','assignment_mode',
-  'rotation_group','rotation_slot','rotation_bindings_json','points','visibility','countdown','locked','expiration_policy','is_optional','sort_order','activity_template_checklist_item_id','scoring_mode','scoring_review_required'];
+  'rotation_group','rotation_slot','rotation_bindings_json','assignment_group_json','points','visibility','countdown','locked','expiration_policy','is_optional','sort_order','activity_template_checklist_item_id','scoring_mode','scoring_review_required'];
 const selectedTask = row => ({...Object.fromEntries(TASK_FIELDS.map(key => [key, row[key] ?? (key==='rotation_bindings_json'?'[]':null)])),card_color_policy:Object.hasOwn(row,'card_color_policy')?normalizeCardColorChoice(row.card_color_policy):taskCardColorPolicy(row)});
 const parseDefinition = row => row ? { ...row, data: JSON.parse(row.definition_json) } : null;
 const occurrenceRow = (d,taskId) => d.prepare('SELECT * FROM task_recurrence_occurrences WHERE task_id=?').get(taskId) || null;
@@ -281,20 +281,27 @@ function translatedSeriesDate(date,oldAnchor,newAnchor) {
 
 /** Extracted from fresh materialization; callers supply its existing skill
  * validator and date context. No database registration or turn is consumed. */
-export function prepareSeriesOccurrenceWork(source,definition,window,{qualify,asOfDate}={}) {
+export function prepareSeriesOccurrenceWork(source,definition,window,{qualify,asOfDate,resolveGroupAssignment=null}={}) {
   const selection=seriesRotationAssignment(source,definition,{advance:true});
-  const rootAssigned=qualify(selection.assigned_user_ids,definition.skill_ids,window.due_date,false);
-  const primary=!definition.skill_ids.length||rootAssigned.includes(selection.primary_user_id)
-    ?selection.primary_user_id:rootAssigned[0]??null;
+  const rootGroup=definition.task.assignment_group_json&&resolveGroupAssignment
+    ?resolveGroupAssignment({sourceTaskId:source.id,configuration:definition.task.assignment_group_json,
+      skills:definition.skill_ids,window,previousUserId:definition.assigned_user_ids?.[0]??source.assigned_to,actionKey:'root'}) : null;
+  const rootAssigned=qualify(rootGroup?[rootGroup]:selection.assigned_user_ids,definition.skill_ids,window.due_date,false);
+  const primary=rootGroup??(!definition.skill_ids.length||rootAssigned.includes(selection.primary_user_id)
+    ?selection.primary_user_id:rootAssigned[0]??null);
   const relative=window.relative??(definition.task.due_date_offset_days!=null);
   const nextAnchor=relative?window.start_date:window.due_date;
   const actions=definition.subtasks.map(action=>{
     const oldAnchor=(relative?definition.task.start_date:definition.task.due_date)||action.task.due_date;
     const dueDate=action.task.due_date?translatedSeriesDate(action.task.due_date,oldAnchor,nextAnchor)??window.due_date:null;
-    const assigned=qualify(action.assigned_user_ids,action.skill_ids,dueDate||asOfDate,true);
+    const actionWindow={start_date:translatedSeriesDate(action.task.start_date,oldAnchor,nextAnchor)??action.task.start_date,
+      start_time:action.task.start_time,due_date:dueDate,due_time:action.task.due_time};
+    const group=action.task.assignment_group_json&&resolveGroupAssignment
+      ?resolveGroupAssignment({sourceTaskId:action.source_task_id,configuration:action.task.assignment_group_json,
+        skills:action.skill_ids,window:actionWindow,previousUserId:action.assigned_user_ids?.[0],actionKey:action.action_key}):null;
+    const assigned=qualify(group?[group]:action.assigned_user_ids,action.skill_ids,dueDate||asOfDate,true);
     return {action_key:action.action_key,primary_user_id:assigned[0]??null,assigned_user_ids:assigned,
-      window:{start_date:translatedSeriesDate(action.task.start_date,oldAnchor,nextAnchor)??action.task.start_date,
-        start_time:action.task.start_time,due_date:dueDate,due_time:action.task.due_time}};
+      window:actionWindow};
   });
   return {...selection,primary_user_id:primary,assigned_user_ids:rootAssigned,actions,
     window:{start_date:window.start_date,start_time:definition.task.start_time,due_date:window.due_date,due_time:definition.task.due_time}};

@@ -108,7 +108,8 @@ test('real app: Template to New Task accepts a draft-only shared Rotation and sh
     await set(page,'#task-start-date',day);
     await set(page,'#task-start-time','00:00');await set(page,'#task-due-time','23:59');
     assert.deepEqual(await page.$$eval('[data-task-subtask-title]',fields=>fields.map(field=>field.value)),originalTitles);
-    await click(page,'[data-rotation-add]');await set(page,'[data-rotation-label]','Shower Order');
+    await page.waitForSelector(`[data-rotation-choose-group="${group.id}"]`);
+    await click(page,`[data-rotation-choose-group="${group.id}"]`);await set(page,'[data-rotation-label]','Shower Order');
     const purposeKey=await page.$eval('[data-rotation-key]',field=>field.value);
     assert.match(purposeKey,/^[a-z][a-z0-9_-]*$/,'The ordinary creation flow supplies its own stable purpose key');
     await page.waitForSelector(`[data-rotation-group] option[value="${group.id}"]`);await page.select('[data-rotation-group]',String(group.id));
@@ -149,6 +150,7 @@ test('real app: Template to New Task accepts a draft-only shared Rotation and sh
     // Switching Puppeteer's isMobile mode reloads the document. Resize only so
     // this assertion inspects the same unsaved draft and its responsive layout.
     await page.setViewport({width:390,height:844});
+    if(await page.$eval('[data-rotation-behavior]',element=>element.hidden))await click(page,'[data-rotation-open-behavior]');
     if(await page.$('[data-rotation-text-settings]'))await page.$eval('[data-rotation-text-settings]',element=>{element.open=true;});
     const mobile=await page.$eval('[data-rotation-binding]',element=>{
       element.scrollIntoView({block:'start',behavior:'instant'});

@@ -67,7 +67,8 @@ app.use('/api/v1', (req, res) => {
     return res.json({ data: { tasks_template_switch_warning: true, ...preferenceValues.get(userId) } });
   }
   if (req.path === '/tasks/meta/options') return res.json({ users, categories: [{ key: 'misc', label: 'General' }], tags: [], default_points: 3 });
-  if (req.path === '/automation/activity-options') return res.json({ data: { activities: templates, skills } });
+if (req.path === '/automation/activity-options') return res.json({ data: { activities: templates, skills,
+    rotation_groups:[{id:31,name:'Kids rotation',active:1,members:users}] } });
   if (req.path === '/automation/rotation-groups') return res.json({ data: [{id:31,name:'Kids',members:users}] });
   if (req.path === '/planning/places') return res.json({ data: places });
   if (req.path === '/planning/place-search/status') return res.json({ data: { configured: false } });
@@ -145,6 +146,30 @@ async function selectTemplate(page, id, expectedTitle) {
   if (expectedTitle !== undefined) await page.waitForFunction((expected) => document.querySelector('#task-title')?.value === expected, {}, expectedTitle);
 }
 async function activeTitle(page) { return page.$eval('#shared-modal-title', (el) => el.textContent.trim()); }
+
+for(const width of [1366,390])test(`Group chips and subtask picker save first/random policies at ${width}px`,async()=>{
+  requests.length=0;createReceipts.clear();
+  const page=await mounted({width});
+  try{
+    await set(page,'#task-title','Shared cleanup');
+    await page.focus('[data-task-group-choice="31"]');await page.keyboard.press('Enter');
+    assert.equal(await value(page,'[data-task-assignment-group]'),'31');
+    await page.click('[data-task-subtask-add]');await set(page,'[data-task-subtask-title]','Take out bins');
+    await page.click('[data-task-subtask-target]');
+    await page.waitForSelector('[aria-label="Assign Rotation Group Kids rotation"]');
+    await page.click('[aria-label="Assign Rotation Group Kids rotation"]');
+    assert.equal(await value(page,'[data-task-subtask-group]'),'31');
+    await page.click('[data-task-subtask-target]');
+    assert.equal(await page.$eval('[data-task-subtask-group-behavior]',el=>el.open),true);
+    await page.select('[data-task-subtask-group-start]','random');
+    await page.select('[data-task-subtask-group-direction]','last_to_first');
+    await page.focus('#task-submit-btn');await page.keyboard.press('Enter');
+    await page.waitForFunction(()=>!document.querySelector('#task-form'));
+    const body=requests.find(row=>row.path==='/tasks'&&row.method==='POST').body;
+    assert.deepEqual(body.assignment_group,{group_id:31,start_mode:'first',direction:'first_to_last'});
+    assert.deepEqual(body.subtasks[0].assignment_group,{group_id:31,start_mode:'random',direction:'last_to_first'});
+  }finally{await page.dispose();}
+});
 
 test('untouched Blank and populated templates switch without a warning and restore Home', async () => {
   preferenceValues.clear();

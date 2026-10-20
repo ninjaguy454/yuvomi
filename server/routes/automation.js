@@ -49,6 +49,7 @@ import { normalizeActivityDueOffset } from '../../public/utils/activity-schedule
 import { normalizeRotationBindings, assertRotationBindingsChange, taskRotationContexts } from '../services/task-rotation.js';
 import { listRotationGroups, finalizeRotation, getRotationTrack } from '../services/rotation.js';
 import { rotationGroupUsage } from '../services/rotation-shared.js';
+import {normalizeGroupAssignment} from '../services/group-assignment.js';
 import { rotationOccurrenceOptions } from '../services/rotation-access.js';
 import { normalizeWorkflowRotationOperations, executeWorkflowRotationOperation } from '../services/workflow-rotation-operations.js';
 import {
@@ -98,7 +99,9 @@ function currentUserId(req) {
 }
 
 function rotationPickerData(d, actor) {
-  return { rotation_groups: hasCapability(d, actor, 'rotations.view') ? listRotationGroups(d).map(group=>({...group,...rotationGroupUsage(d,group.id)})) : [],
+  // Inactive Groups remain visible so an existing Activity can be edited
+  // without silently replacing its saved assignment.
+  return { rotation_groups: hasCapability(d, actor, 'rotations.view') ? listRotationGroups(d,{includeInactive:true}).map(group=>({...group,...rotationGroupUsage(d,group.id)})) : [],
     rotation_occurrences: rotationOccurrenceOptions(d,actor) };
 }
 
@@ -159,6 +162,11 @@ function normalizeActivityInput(d, body, existing = null) {
 
   const assignmentStrategy = body.assignment_strategy ?? existing?.assignment_policy ?? existing?.assignment_strategy ?? 'subject_skill';
   if (!VALID_ASSIGNMENT.has(assignmentStrategy)) throw new Error('Unknown assignment strategy.');
+  const oldAssignmentGroup=existing?.assignment_group_json?JSON.parse(existing.assignment_group_json):null;
+  const incomingAssignmentGroup=body.assignment_group===undefined?oldAssignmentGroup:body.assignment_group;
+  const assignmentGroup=normalizeGroupAssignment(d,incomingAssignmentGroup,
+    {allowInactive:!!oldAssignmentGroup&&Number((typeof incomingAssignmentGroup==='string'?JSON.parse(incomingAssignmentGroup):incomingAssignmentGroup)?.group_id)===Number(oldAssignmentGroup.group_id)});
+  if(assignmentStrategy==='group_rotation'&&!assignmentGroup)throw new Error('Choose a Rotation Group for assignment.');
   const subjectRequired = assignmentStrategy === 'subject_skill'
     ? 1
     : bool(body.subject_required, !!existing?.subject_required);
@@ -218,10 +226,13 @@ function normalizeActivityInput(d, body, existing = null) {
   if (!Array.isArray(rawChecklist) || rawChecklist.length > 50) {
     throw new Error('An Activity Template checklist must contain at most 50 items.');
   }
+  const retainedChecklistIds=new Set();
   const checklist = rawChecklist.map((item, index) => {
     const titleTemplate = text(typeof item === 'string' ? item : item?.title_template, { required: true, max: 200 });
     const prior = existing?.checklist?.find((row) => item?.id != null
       ? Number(row.id) === Number(item.id) : row.title_template === titleTemplate);
+    const retainedId=prior&&!retainedChecklistIds.has(prior.id)?prior.id:null;
+    if(retainedId)retainedChecklistIds.add(retainedId);
     if(item?.id==null&&item?.points===undefined&&(existing?.checklist?.filter(row=>row.title_template===titleTemplate).length??0)>1)
       throw new Error('Reload the Activity Template editor to preserve its subtask points.');
     if (item?.skill_ids === undefined && !prior && existing?.checklist?.some((row) => row.skill_ids?.length)) {
@@ -234,8 +245,11 @@ function normalizeActivityInput(d, body, existing = null) {
     if(item?.points===undefined&&!prior&&existing?.checklist?.some(row=>row.points>0))
       throw new Error('Reload the Activity Template editor to preserve its subtask points.');
     return {
+      id:retainedId,
       titleTemplate,
       sortOrder: index,
+      assignmentGroup: normalizeGroupAssignment(d,item?.assignment_group===undefined?prior?.assignment_group_json:item.assignment_group,
+        {allowInactive:!!prior?.assignment_group_json&&Number((typeof item?.assignment_group==='string'?JSON.parse(item.assignment_group):item?.assignment_group)?.group_id??JSON.parse(prior.assignment_group_json).group_id)===Number(JSON.parse(prior.assignment_group_json).group_id)}),
       isOptional: item?.is_optional === undefined ? prior?.is_optional ?? 0 : item.is_optional ? 1 : 0,
       points: pointAmount(item?.points===undefined?prior?.points??0:item.points),
       skillIds: normalizeSkillIds(d, item?.skill_ids,
@@ -248,6 +262,7 @@ function normalizeActivityInput(d, body, existing = null) {
   if(!existing||category!==existing.category||assignmentStrategy!==(existing.assignment_policy||existing.assignment_strategy)||participantCount!==existing.participant_count)
     assertActivityAssigneePolicy(categoryAssigneePolicy(d,category),{participant_count:participantCount},{strategy:assignmentStrategy});
   return {
+    assignmentGroup:assignmentStrategy==='group_rotation'?assignmentGroup:null,
     rotationBindings: normalizeRotationBindings(d, body.rotation_bindings ?? existing?.rotation_bindings ?? []),
     name,
     titleTemplate,
@@ -407,14 +422,26 @@ function normalizeWorkflowConditionValue(d, question, value, actor) {
 }
 
 function saveActivityChecklist(d, activityId, checklist) {
-  d.prepare('DELETE FROM activity_template_checklist_items WHERE activity_template_id = ?').run(activityId);
+  const retained=new Set(checklist.map(item=>item.id).filter(Boolean));
+  for(const old of d.prepare('SELECT id FROM activity_template_checklist_items WHERE activity_template_id=?').all(activityId))
+    if(!retained.has(old.id))d.prepare('DELETE FROM activity_template_checklist_items WHERE id=?').run(old.id);
+  // Move retained rows out of the final 0..49 slots before reordering; the
+  // table enforces a unique (template, sort_order) pair on every UPDATE.
+  d.prepare('UPDATE activity_template_checklist_items SET sort_order=sort_order+1000 WHERE activity_template_id=?').run(activityId);
   const insert = d.prepare(`
-    INSERT INTO activity_template_checklist_items (activity_template_id, title_template, sort_order, is_optional, points)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO activity_template_checklist_items (activity_template_id, title_template, sort_order, is_optional, points, assignment_group_json)
+    VALUES (?, ?, ?, ?, ?, ?)
   `);
   const insertSkill = d.prepare('INSERT INTO activity_template_checklist_skills(checklist_item_id,skill_id,sort_order) VALUES (?,?,?)');
   checklist.forEach((item) => {
-    const itemId = insert.run(activityId, item.titleTemplate, item.sortOrder, item.isOptional, item.points).lastInsertRowid;
+    const groupJson=item.assignmentGroup?JSON.stringify(item.assignmentGroup):null;
+    let itemId;
+    if(item.id){
+      d.prepare(`UPDATE activity_template_checklist_items SET title_template=?,sort_order=?,is_optional=?,points=?,assignment_group_json=? WHERE id=? AND activity_template_id=?`)
+        .run(item.titleTemplate,item.sortOrder,item.isOptional,item.points,groupJson,item.id,activityId);
+      itemId=item.id;
+    }else itemId=insert.run(activityId,item.titleTemplate,item.sortOrder,item.isOptional,item.points,groupJson).lastInsertRowid;
+    d.prepare('DELETE FROM activity_template_checklist_skills WHERE checklist_item_id=?').run(itemId);
     item.skillIds.forEach((skillId, order) => insertSkill.run(itemId, skillId, order));
   });
 }
@@ -981,6 +1008,7 @@ router.get('/activity-options', (req, res) => {
       participant_count: activity.participant_count,
       rotation_group: activity.rotation_group,
       rotation_bindings: activity.rotation_bindings,
+      assignment_group_json:activity.assignment_group_json,
       location_variable_id: activity.location_variable_id,
       presence_policy: activity.presence_policy,
       presence_window: activity.presence_window,
@@ -989,7 +1017,7 @@ router.get('/activity-options', (req, res) => {
       subject_required: activity.subject_required,
       ...variableFields(activity),
     }));
-    res.json({ data: { activities, skills: db.get().prepare('SELECT * FROM skills WHERE active = 1 ORDER BY name COLLATE NOCASE, id').all(),
+    res.json({ data: { activities,rotation_groups:picker.rotation_groups, skills: db.get().prepare('SELECT * FROM skills WHERE active = 1 ORDER BY name COLLATE NOCASE, id').all(),
       members:householdMembers(db.get()),places:db.get().prepare('SELECT * FROM places WHERE active=1 ORDER BY name COLLATE NOCASE,id').all(),launch_actor_id:req.authUserId||req.session.userId } });
   } catch (err) {
     log.error('GET /activity-options:', err);
@@ -1461,6 +1489,7 @@ router.post('/admin/activity-templates', requireCapability('activities.create'),
   try {
     const d = db.get();
     const input = normalizeActivityInput(d, req.body);
+if(input.assignmentGroup||input.checklist.some(item=>item.assignmentGroup))assertCapability(d,req,'rotations.view');
     assertRotationBindingsChange(d, req, [], input.rotationBindings);
     const id = d.transaction(() => {
       const result = d.prepare(`
@@ -1483,7 +1512,7 @@ router.post('/admin/activity-templates', requireCapability('activities.create'),
         input.dueDateOffsetDays,
       );
       saveActivitySkills(d, result.lastInsertRowid, input.skillIds);
-      d.prepare('UPDATE activity_templates SET rotation_bindings_json=?,scoring_mode=? WHERE id=?').run(JSON.stringify(input.rotationBindings),input.scoringMode,result.lastInsertRowid);
+      d.prepare('UPDATE activity_templates SET rotation_bindings_json=?,scoring_mode=?,assignment_group_json=? WHERE id=?').run(JSON.stringify(input.rotationBindings),input.scoringMode,input.assignmentGroup?JSON.stringify(input.assignmentGroup):null,result.lastInsertRowid);
       saveActivityChecklist(d, result.lastInsertRowid, input.checklist);
       return Number(result.lastInsertRowid);
     })();
@@ -1499,6 +1528,9 @@ router.put('/admin/activity-templates/:id', requireCapability('activities.edit')
     const existing = getActivityTemplate(d, Number(req.params.id));
     if (!existing) return res.status(404).json({ error: 'Activity template not found.', code: 404 });
     const input = normalizeActivityInput(d, req.body, existing);
+      const changedGroup=JSON.stringify(input.assignmentGroup)!==(existing.assignment_group_json||'null')
+        ||input.checklist.some(item=>JSON.stringify(item.assignmentGroup)!==(existing.checklist.find(old=>old.id===item.id)?.assignment_group_json||'null'));
+      if(changedGroup&&(input.assignmentGroup||input.checklist.some(item=>item.assignmentGroup)))assertCapability(d,req,'rotations.view');
     assertRotationBindingsChange(d, req, existing.rotation_bindings, input.rotationBindings);
     d.transaction(() => {
       d.prepare(`
@@ -1523,7 +1555,7 @@ router.put('/admin/activity-templates/:id', requireCapability('activities.edit')
         input.startTime, input.dueTime, input.recurrenceRule, input.recurrenceFromCompletion, input.dueDateOffsetDays, existing.id,
       );
       saveActivitySkills(d, existing.id, input.skillIds);
-      d.prepare('UPDATE activity_templates SET rotation_bindings_json=?,scoring_mode=? WHERE id=?').run(JSON.stringify(input.rotationBindings),input.scoringMode,existing.id);
+      d.prepare('UPDATE activity_templates SET rotation_bindings_json=?,scoring_mode=?,assignment_group_json=? WHERE id=?').run(JSON.stringify(input.rotationBindings),input.scoringMode,input.assignmentGroup?JSON.stringify(input.assignmentGroup):null,existing.id);
       saveActivityChecklist(d, existing.id, input.checklist);
     })();
     res.json({ data: getActivityTemplate(d, existing.id) });

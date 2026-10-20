@@ -13,6 +13,7 @@ import { activitySnapshotSkills } from './task-activity-snapshot.js';
 import { todayKey } from '../utils/timezone.js';
 import { evaluatePresence, activityPresenceWindow } from './presence.js';
 import { orderedRotationSelection } from './rotation-order.js';
+import {chooseGroupAssignee} from './group-assignment.js';
 
 export const PROFICIENCY = Object.freeze({
   EXCLUDED: 'excluded',
@@ -35,6 +36,7 @@ export const ASSIGNMENT_STRATEGIES = Object.freeze([
   'eligible_random',
   'open_claimable',
   'rotating_multi',
+  'group_rotation',
   'fixed',
 ]);
 
@@ -443,6 +445,14 @@ export function resolveActivityAssignment(d, activity, {
     activityProficiency(d, activity, member, dateKey).proficiency === PROFICIENCY.NORMAL
     && isPresent(member)
   );
+
+  if(policy==='group_rotation') {
+    const selected=chooseGroupAssignee(d,activity.assignment_group_json,{consumerKey:activity.rotation_scope||`activity:${activity.id}`,
+      eligibleIds:eligible.map(member=>member.id),commit:commitRotation,previousUserId:activity.rotation_cursor_user_id,dateKey});
+    const primary=eligible.find(member=>member.id===selected);
+    return {primary,supervisor:null,subject,subjectProficiency:subject?activityProficiency(d,activity,subject,dateKey):null,
+      eligible,strategy:'group_rotation'};
+  }
 
   if (policy === 'eligible_round_robin') {
     const primary = activity.rotation_scope || activity.rotation_group

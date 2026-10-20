@@ -1415,7 +1415,7 @@ async function renderActivitiesManager(body, manager) {
 }
 
 function activityEditorContext(response) {
-  return { skills: response.skills ?? [], members: response.members ?? [], categories: response.categories ?? [], variables: response.variables ?? [], places: response.places ?? [], context: response.context ?? [] };
+  return { skills: response.skills ?? [], members: response.members ?? [], categories: response.categories ?? [], variables: response.variables ?? [], places: response.places ?? [], rotationGroups:response.rotation_groups??[], context: response.context ?? [] };
 }
 
 function activityTimingFields(activity) {
@@ -1496,6 +1496,7 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
   const editing = Boolean(activity?.id);
   const selectedSkills = activity?.skill_ids ?? activity?.skills ?? [];
   const strategy = activity?.assignment_policy || activity?.assignment_strategy || 'subject_skill';
+  const initialAssignmentGroup=typeof activity?.assignment_group_json==='string'?JSON.parse(activity.assignment_group_json):activity?.assignment_group_json;
   const locationMode = activity?.location_mode || 'none';
   const scoringMode = activity?.scoring_mode ?? (editing ? null : 'whole_task');
   const content = `<form id="automation-activity-form" novalidate>
@@ -1512,7 +1513,7 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
     <fieldset class="automation-fieldset">
       <legend class="label">Subtasks copied into each Task</legend>
       <p class="form-hint automation-manager__hint">Each generated Task gets its own editable subtask copies. Later changes to this template do not rewrite existing Tasks. Type @ to insert the person or Activity Template name; workflow variables are also resolved when a workflow runs.</p>
-      ${renderSubtaskEditor({ subtasks: activity?.checklist || [], skills: context.skills, template: true, canCreateSkill: canCapability('skills.manage') })}
+      ${renderSubtaskEditor({ subtasks: activity?.checklist || [], skills: context.skills, template: true, groups:context.rotationGroups, canCreateSkill: canCapability('skills.manage'),canCreateGroup:canCapability('rotations.manage') })}
     </fieldset>
     ${inputRow('Category', `<select class="input" name="category">${categoryOptions(context.categories, activity?.category || 'misc')}</select>`)}
     <p class="form-hint" data-template-assignee-limit></p>
@@ -1530,8 +1531,17 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
       <option value="eligible_random" ${strategy === 'eligible_random' ? 'selected' : ''}>Random eligible member</option>
       <option value="open_claimable" ${strategy === 'open_claimable' ? 'selected' : ''}>Open / claimable</option>
       <option value="rotating_multi" ${strategy === 'rotating_multi' ? 'selected' : ''}>Rotating group</option>
+      <option value="group_rotation" ${strategy === 'group_rotation' ? 'selected' : ''}>Rotation Group member</option>
       <option value="fixed" ${strategy === 'fixed' ? 'selected' : ''}>Fixed household member</option>
     </select>`)}
+    <div id="automation-assignment-group" ${strategy==='group_rotation'?'':'hidden'}>
+      <p class="form-hint" data-assignment-group-summary>Group membership and order are shared. This Activity keeps its own starting choice and direction when the Group has an independent schedule.</p>
+      <div class="rotation-group-choices" role="group" aria-label="Assign a Rotation Group">${context.rotationGroups.filter(group=>group.active).map(group=>`<button type="button" class="rotation-group-choice" data-assignment-group-choice="${Number(group.id)}" aria-pressed="false"><span class="rotation-group-choice__avatar" aria-hidden="true"><i data-lucide="users-round"></i></span><span class="rotation-group-choice__name">${h(group.name)}</span></button>`).join('')}</div>
+      <label class="form-label">Group<select class="input" name="assignment_group_id"><option value="">Choose a Rotation Group</option>${initialAssignmentGroup&&!context.rotationGroups.some(group=>Number(group.id)===Number(initialAssignmentGroup.group_id))?`<option value="${Number(initialAssignmentGroup.group_id)}" selected>Saved Rotation Group</option>`:''}${context.rotationGroups.map(group=>`<option value="${Number(group.id)}" ${Number(group.id)===Number(initialAssignmentGroup?.group_id)?'selected':''} ${group.active||Number(group.id)===Number(initialAssignmentGroup?.group_id)?'':'disabled'}>${h(group.name)}${group.active?'':' (inactive)'}</option>`).join('')}</select></label>
+      <div class="grid grid--2"><label class="form-label">Start with<select class="input" name="assignment_group_start"><option value="first">First member</option><option value="random">Random member, chosen once</option></select></label>
+      <label class="form-label">Rotation direction<select class="input" name="assignment_group_direction"><option value="first_to_last">First to last</option><option value="last_to_first">Last to first</option></select></label></div>
+      ${canCapability('rotations.manage')?'<button class="btn btn--secondary btn--sm" type="button" data-assignment-manage-group>Manage Group members and order</button>':''}
+    </div>
     <label class="automation-check-row"><input type="checkbox" name="subject_required" ${(activity?.subject_required ?? true) ? 'checked' : ''}> Requires a person this activity is for</label>
     <div id="automation-fixed-user" ${strategy === 'fixed' ? '' : 'hidden'}>${inputRow('Fixed assignee', `<select class="input" name="fixed_user_id">${memberOptions(context.members, activity?.fixed_user_id)}</select>`)}</div>
     <div id="automation-participant-count" ${strategy === 'rotating_multi' ? '' : 'hidden'}>${inputRow('People per occurrence', `<input class="input" type="number" name="participant_count" min="1" max="50" value="${Number(activity?.participant_count || 2)}">`, 'The first person owns the task; everyone selected is recorded as a participant.')}</div>
@@ -1578,7 +1588,21 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
         }
         return skill;
       };
-      const subtasks = bindSubtaskEditor(panel, { skills: context.skills, template: true, onCreateSkill: canCapability('skills.manage') ? createSkill : null });
+        const subtasks = bindSubtaskEditor(panel, { skills: context.skills, template: true, groups:context.rotationGroups,canCreateGroup:canCapability('rotations.manage'), onCreateSkill: canCapability('skills.manage') ? createSkill : null });
+      panel.addEventListener('rotation-groups-loaded',event=>{
+        const select=panel.querySelector('[name="assignment_group_id"]'),choices=panel.querySelector('#automation-assignment-group .rotation-group-choices');
+        for(const group of event.detail.groups||[]){
+          if(context.rotationGroups.some(item=>Number(item.id)===Number(group.id)))continue;
+          subtasks.addGroup(group);
+          select.add(new Option(group.name,String(group.id)));
+          const chip=document.createElement('button');chip.type='button';chip.className='rotation-group-choice';chip.dataset.assignmentGroupChoice=String(group.id);
+          chip.innerHTML=`<span class="rotation-group-choice__avatar" aria-hidden="true"><i data-lucide="users-round"></i></span><span class="rotation-group-choice__name">${h(group.name)}</span>`;
+          chip.addEventListener('click',()=>{select.value=String(group.id);panel.querySelector('#automation-assignment-strategy').value='group_rotation';
+            panel.querySelector('#automation-assignment-group').hidden=false;panel.querySelectorAll('[data-assignment-group-choice]').forEach(item=>item.setAttribute('aria-pressed',String(item===chip)));
+            panel.querySelector('[name="assignment_group_start"]').focus();});
+          choices.append(chip);window.lucide?.createIcons({el:chip});
+        }
+      });
       disposeSubtasks = () => subtasks.dispose();
       const pointsInput = panel.querySelector('[name="points"]');
       const refreshScoring = () => {
@@ -1614,11 +1638,36 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
       const strategySelect = panel.querySelector('#automation-assignment-strategy');
       const fixed = panel.querySelector('#automation-fixed-user');
       const participantCount = panel.querySelector('#automation-participant-count');
+      const assignmentGroupPanel=panel.querySelector('#automation-assignment-group');
+      const groupConfig=typeof activity?.assignment_group_json==='string'?JSON.parse(activity.assignment_group_json):activity?.assignment_group_json;
+      panel.querySelector('[name="assignment_group_start"]').value=groupConfig?.start_mode||'first';
+      panel.querySelector('[name="assignment_group_direction"]').value=groupConfig?.direction||'first_to_last';
+      const groupSelect=panel.querySelector('[name="assignment_group_id"]');
+      const updateGroupChoices=()=>{panel.querySelectorAll('[data-assignment-group-choice]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.assignmentGroupChoice===groupSelect.value)));
+        const chosen=context.rotationGroups.find(group=>String(group.id)===groupSelect.value),shared=chosen?.usage_mode==='shared';
+        const names=chosen?.members?.filter(member=>member.active).map(member=>member.display_name).join(' → ');
+        panel.querySelector('[data-assignment-group-summary]').textContent=shared
+          ?`${names||chosen.name} · The shared Group schedule controls order, direction, start and timing. This template's presence and rotation-purpose settings remain separate.`
+          :`${names||'Group members and order are shared.'} · This template chooses its starting member and direction. Presence settings below apply to this template.`;
+        panel.querySelector('[name="assignment_group_start"]').disabled=shared;
+        panel.querySelector('[name="assignment_group_direction"]').disabled=shared;
+        const manage=panel.querySelector('[data-assignment-manage-group]');if(manage)manage.disabled=!chosen;
+      };
+      panel.querySelectorAll('[data-assignment-group-choice]').forEach(button=>button.addEventListener('click',()=>{groupSelect.value=button.dataset.assignmentGroupChoice;strategySelect.value='group_rotation';refreshAssignment();updateGroupChoices();groupSelect.focus();}));
+      groupSelect.addEventListener('change',updateGroupChoices);updateGroupChoices();
+      panel.querySelector('[data-assignment-manage-group]')?.addEventListener('click',async()=>{
+        if(!groupSelect.value)return;
+        try{const {openRotationGroup}=await import('/components/rotation-groups.js');await openRotationGroup(Number(groupSelect.value),
+          {onChanged:async()=>{const result=await api.get('/automation/activity-options');context.rotationGroups.splice(0,context.rotationGroups.length,...(result.data?.rotation_groups||[]));updateGroupChoices();}});
+          panel.querySelector('[data-assignment-manage-group]')?.focus({preventScroll:true});}
+        catch(error){showActivityFormError(panel,error.message);}
+      });
       const categorySelect=panel.querySelector('[name=category]'),countInput=panel.querySelector('[name=participant_count]');
       const refreshAssigneeLimit=()=>{const policy=context.categories.find(row=>row.key===categorySelect.value),max=policy?.max_assignees??null;panel.querySelector('[data-template-assignee-limit]').textContent=assigneePolicyLabel({max_assignees:max},t);const changed=!editing||categorySelect.value!==activity.category||strategySelect.value!==(activity.assignment_policy||activity.assignment_strategy)||Number(countInput.value)!==Number(activity.participant_count||1);countInput.setCustomValidity(changed&&strategySelect.value==='rotating_multi'&&max!==null&&Number(countInput.value)>max?t('tasks.assigneeLimitExceeded',{count:max}):'');};
       categorySelect.addEventListener('change',refreshAssigneeLimit);countInput.addEventListener('input',refreshAssigneeLimit);strategySelect.addEventListener('change',refreshAssigneeLimit);refreshAssigneeLimit();
       const refreshAssignment = () => {
         fixed.hidden = strategySelect.value !== 'fixed';
+        assignmentGroupPanel.hidden=strategySelect.value!=='group_rotation';
         participantCount.hidden = strategySelect.value !== 'rotating_multi';
       };
       strategySelect?.addEventListener('change', refreshAssignment);
@@ -1648,6 +1697,7 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
           return;
         }
         if (data.get('assignment_strategy') === 'fixed' && !data.get('fixed_user_id')) { showActivityFormError(panel, 'Choose a fixed assignee.', 'fixed_user_id'); return; }
+        if (data.get('assignment_strategy') === 'group_rotation' && !data.get('assignment_group_id')) { showActivityFormError(panel, 'Choose a Rotation Group.', 'assignment_group_id'); return; }
         const timing = activityTimingPayload(form);
         if (timing.error) { showActivityFormError(panel, timing.error, timing.field); return; }
         const payload = {
@@ -1660,6 +1710,7 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
           ...timing.values,
           tags: normalizeTagList(String(data.get('tags') || '').split(',')),
           assignment_strategy: data.get('assignment_strategy'),
+          assignment_group:data.get('assignment_strategy')==='group_rotation'?{group_id:Number(data.get('assignment_group_id')),start_mode:data.get('assignment_group_start'),direction:data.get('assignment_group_direction')}:null,
           subject_required: data.has('subject_required'),
           fixed_user_id: data.get('fixed_user_id') || null,
           allow_assignment_override: data.has('allow_assignment_override'),

@@ -30,7 +30,7 @@ function avatar(person) {
 }
 
 /** A nested, locally focused chooser. No assignment occurs on opening or dismissal. */
-export function openAllocationPicker({ host, anchor, child, draft, onAssign, signal }) {
+export function openAllocationPicker({ host, anchor, child, draft, onAssign, signal,groups=[],selectedGroupId=null,onAssignGroup=null }) {
   let closed = false, overlayToken = null;
   const listeners = new AbortController();
   const options = { signal: listeners.signal };
@@ -55,6 +55,20 @@ export function openAllocationPicker({ host, anchor, child, draft, onAssign, sig
       if (anchor.isConnected && !anchor.disabled && !anchor.closest('[inert]')) anchor.focus({ preventScroll: true });
     }, options);
     choices.append(button);
+  }
+  if(groups.some(group=>group.active)&&onAssignGroup){
+    const section=document.createElement('div');section.className='task-allocation-picker__groups';
+    section.insertAdjacentHTML('beforeend','<strong>Rotation Groups</strong><p class="form-hint">Group membership and order are shared.</p>');
+    for(const group of groups.filter(group=>group.active)){
+      const button=document.createElement('button');button.type='button';button.className='task-allocation-picker__choice';
+      button.setAttribute('aria-pressed',String(Number(group.id)===Number(selectedGroupId)));
+      button.setAttribute('aria-label',`Assign Rotation Group ${group.name}`);
+      button.innerHTML=`<span class="task-allocation__avatar" aria-hidden="true"><i data-lucide="users-round"></i></span><span>${esc(group.name)}</span>`;
+      button.addEventListener('click',()=>{if(signal?.aborted||closed)return;close(false);onAssignGroup(Number(child.id),Number(group.id));
+        if(anchor.isConnected&&!anchor.disabled)anchor.focus({preventScroll:true});},options);
+      section.append(button);
+    }
+    panel.append(section);window.lucide?.createIcons({el:section});
   }
   layer.append(panel); host.append(layer); anchor.setAttribute('aria-expanded', 'true');
   function position() {

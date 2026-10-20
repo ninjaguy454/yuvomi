@@ -6,7 +6,6 @@ import { api } from '/api.js';
 import { renderGooglePlacesSettings } from '/components/google-places-settings.js';
 import { openModal, openChildModal, closeModal, confirmOverModal } from '/components/modal.js';
 import { renderSkillPicker, bindSkillPicker, renderSubtaskEditor, bindSubtaskEditor, assignmentGroupSummary, assignmentGroupBehavior } from '/components/task-requirements.js';
-import {bindGroupAssignmentOrder} from '/components/group-assignment-order.js';
 import { PRIORITIES, normalizeTagList, catLabel } from '/utils/task-fields.js';
 import { t, formatTime, formatTimeInput, parseTimeInput, formatDateInput, parseDateInput, isDateInputValid } from '/i18n.js';
 import { renderRRuleFields, bindRRuleEvents, getRRuleValues } from '/rrule-ui.js';
@@ -1536,12 +1535,11 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
       <option value="fixed" ${strategy === 'fixed' ? 'selected' : ''}>Fixed household member</option>
     </select>`)}
     <div id="automation-assignment-group" ${strategy==='group_rotation'?'':'hidden'}>
-      <p class="form-hint" data-assignment-group-summary>Group membership is shared. Independent Activities can set their own order, start and direction.</p>
+      <p class="form-hint" data-assignment-group-summary>Group membership is shared. Independent Activity instances manage their own order.</p>
       <div class="rotation-group-choices" role="group" aria-label="Assign a Rotation Group">${context.rotationGroups.filter(group=>group.active).map(group=>`<button type="button" class="rotation-group-choice" data-assignment-group-choice="${Number(group.id)}" aria-pressed="false"><span class="rotation-group-choice__avatar" aria-hidden="true"><i data-lucide="users-round"></i></span><span class="rotation-group-choice__name">${h(group.name)}</span></button>`).join('')}</div>
       <label class="form-label">Group<select class="input" name="assignment_group_id"><option value="">Choose a Rotation Group</option>${initialAssignmentGroup&&!context.rotationGroups.some(group=>Number(group.id)===Number(initialAssignmentGroup.group_id))?`<option value="${Number(initialAssignmentGroup.group_id)}" selected>Saved Rotation Group</option>`:''}${context.rotationGroups.map(group=>`<option value="${Number(group.id)}" ${Number(group.id)===Number(initialAssignmentGroup?.group_id)?'selected':''} ${group.active||Number(group.id)===Number(initialAssignmentGroup?.group_id)?'':'disabled'}>${h(group.name)}${group.active?'':' (inactive)'}</option>`).join('')}</select></label>
       <div class="grid grid--2"><label class="form-label">Start with<select class="input" name="assignment_group_start"><option value="first">First member</option><option value="random">Random member, chosen once</option></select></label>
       <label class="form-label">Rotation direction<select class="input" name="assignment_group_direction"><option value="first_to_last">First to last</option><option value="last_to_first">Last to first</option></select></label></div>
-      <div data-template-group-order></div>
       ${canCapability('rotations.manage')?'<button class="btn btn--secondary btn--sm" type="button" data-assignment-manage-group>Manage Group members and order</button>':''}
     </div>
     <label class="automation-check-row"><input type="checkbox" name="subject_required" ${(activity?.subject_required ?? true) ? 'checked' : ''}> Requires a person this activity is for</label>
@@ -1645,14 +1643,8 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
       panel.querySelector('[name="assignment_group_start"]').value=groupConfig?.start_mode||'first';
       panel.querySelector('[name="assignment_group_direction"]').value=groupConfig?.direction||'first_to_last';
       const groupSelect=panel.querySelector('[name="assignment_group_id"]');
-      const groupOrder=bindGroupAssignmentOrder(panel.querySelector('[data-template-group-order]'));
-      let lastOrderGroupId=null;
       const updateGroupChoices=()=>{panel.querySelectorAll('[data-assignment-group-choice]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.assignmentGroupChoice===groupSelect.value)));
         const chosen=assignmentGroupBehavior(context.rotationGroups.find(group=>String(group.id)===groupSelect.value),{template:true}),shared=chosen?.usage_mode==='shared';
-        const chosenId=Number(chosen?.id)||null;
-        groupOrder.set(chosen,chosenId!==lastOrderGroupId
-          ?Number(groupConfig?.group_id)===chosenId?groupConfig.member_order||[]:[]:undefined);
-        lastOrderGroupId=chosenId;
         panel.querySelector('[data-assignment-group-summary]').textContent=assignmentGroupSummary(chosen,{scope:'template'});
         for(const field of ['start','direction']){const control=panel.querySelector(`[name="assignment_group_${field}"]`);control.disabled=shared;control.closest('label').hidden=shared;}
         const manage=panel.querySelector('[data-assignment-manage-group]');if(manage)manage.disabled=!chosen;
@@ -1718,7 +1710,8 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
             group_id:Number(data.get('assignment_group_id')),
             start_mode:panel.querySelector('[name="assignment_group_start"]').value,
             direction:panel.querySelector('[name="assignment_group_direction"]').value,
-            ...(groupOrder.getValue()?{member_order:groupOrder.getValue()}:{}),
+            ...(Number(groupConfig?.group_id)===Number(data.get('assignment_group_id'))&&groupConfig?.member_order
+              ?{member_order:groupConfig.member_order}:{}),
           }:null,
           subject_required: data.has('subject_required'),
           fixed_user_id: data.get('fixed_user_id') || null,

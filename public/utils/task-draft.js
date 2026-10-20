@@ -1,5 +1,12 @@
 import { resolveActivityDueDate, deriveActivityDueOffset } from './activity-schedule.js';
 
+function instanceGroup(value) {
+  if(!value)return null;
+  const saved=typeof value==='string'?JSON.parse(value):value;
+  const {member_order,...configuration}=saved;
+  return configuration;
+}
+
 /** Manual form defaults only. Generated tasks keep their own context/location. */
 export function createManualTaskDraft({ template = null, places = [], defaultPoints = 0, presetDates = null, occurrenceStartDate = null } = {}) {
   const home = places.find((place) => place.type === 'home' && place.active !== 0 && place.active !== false);
@@ -25,6 +32,8 @@ export function createManualTaskDraft({ template = null, places = [], defaultPoi
     assigned_to: template?.assignment_strategy === 'fixed' ? Number(template.fixed_user_id) || null : null,
     skill_ids: [...(template?.skill_ids || [])],
     subtasks: (template?.checklist || []).map((step) => ({ title: step.title_template || step.title || '', skill_ids: [...(step.skill_ids || [])], is_optional: step.is_optional ? 1 : 0,
+      ...(step.assignment_group_json||step.assignment_group
+        ?{assignment_group:instanceGroup(step.assignment_group_json||step.assignment_group)}:{}),
       ...(step.points != null ? { points: Number(step.points) } : {}),
       ...(step.id?{activity_template_checklist_item_id:step.id}:{}) })),
   };
@@ -36,7 +45,9 @@ export function taskDraftSnapshot(form, { tags = [], documents = [], pendingFile
     .filter((field) => field.id !== 'task-activity-template' && field.id !== 'task-id')
     .map((field) => [field.name || field.id || field.dataset.taskSubtaskTitle || '',
       field.type === 'checkbox' || field.type === 'radio' ? [field.value, field.checked] : field.value]);
-  return JSON.stringify({ fields, tags, documents, pendingFiles });
+  const groupOrders=[...form.querySelectorAll('[data-task-group-order], [data-task-subtask-group-order]')]
+    .map(root=>root.dataset.groupOrderValue||'null');
+  return JSON.stringify({ fields, groupOrders, tags, documents, pendingFiles });
 }
 
 /** Convert only fields supported by reusable Activity Templates. */

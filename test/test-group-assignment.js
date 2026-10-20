@@ -133,7 +133,7 @@ test('editing one independent Group assignment leaves another Activity and its c
 test('template root and checklist Group defaults materialize separately and preserve reusable definitions',async t=>{
   const f=await scoringFixture(t),g=group(f.d);
   const config=JSON.stringify({group_id:g.id,start_mode:'first',direction:'first_to_last',member_order:[3,2]});
-  const actionConfig=JSON.stringify({group_id:g.id,start_mode:'first',direction:'first_to_last',member_order:[2,3]});
+  const actionConfig=JSON.stringify({group_id:g.id,start_mode:'first',direction:'first_to_last',member_order:[3,2]});
   const template=Number(f.d.prepare(`INSERT INTO activity_templates(name,title_template,category,assignment_strategy,assignment_policy,
     subject_required,presence_policy,created_by,points,assignment_group_json)
     VALUES('Group template','Group work','misc','eligible_round_robin','group_rotation',0,'ignore',1,0,?)`).run(config).lastInsertRowid);
@@ -142,14 +142,122 @@ test('template root and checklist Group defaults materialize separately and pres
   const created=await f.create({activity_template_id:template,due_date:'2026-11-01'});
   assert.equal(created.status,201,JSON.stringify(created));
   const id=created.data.id,child=f.d.prepare('SELECT * FROM tasks WHERE parent_task_id=? AND activity_template_checklist_item_id IS NOT NULL').get(id);
-  assert.equal(f.row(id).assigned_to,3);
+  assert.equal(f.row(id).assigned_to,2);
   assert.ok(child);assert.equal(child.assigned_to,2);
+  assert.equal(JSON.parse(child.assignment_group_json).member_order,undefined);
   assert.equal(f.d.prepare('SELECT count(*) n FROM task_group_assignment_decisions WHERE task_id IN (?,?)').get(id,child.id).n,2);
   assert.equal(f.d.prepare('SELECT assignment_group_json FROM activity_templates WHERE id=?').get(template).assignment_group_json,config);
   const edited=await f.edit(id,{title:'Group work edited',activity_template_id:template});
   assert.equal(edited.status,200,JSON.stringify(edited));
-  assert.equal(f.row(id).assignment_group_json,config);
+  assert.deepEqual(JSON.parse(f.row(id).assignment_group_json),{group_id:g.id,start_mode:'first',direction:'first_to_last'});
   assert.equal(f.d.prepare('SELECT count(*) n FROM task_group_assignment_decisions WHERE task_id=? AND superseded_at IS NULL').get(id).n,1);
+  const viaForm=await f.create({activity_template_id:template,due_date:'2026-11-01',
+    subtasks:[{title:'Group subtask',skill_ids:[],points:0,assignment_group:{group_id:g.id,start_mode:'first',direction:'first_to_last'}}]});
+  assert.equal(viaForm.status,201,JSON.stringify(viaForm));
+  const formChild=f.d.prepare('SELECT * FROM tasks WHERE parent_task_id=?').get(viaForm.data.id);
+  assert.equal(formChild.assigned_to,2);
+  assert.equal(JSON.parse(formChild.assignment_group_json).member_order,undefined);
+});
+
+test('template-created independent Activity owns its order and future recurrence keeps it after template edits',async t=>{
+  const f=await scoringFixture(t),g=group(f.d);
+  const templateOrder={group_id:g.id,start_mode:'first',direction:'first_to_last',member_order:[3,2]};
+  const template=Number(f.d.prepare(`INSERT INTO activity_templates(name,title_template,category,assignment_strategy,assignment_policy,
+    subject_required,presence_policy,created_by,points,assignment_group_json)
+    VALUES('Reusable','Recurring work','misc','eligible_round_robin','group_rotation',0,'ignore',1,0,?)`)
+    .run(JSON.stringify(templateOrder)).lastInsertRowid);
+  const ownOrder={...templateOrder,member_order:[3,2]};
+  const created=await f.create({activity_template_id:template,start_date:'2026-11-01',due_date:'2026-11-01',
+    is_recurring:1,recurrence_rule:'FREQ=DAILY',assignment_group:ownOrder});
+  assert.equal(created.status,201,JSON.stringify(created));
+  const id=created.data.id;
+  assert.equal(f.row(id).assigned_to,3);
+  const changed={...ownOrder,member_order:[2,3]};
+  const {taskSeriesState}=await import('../server/services/task-series.js');
+  const edited=await f.edit(id,{activity_template_id:template,assignment_group:changed,
+    edit_scope:'future',expected_series_revision:taskSeriesState(f.d,id).revision});
+  assert.equal(edited.status,200,JSON.stringify(edited));
+  assert.equal(f.row(id).assigned_to,3,'editing order keeps the current occurrence');
+  assert.deepEqual(JSON.parse(f.row(id).assignment_group_json),changed);
+  f.d.prepare('UPDATE activity_templates SET assignment_group_json=? WHERE id=?').run(JSON.stringify({...templateOrder,start_mode:'random'}),template);
+  const done=await f.finish(id);assert.equal(done.status,200,JSON.stringify(done));
+  const next=f.d.prepare('SELECT * FROM tasks WHERE recurrence_origin_id=? AND parent_task_id IS NULL').get(id);
+  assert.ok(next);assert.equal(next.assigned_to,2);
+  assert.deepEqual(JSON.parse(next.assignment_group_json),changed);
+  assert.equal(f.d.prepare('SELECT assignment_group_json FROM activity_templates WHERE id=?').get(template).assignment_group_json,
+    JSON.stringify({...templateOrder,start_mode:'random'}));
+});
+
+test('future-only Template-bound Group edit updates its instance snapshot, not the reusable Template',async t=>{
+  const {taskSeriesState}=await import('../server/services/task-series.js');
+  const {proposedFutureSeriesDefinition}=await import('../server/services/task-series-edit.js');
+  const f=await scoringFixture(t),g=group(f.d);
+  const template=Number(f.d.prepare(`INSERT INTO activity_templates(name,title_template,category,assignment_strategy,assignment_policy,
+    subject_required,presence_policy,created_by,points,assignment_group_json)
+    VALUES('Future only','Future work','misc','eligible_round_robin','group_rotation',0,'ignore',1,0,?)`)
+    .run(JSON.stringify({group_id:g.id,start_mode:'first',direction:'first_to_last'})).lastInsertRowid);
+  const created=await f.create({activity_template_id:template,start_date:'2026-11-01',due_date:'2026-11-01',
+    is_recurring:1,recurrence_rule:'FREQ=DAILY'});
+  assert.equal(created.status,201,JSON.stringify(created));
+  const root=f.row(created.data.id),state=taskSeriesState(f.d,root.id);
+  const groupConfig={group_id:g.id,start_mode:'first',direction:'first_to_last',member_order:[3,2]};
+  const after=proposedFutureSeriesDefinition(f.d,1,root,state.definition.data,{fields:{assignment_group:groupConfig}});
+  assert.deepEqual(JSON.parse(after.task.assignment_group_json),groupConfig);
+  assert.deepEqual(JSON.parse(after.binding.snapshot.assignment_group_json),groupConfig);
+  assert.notDeepEqual(JSON.parse(f.d.prepare('SELECT assignment_group_json FROM activity_templates WHERE id=?').get(template).assignment_group_json),groupConfig);
+});
+
+test('two independent instances of one Template start separately',async t=>{
+  const f=await scoringFixture(t),g=group(f.d);
+  const template=Number(f.d.prepare(`INSERT INTO activity_templates(name,title_template,category,assignment_strategy,assignment_policy,
+    subject_required,presence_policy,created_by,points,assignment_group_json)
+    VALUES('Separate','Separate work','misc','eligible_round_robin','group_rotation',0,'ignore',1,0,?)`)
+    .run(JSON.stringify({group_id:g.id,start_mode:'first',direction:'first_to_last'})).lastInsertRowid);
+  const one=await f.create({activity_template_id:template,due_date:'2026-11-01'});
+  const two=await f.create({activity_template_id:template,due_date:'2026-11-01'});
+  assert.equal(one.status,201,JSON.stringify(one));assert.equal(two.status,201,JSON.stringify(two));
+  assert.equal(f.row(one.data.id).assigned_to,2);
+  assert.equal(f.row(two.data.id).assigned_to,2);
+  const scopes=f.d.prepare('SELECT definition_snapshot_json FROM task_activity_bindings WHERE task_id IN (?,?) ORDER BY task_id').all(one.data.id,two.data.id)
+    .map(row=>JSON.parse(row.definition_snapshot_json).rotation_scope);
+  assert.deepEqual(scopes,[`task:${one.data.id}`,`task:${two.data.id}`]);
+});
+
+test('old Template binding without a snapshot keeps simultaneous Skill and order edits',async t=>{
+  const f=await scoringFixture(t),g=group(f.d);
+  const template=Number(f.d.prepare(`INSERT INTO activity_templates(name,title_template,category,assignment_strategy,assignment_policy,
+    subject_required,presence_policy,created_by,points,assignment_group_json)
+    VALUES('Older','Older work','misc','eligible_round_robin','group_rotation',0,'ignore',1,0,?)`)
+    .run(JSON.stringify({group_id:g.id,start_mode:'first',direction:'first_to_last'})).lastInsertRowid);
+  const created=await f.create({activity_template_id:template,due_date:'2026-11-01'});
+  assert.equal(created.status,201,JSON.stringify(created));
+  const id=created.data.id;
+  f.d.prepare('UPDATE task_activity_bindings SET definition_snapshot_json=NULL WHERE task_id=?').run(id);
+  const skill=Number(f.d.prepare("INSERT INTO skills(name,minimum_age,age_promotion,created_by) VALUES('Combined edit skill',0,'normal',1)").run().lastInsertRowid);
+  for(const member of [2,3])f.d.prepare("INSERT INTO user_skill_proficiency(user_id,skill_id,proficiency,source,updated_by) VALUES(?,?,'normal','manual',1)").run(member,skill);
+  const config={group_id:g.id,start_mode:'first',direction:'first_to_last',member_order:[3,2]};
+  const edited=await f.edit(id,{activity_template_id:template,skill_ids:[skill],assignment_group:config});
+  assert.equal(edited.status,200,JSON.stringify(edited));
+  const snapshot=JSON.parse(f.d.prepare('SELECT definition_snapshot_json FROM task_activity_bindings WHERE task_id=?').get(id).definition_snapshot_json);
+  assert.deepEqual(snapshot.required_skill_ids,[skill]);
+  assert.deepEqual(JSON.parse(snapshot.assignment_group_json),config);
+});
+
+test('attaching a Group Template to an existing Task applies its chosen instance order',async t=>{
+  const f=await scoringFixture(t),g=group(f.d);
+  const template=Number(f.d.prepare(`INSERT INTO activity_templates(name,title_template,category,assignment_strategy,assignment_policy,
+    subject_required,presence_policy,created_by,points,assignment_group_json)
+    VALUES('Attach','Attached work','misc','eligible_round_robin','group_rotation',0,'ignore',1,0,?)`)
+    .run(JSON.stringify({group_id:g.id,start_mode:'first',direction:'first_to_last'})).lastInsertRowid);
+  const ordinary=await f.create({title:'Before binding',due_date:'2026-11-01',assigned_to:[1]});
+  assert.equal(ordinary.status,201,JSON.stringify(ordinary));
+  const config={group_id:g.id,start_mode:'first',direction:'first_to_last',member_order:[3,2]};
+  const edited=await f.edit(ordinary.data.id,{activity_template_id:template,assignment_group:config});
+  assert.equal(edited.status,200,JSON.stringify(edited));
+  assert.equal(f.row(ordinary.data.id).assigned_to,3);
+  assert.deepEqual(JSON.parse(f.row(ordinary.data.id).assignment_group_json),config);
+  assert.deepEqual(JSON.parse(JSON.parse(f.d.prepare('SELECT definition_snapshot_json FROM task_activity_bindings WHERE task_id=?')
+    .get(ordinary.data.id).definition_snapshot_json).assignment_group_json),config);
 });
 
 test('manual subtask Group choice saves a concrete qualified assignee',async t=>{
@@ -236,4 +344,24 @@ test('shared scheduled Group supplies its Group-owned order without advancing an
   assert.equal(chooseGroupAssignee(f.d,config,{consumerKey:'one',eligibleIds:[2,3],dateKey:'2026-11-01',commit:true}),2);
   assert.equal(chooseGroupAssignee(f.d,config,{consumerKey:'two',eligibleIds:[3],dateKey:'2026-11-01',commit:true}),3);
   assert.equal(f.d.prepare("SELECT count(*) n FROM assignment_rotation_state WHERE rotation_key LIKE 'group-assignment:%'").get().n,0);
+});
+
+test('shared Group Template instances use Group order and reject Activity order overrides',async t=>{
+  const f=await scoringFixture(t);
+  const shared=saveRotationGroupUsage(f.d,{name:'Shared Template',member_ids:[2,3],usage_mode:'shared',
+    shared_config:{strategy:'rotating_order',start_mode:'first',effective_date:'2026-11-01',weekdays:[0,1,2,3,4,5,6],
+      active_time:'10:00',finalize_time:'23:00',finalize_day_offset:0,eligibility:{}}},{actorId:1,now:new Date('2026-11-01T12:00:00Z')});
+  const config={group_id:shared.id,start_mode:'first',direction:'first_to_last'};
+  const template=Number(f.d.prepare(`INSERT INTO activity_templates(name,title_template,category,assignment_strategy,assignment_policy,
+    subject_required,presence_policy,created_by,points,assignment_group_json)
+    VALUES('Shared source','Shared work','misc','eligible_round_robin','group_rotation',0,'ignore',1,0,?)`)
+    .run(JSON.stringify({...config,member_order:[3,2]})).lastInsertRowid);
+  const created=await f.create({activity_template_id:template,due_date:'2026-11-01'});
+  assert.equal(created.status,201,JSON.stringify(created));
+  assert.equal(f.row(created.data.id).assigned_to,2);
+  assert.equal(JSON.parse(f.row(created.data.id).assignment_group_json).member_order,undefined);
+  const denied=await f.create({activity_template_id:template,due_date:'2026-11-01',assignment_group:{...config,member_order:[3,2]}});
+  assert.equal(denied.status,400);
+  const manual=await f.create({due_date:'2026-11-01',assignment_group:{...config,member_order:[3,2]}});
+  assert.equal(manual.status,400);
 });

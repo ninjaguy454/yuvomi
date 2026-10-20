@@ -11,6 +11,7 @@ export function bindGroupAssignmentOrder(root,{onChange=()=>{}}={}) {
     return [...saved,...current().filter(id=>!saved.includes(id))];
   };
   const draw=()=>{
+    root.dataset.groupOrderValue=JSON.stringify(groupId&&explicit?savedOrder:null);
     root.hidden=!groupId||locked||members.length<2;
     root.replaceChildren();
     if(root.hidden)return;

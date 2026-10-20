@@ -1005,6 +1005,33 @@ function instanceActivitySkillSnapshot(d, templateId, skillIds, existingSnapshot
   return snapshot;
 }
 
+function instanceGroupSnapshot(d,snapshot,requested,{newInstance=false}={}) {
+  if(newInstance&&Array.isArray(snapshot.checklist))snapshot={...snapshot,checklist:snapshot.checklist.map(item=>{
+    if(!item.assignment_group_json)return item;
+    const configuration=typeof item.assignment_group_json==='string'?JSON.parse(item.assignment_group_json):item.assignment_group_json;
+    const {member_order,...defaultConfiguration}=configuration;
+    return {...item,assignment_group_json:JSON.stringify(defaultConfiguration)};
+  })};
+  if((snapshot.assignment_policy||snapshot.assignment_strategy)!=='group_rotation') {
+    if(requested)throw new TaskStateError('This Activity Template does not use a Rotation Group.',{},400);
+    return snapshot;
+  }
+  const source=typeof snapshot.assignment_group_json==='string'?JSON.parse(snapshot.assignment_group_json):snapshot.assignment_group_json;
+  if(!source?.group_id)throw new TaskStateError('This Activity Template has no Rotation Group.',{},400);
+  const configuration=normalizeGroupAssignment(d,requested||{
+    ...source,...(newInstance?{member_order:undefined}:{})
+  },{allowInactive:!newInstance,allowImported:!newInstance});
+  if(Number(configuration.group_id)!==Number(source.group_id))
+    throw new TaskStateError('Choose the Group configured on this Activity Template.',{},400);
+  return {...snapshot,assignment_group_json:JSON.stringify(configuration)};
+}
+
+function sharedGroupOnDate(d,groupId,dateKey) {
+  return d.prepare(`SELECT v.usage_mode FROM rotation_group_schedule_versions v
+    JOIN rotation_group_schedules s ON s.id=v.schedule_id WHERE s.group_id=? AND v.effective_date<=?
+    ORDER BY v.effective_date DESC,v.id DESC LIMIT 1`).get(groupId,dateKey)?.usage_mode==='shared';
+}
+
 function independentlyAssignedTaskMembers(taskId, userIds, previousUserIds, primaryUserId) {
   const direct=readTaskAssigneePolicy(db.get(),taskId);
   if(direct)return userIds.filter(id=>direct.direct_assignee_ids.includes(id)||!previousUserIds.includes(id)||id===primaryUserId);
@@ -2449,13 +2476,23 @@ export function createTaskDefinition(req, res) {
     const visibility = normalizeVisibility(req.body.visibility);
 
     const skillIds = taskSkillInput(req.body, null, activityBinding?.activityTemplateId);
-    const assignmentGroup=normalizeGroupAssignment(db.get(),req.body.assignment_group);
+    const assignmentGroup=activityBinding?null:normalizeGroupAssignment(db.get(),req.body.assignment_group);
+    if(req.body.assignment_group&&!activityBinding&&parent_task_id)return res.status(400).json({error:'Choose the Group in the parent subtask editor.',code:400});
     if(assignmentGroup){
-      if(activityBinding||parent_task_id)return res.status(400).json({error:'Choose the Group on the Activity Template or subtask.',code:400});
+      if(assignmentGroup.member_order&&sharedGroupOnDate(db.get(),assignmentGroup.group_id,due_date||todayInHouseholdZone()))
+        return res.status(400).json({error:'This shared Group uses its Group-owned order.',code:400});
       assertCapability(db.get(),req,'rotations.view');
     }
-    const activitySkillSnapshot=activityBinding?instanceActivitySkillSnapshot(db.get(),activityBinding.activityTemplateId,
+    let activitySkillSnapshot=activityBinding?instanceActivitySkillSnapshot(db.get(),activityBinding.activityTemplateId,
       skillIds,req[templateLaunchSnapshot]||null):null;
+    if(activityBinding){
+      activitySkillSnapshot=instanceGroupSnapshot(db.get(),activitySkillSnapshot||captureActivityTemplateDefinition(db.get(),activityBinding.activityTemplateId),
+        req.body.assignment_group,{newInstance:true});
+      if(req.body.assignment_group){const config=JSON.parse(activitySkillSnapshot.assignment_group_json||'null');
+        if(config&&sharedGroupOnDate(db.get(),config.group_id,due_date||todayInHouseholdZone())&&config.member_order)
+          return res.status(400).json({error:'This shared Group uses its Group-owned order.',code:400});}
+      if(req.body.assignment_group)assertCapability(db.get(),req,'rotations.view');
+    }
     const initialSubtasks = initialSubtasksInput(req.body);
     if(initialSubtasks?.some(child=>child.assignmentGroup))assertCapability(db.get(),req,'rotations.view');
     for (const child of initialSubtasks || []) assertTaskMutation(db.get(), req, null, {points:child.points}, {operation:'create'});
@@ -2589,7 +2626,9 @@ export function createTaskDefinition(req, res) {
           subjectUserId: activityBinding.subjectUserId,
           assignmentOverrideUserId: activityBinding.assignmentOverrideUserId,
           commitRotation: true,
-          activitySnapshot: activitySkillSnapshot,
+          activitySnapshot:(activitySkillSnapshot.assignment_policy||activitySkillSnapshot.assignment_strategy)==='group_rotation'
+            ?{...activitySkillSnapshot,rotation_scope:groupSeriesId?`series:${groupSeriesId}`:`task:${result.lastInsertRowid}`}
+            :activitySkillSnapshot,
           dateKey: due_date || todayInHouseholdZone(),
           materializeChecklist: initialSubtasks === undefined,
           variableLabels: activityDraft?.variable_labels,
@@ -2858,7 +2897,7 @@ export function updateTaskDefinition(req, res) {
     const skillsBefore = existingActivityBinding?.definition_snapshot_json
       ? JSON.parse(existingActivityBinding.definition_snapshot_json).required_skill_ids : loadTaskSkillIds(db.get(), task.id);
     const skillIds = taskSkillInput(req.body, task.id, desiredActivityBinding?.activityTemplateId);
-    const activitySkillSnapshot=desiredActivityBinding?instanceActivitySkillSnapshot(db.get(),desiredActivityBinding.activityTemplateId,
+    let activitySkillSnapshot=desiredActivityBinding?instanceActivitySkillSnapshot(db.get(),desiredActivityBinding.activityTemplateId,
       skillIds,existingActivityBinding?.activity_template_id===desiredActivityBinding.activityTemplateId&&existingActivityBinding.definition_snapshot_json
         ?readTaskActivityDefinition(db.get(),task.id):null):null;
     const editedSubtasks = editedSubtasksInput(task,req.body,req,{definitionOnly:historicalSeriesOnly});
@@ -2866,10 +2905,25 @@ export function updateTaskDefinition(req, res) {
     const incomingGroup=req.body.assignment_group===undefined?task.assignment_group_json:req.body.assignment_group;
     const priorGroup=task.assignment_group_json?JSON.parse(task.assignment_group_json):null;
     const incomingGroupId=(typeof incomingGroup==='string'?JSON.parse(incomingGroup):incomingGroup)?.group_id;
-    const assignmentGroup=desiredActivityBinding&&bindingChanged?null:desiredActivityBinding?priorGroup:normalizeGroupAssignment(db.get(),incomingGroup,
+    const assignmentGroup=desiredActivityBinding&&bindingChanged?null:desiredActivityBinding&&priorGroup
+      ?normalizeGroupAssignment(db.get(),incomingGroup||priorGroup,{allowInactive:true,allowImported:true})
+      :desiredActivityBinding?null:normalizeGroupAssignment(db.get(),incomingGroup,
       {allowInactive:!!priorGroup&&Number(incomingGroupId)===Number(priorGroup.group_id),
         allowImported:!!priorGroup&&Number(incomingGroupId)===Number(priorGroup.group_id)});
+    if(desiredActivityBinding&&!bindingChanged&&assignmentGroup&&Number(assignmentGroup.group_id)!==Number(priorGroup?.group_id))
+      return res.status(400).json({error:'Choose the Group configured on this Activity.',code:400});
+    if(desiredActivityBinding&&bindingChanged){
+      activitySkillSnapshot=instanceGroupSnapshot(db.get(),activitySkillSnapshot||captureActivityTemplateDefinition(db.get(),desiredActivityBinding.activityTemplateId),
+        req.body.assignment_group,{newInstance:true});
+      if(req.body.assignment_group){const config=JSON.parse(activitySkillSnapshot.assignment_group_json||'null');
+        if(config&&sharedGroupOnDate(db.get(),config.group_id,due_date||todayInHouseholdZone())&&config.member_order)
+          return res.status(400).json({error:'This shared Group uses its Group-owned order.',code:400});
+        assertCapability(db.get(),req,'rotations.view');}
+    }
     const groupConfigurationChanged=JSON.stringify(assignmentGroup)!==(task.assignment_group_json||'null');
+    if(groupConfigurationChanged&&assignmentGroup&&sharedGroupOnDate(db.get(),assignmentGroup.group_id,due_date||todayInHouseholdZone())
+      &&(assignmentGroup.member_order||priorGroup&&Number(priorGroup.group_id)===Number(assignmentGroup.group_id)))
+      return res.status(400).json({error:'This shared Group uses its Group-owned order and rotation settings.',code:400});
     if(groupConfigurationChanged){if(assignmentGroup)assertCapability(db.get(),req,'rotations.view');
       const groupPermissions=taskCapabilities(db.get(),req,task);
       if(!groupPermissions.change_assignment||!groupPermissions.reassign)return res.status(403).json({error:'Your permissions do not allow changing this assignment.',code:403});}
@@ -2932,7 +2986,7 @@ export function updateTaskDefinition(req, res) {
       return res.status(409).json({ error: 'Cannot change a rotation-group position after its current cycle has started.', code: 409 });
     }
 
-    const groupSelected=assignmentGroup&&!desiredActivityBinding?(groupConfigurationChanged
+    const groupSelected=assignmentGroup&&desiredActivityBinding?Number(task.assigned_to)||null:assignmentGroup?(groupConfigurationChanged
       ?selectTaskGroupMember(task.id,assignmentGroup,skillIds,{consumerKey:taskSeriesState(db.get(),task.id)?.series_id?`series:${taskSeriesState(db.get(),task.id).series_id}:root`:`task:${task.id}`,
         commit:false,allowDelegation:false})
       :Number(task.assigned_to)||null):null;
@@ -3170,17 +3224,24 @@ export function updateTaskDefinition(req, res) {
       if(rotationsChanged)db.get().prepare('UPDATE tasks SET rotation_bindings_json=? WHERE id=?').run(rotationBindingsJson,task.id);
       setAssignments(db.get(), task.id, userIds);
       if(assignmentGroup&&groupSelected){
-        if(groupConfigurationChanged){const committed=selectTaskGroupMember(task.id,assignmentGroup,skillIds,
+        if(groupConfigurationChanged&&!desiredActivityBinding){const committed=selectTaskGroupMember(task.id,assignmentGroup,skillIds,
           {consumerKey:taskSeriesState(db.get(),task.id)?.series_id?`series:${taskSeriesState(db.get(),task.id).series_id}:root`:`task:${task.id}`,allowDelegation:false});
           if(committed!==groupSelected)throw new TaskSkillError('The Group changed while saving. Retry this edit.');}
         recordGroupAssignment(db.get(),task.id,assignmentGroup,groupSelected);
+      }else if(assignmentGroup&&groupConfigurationChanged){
+        db.get().prepare('UPDATE tasks SET assignment_group_json=? WHERE id=?').run(JSON.stringify(assignmentGroup),task.id);
       }else if(groupConfigurationChanged){
         db.get().prepare('UPDATE tasks SET assignment_group_json=NULL WHERE id=?').run(task.id);
         db.get().prepare("UPDATE task_group_assignment_decisions SET superseded_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE task_id=? AND superseded_at IS NULL").run(task.id);
       }
       setTaskSkills(db.get(), task.id, skillIds);
       updateTaskActivitySnapshotSkills(db.get(),task.id,skillIds);
-      if(desiredActivityBinding&&!bindingChanged&&activitySkillSnapshot&&!existingActivityBinding?.definition_snapshot_json)
+      if(groupConfigurationChanged&&desiredActivityBinding&&!bindingChanged&&assignmentGroup){
+        const snapshot=activitySkillSnapshot||readTaskActivityDefinition(db.get(),task.id);
+        if(snapshot){snapshot.assignment_group_json=JSON.stringify(assignmentGroup);
+          db.get().prepare('UPDATE task_activity_bindings SET definition_snapshot_json=? WHERE task_id=?').run(JSON.stringify(snapshot),task.id);}
+      }
+      if(desiredActivityBinding&&!bindingChanged&&activitySkillSnapshot&&!existingActivityBinding?.definition_snapshot_json&&!groupConfigurationChanged)
         db.get().prepare('UPDATE task_activity_bindings SET definition_snapshot_json=? WHERE task_id=?')
           .run(JSON.stringify(activitySkillSnapshot),task.id);
       setRotationMembers(db.get(), task.id, assignmentMode === 'round_robin' ? rotationUserIds : []);
@@ -3222,7 +3283,10 @@ export function updateTaskDefinition(req, res) {
             adoptAssigneePolicy: true,
             commitRotation: true,
             dateKey: due_date || todayInHouseholdZone(),
-            activitySnapshot:activitySkillSnapshot||captureActivityTemplateDefinition(db.get(),desiredActivityBinding.activityTemplateId),
+            activitySnapshot:(activitySkillSnapshot.assignment_policy||activitySkillSnapshot.assignment_strategy)==='group_rotation'
+              ?{...activitySkillSnapshot,rotation_scope:activitySkillSnapshot.rotation_scope
+                ||(taskSeriesState(db.get(),task.id)?.series_id?`series:${taskSeriesState(db.get(),task.id).series_id}`:`task:${task.id}`)}
+              :activitySkillSnapshot,
           });
         } else {
           clearTaskActivityBinding(db.get(), task.id);

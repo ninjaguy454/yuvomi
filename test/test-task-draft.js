@@ -26,9 +26,16 @@ test('template values and skills are copied without sharing mutable arrays or oc
   for (const field of ['tags', 'skill_ids', 'subtasks']) assert.deepEqual(blank[field], []);
   assert.equal(blank.start_date, null); assert.equal(blank.due_date, null);
 });
+test('Template checklist Groups start each subtask from Group order',()=>{
+  const saved={group_id:9,start_mode:'random',direction:'first_to_last',member_order:[2,1]};
+  const draft=createManualTaskDraft({template:{checklist:[{title_template:'Action',assignment_group_json:JSON.stringify(saved)}]}});
+  assert.deepEqual(draft.subtasks[0].assignment_group,{group_id:9,start_mode:'random',direction:'first_to_last'});
+  assert.deepEqual(saved.member_order,[2,1]);
+});
 test('dirty comparison means difference from baseline, including custom fields and pending documents', () => {
   const fields = [{ id: 'task-activity-template', value: '1' }, { id: 'task-title', value: 'Filled template' }, { id: 'task-due-date', value: '' }, { id: 'task-locked', type: 'checkbox', value: 'on', checked: false }];
-  const form = { querySelectorAll: () => fields };
+  const groupOrder={dataset:{groupOrderValue:'null'}};
+  const form = { querySelectorAll: selector => selector.includes('data-task-group-order')?[groupOrder]:fields };
   const baseline = taskDraftSnapshot(form);
   fields[0].value = '2'; assert.equal(taskDraftSnapshot(form), baseline);
   fields[1].value += ' edited'; assert.notEqual(taskDraftSnapshot(form), baseline);
@@ -37,6 +44,7 @@ test('dirty comparison means difference from baseline, including custom fields a
   assert.notEqual(taskDraftSnapshot(form, { documents: [9] }), baseline);
   assert.notEqual(taskDraftSnapshot(form, { pendingFiles: true }), baseline);
   fields[2].value = '2026-09-08'; assert.notEqual(taskDraftSnapshot(form), baseline);
+  fields[2].value = '';groupOrder.dataset.groupOrderValue='[2,1]';assert.notEqual(taskDraftSnapshot(form),baseline);
 });
 test('Save as Template copies reusable fields and excludes occurrence-only settings', () => {
   const draft = { title: 'Prep', description: 'Dinner', priority: 'high', category: 'misc', points: 8, tags: ['home'], skill_ids: [1], subtasks: [{ title: 'Chop', skill_ids: [2] }], location: { kind: 'saved_place', place_id: 2 }, assigned_users: [7], due_date: '2026-09-08', recurrence_rule: 'FREQ=DAILY', countdown: 1, documents: [3], reminder: { remind_at: 'now' } };

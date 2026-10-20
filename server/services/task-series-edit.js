@@ -76,6 +76,11 @@ export function proposedFutureSeriesDefinition(d,actor,root,before,patch,{valida
         const prior=target.task.assignment_group_json?JSON.parse(target.task.assignment_group_json):null;
         const requested=typeof value==='string'?JSON.parse(value):value;
         const group=normalizeGroupAssignment(d,value,{allowImported:!!prior&&Number(prior.group_id)===Number(requested?.group_id)});
+        if(target===after&&after.binding?.snapshot&&(after.binding.snapshot.assignment_policy||after.binding.snapshot.assignment_strategy)==='group_rotation'){
+          if(!group||Number(group.group_id)!==Number(prior?.group_id))
+            bad('Choose the Group configured on this Activity.',400);
+          after.binding.snapshot.assignment_group_json=JSON.stringify(group);
+        }
         target.task.assignment_group_json=group?JSON.stringify(group):null;
       }
       else target.task[key]=key==='title'?value.trim():key==='points'?Number(value):value;

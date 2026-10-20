@@ -1059,7 +1059,11 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
   const rotationIds = task?.rotation_user_ids ?? [];
   const assignmentMode = task?.assignment_mode || 'fixed';
   const rotationGroup = task?.rotation_group || '';
-  const savedAssignmentGroup=typeof task?.assignment_group_json==='string'?JSON.parse(task.assignment_group_json):task?.assignment_group_json;
+  const templateGroupSource=presetActivityTemplate?.assignment_group_json
+    ||state.activityTemplates.find(item=>Number(item.id)===Number(task?.activity_template_id))?.assignment_group_json;
+  const templateGroup=typeof templateGroupSource==='string'?JSON.parse(templateGroupSource):templateGroupSource;
+  const savedAssignmentGroup=(typeof task?.assignment_group_json==='string'?JSON.parse(task.assignment_group_json):task?.assignment_group_json)
+    ||(!isEdit&&templateGroup?{...templateGroup,member_order:undefined}:null);
   const legacyMappedGroup=task?.legacy_rotation_group;
   const importedSavedGroup=task?.legacy_assignment_group;
   const missingSavedGroup=savedAssignmentGroup&&!state.rotationGroups.some(group=>Number(group.id)===Number(savedAssignmentGroup.group_id));
@@ -1277,7 +1281,7 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
       ${state.rotationGroups.length||canCapability('rotations.manage')||savedAssignmentGroup||legacyMappedGroup?`<div id="task-group-assignment" class="form-group"><strong>Rotation Groups</strong>
         <p class="task-field-hint">Choose a Group for this Activity's assignee. Members are shared; independent Activities can set their own order and starting choice.</p>
         ${legacyMappedGroup?`<details class="task-field-hint"><summary><span class="rotation-group-choice__avatar" aria-hidden="true"><i data-lucide="users-round"></i></span> ${esc(legacyMappedGroup.name||'Imported Group')}</summary><p>${legacyMappedGroup.compatibility_mode==='converted_independent'?'This Task keeps its recorded assignee. Future occurrences use this Group and an exact next-person cursor. Member order and schedule are locked to preserve the sequence.':'This recurring Task uses position '+Number(legacyMappedGroup.slot)+' in a synchronized Group. Its saved member order and cursor remain in effect. Group membership and schedule changes are locked to preserve the other Tasks in this cycle.'} Choosing another Group replaces this legacy rotation.</p></details>`:''}
-        <div class="rotation-group-choices" role="group" aria-label="Rotation Groups for assignment">${importedSavedGroup&&missingSavedGroup?`<button type="button" class="rotation-group-choice" data-task-group-choice="${Number(importedSavedGroup.group_id)}"><span class="rotation-group-choice__avatar" aria-hidden="true"><i data-lucide="users-round"></i></span><span class="rotation-group-choice__name">${esc(importedSavedGroup.name)}</span></button>`:''}${state.rotationGroups.filter(group=>group.active).map(group=>`<button type="button" class="rotation-group-choice" data-task-group-choice="${Number(group.id)}"><span class="rotation-group-choice__avatar" aria-hidden="true"><i data-lucide="users-round"></i></span><span class="rotation-group-choice__name">${esc(group.name)}</span></button>`).join('')}</div>
+        <div class="rotation-group-choices" role="group" aria-label="Rotation Groups for assignment">${importedSavedGroup&&missingSavedGroup?`<button type="button" class="rotation-group-choice" data-task-group-choice="${Number(importedSavedGroup.group_id)}"><span class="rotation-group-choice__avatar" aria-hidden="true"><i data-lucide="users-round"></i></span><span class="rotation-group-choice__name">${esc(importedSavedGroup.name)}</span></button>`:''}${state.rotationGroups.filter(group=>group.active||Number(group.id)===Number(savedAssignmentGroup?.group_id)).map(group=>`<button type="button" class="rotation-group-choice" data-task-group-choice="${Number(group.id)}"><span class="rotation-group-choice__avatar" aria-hidden="true"><i data-lucide="users-round"></i></span><span class="rotation-group-choice__name">${esc(group.name)}${group.active?'':' (inactive)'}</span></button>`).join('')}</div>
         <details data-task-group-behavior><summary>Edit assigned Group behavior</summary>
           <p class="task-field-hint" data-task-group-summary>Group membership is shared. This Activity's order, start and direction apply to independent Groups.</p>
           <label class="form-label">Group<select class="input" data-task-assignment-group><option value="">No Group</option>${missingSavedGroup?`<option value="${Number(savedAssignmentGroup.group_id)}">${esc(importedSavedGroup?.name||'Saved Rotation Group')}</option>`:''}${state.rotationGroups.map(group=>`<option value="${Number(group.id)}" ${group.active||Number(group.id)===Number(savedAssignmentGroup?.group_id)?'':'disabled'}>${esc(group.name)}${group.active?'':' (inactive)'}</option>`).join('')}</select></label>
@@ -1858,15 +1862,16 @@ function wireVisibilityWarning(panel, selectSel, msName, warnSel) {
 }
 
 function taskActivityAssignmentPolicy(activity, task, templateId) {
-  if ((task?.recurrence_series_id != null || Array.isArray(task?.activity_fixed_assignee_ids)) && Number(task.activity_template_id) === Number(templateId)) {
+  if ((task?.activity_assignment_policy || task?.recurrence_series_id != null || Array.isArray(task?.activity_fixed_assignee_ids)) && Number(task.activity_template_id) === Number(templateId)) {
     return { ...activity,
-      assignment_strategy: task.activity_assignment_strategy ?? activity?.assignment_strategy,
+      assignment_strategy: task.activity_assignment_policy ?? task.activity_assignment_strategy
+        ?? activity?.assignment_policy ?? activity?.assignment_strategy,
       allow_assignment_override: task.activity_assignment_override_allowed ?? activity?.allow_assignment_override,
       subject_required: task.activity_subject_required ?? activity?.subject_required,
       fixed_assignee_ids: task.activity_fixed_assignee_ids ?? null,
     };
   }
-  return activity;
+  return activity?{...activity,assignment_strategy:activity.assignment_policy||activity.assignment_strategy}:activity;
 }
 
 function selectedTaskGroupConfiguration(form,task=null){
@@ -1888,6 +1893,7 @@ function wireAssignmentMode(panel, task) {
   const rotation = panel.querySelector('#task-round-robin-assignment');
   const groupPanel=panel.querySelector('#task-group-assignment'),groupSelect=groupPanel?.querySelector('[data-task-assignment-group]');
   const storedGroup=typeof task?.assignment_group_json==='string'?JSON.parse(task.assignment_group_json):task?.assignment_group_json;
+  let orderSeed=storedGroup;
   const groupOrder=groupPanel?.querySelector('[data-task-group-order]');
   if(groupOrder)groupPanel.groupOrderEditor=bindGroupAssignmentOrder(groupOrder,{onChange:()=>groupPanel.dispatchEvent(new Event('input',{bubbles:true}))});
   let lastOrderGroupId=null;
@@ -1899,7 +1905,7 @@ function wireAssignmentMode(panel, task) {
     const chosen=assignmentGroupBehavior(selected,{dateKey:parseDateInput(panel.querySelector('#task-due-date')?.value)||selected?.household_today}),shared=chosen?.usage_mode==='shared';
     const chosenId=Number(chosen?.id)||null;
     groupPanel?.groupOrderEditor?.set(chosen,chosenId!==lastOrderGroupId
-      ?Number(storedGroup?.group_id)===chosenId?storedGroup.member_order||[]:[]:undefined,
+      ?Number(orderSeed?.group_id)===chosenId?orderSeed.member_order||[]:[]:undefined,
       {readOnly:!!chosen?.legacy_exact_next});
     lastOrderGroupId=chosenId;
     if(groupPanel)groupPanel.querySelector('[data-task-group-summary]').textContent=chosen?.legacy_exact_next
@@ -1937,13 +1943,26 @@ function wireAssignmentMode(panel, task) {
   const update = () => {
     const managed = !!activity?.value;
     const template = taskActivityAssignmentPolicy(state.activityTemplates.find(entry => Number(entry.id) === Number(activity?.value)), task, activity?.value);
+    const managedGroup=managed&&template?.assignment_strategy==='group_rotation';
+    const templateConfig=managedGroup?(task?.activity_template_id&&Number(task.activity_template_id)===Number(activity.value)&&storedGroup
+      ?storedGroup:typeof template.assignment_group_json==='string'?JSON.parse(template.assignment_group_json):template.assignment_group_json):null;
+    if(managedGroup&&groupSelect&&templateConfig&&Number(groupSelect.value)!==Number(templateConfig.group_id)){
+      groupSelect.value=String(templateConfig.group_id);
+      groupPanel.querySelector('[data-task-assignment-group-start]').value=templateConfig.start_mode||'first';
+      groupPanel.querySelector('[data-task-assignment-group-direction]').value=templateConfig.direction||'first_to_last';
+      orderSeed=null;lastOrderGroupId=null;updateGroup();
+    }
     const templateFixed = managed && template?.assignment_strategy === 'fixed';
     const assignmentAllowed = task ? canTask(task, 'change_assignment') : canCapability('tasks.change_assignment');
+    const groupEditable=assignmentAllowed&&canCapability('rotations.view')&&(!task||canTask(task,'reassign'));
     const overrideAllowed = templateFixed && !!template.allow_assignment_override && assignmentAllowed;
     const requiresSubject = managed
       && activity.selectedOptions?.[0]?.dataset.subjectRequired === '1';
     const manualVisible = !managed && !isSoloHousehold();
-    if(groupPanel)groupPanel.hidden=managed||!assignmentAllowed;
+    if(groupPanel){groupPanel.hidden=(managed&&!managedGroup)||!groupEditable;
+      groupPanel.querySelectorAll('[data-task-group-choice]').forEach(button=>{button.hidden=!!managedGroup&&button.dataset.taskGroupChoice!==groupSelect.value;});
+      groupSelect.closest('label').hidden=!!managedGroup;
+      const createGroup=groupPanel.querySelector('[data-task-create-group]');if(createGroup)createGroup.hidden=!!managedGroup;}
     if (subject) subject.hidden = !requiresSubject;
     if (modeWrap) modeWrap.hidden = !manualVisible;
     const roundRobin = manualVisible && mode.value === 'round_robin';
@@ -1960,7 +1979,9 @@ function wireAssignmentMode(panel, task) {
     }
     rotation.hidden = !roundRobin;
   };
-  activity?.addEventListener('change', update);
+  // A new Task's Template switch can still be canceled. Its accepted path
+  // rebuilds the form, so leave this draft untouched until that decision.
+  activity?.addEventListener('change',()=>{if(task)update();});
   mode.addEventListener('change', update);
   fixed.addEventListener('change',event=>{if(event.target.matches('[data-ms-input="task_assigned"]')&&groupSelect?.value){groupSelect.value='';updateGroup();update();}});
   update();
@@ -3019,7 +3040,8 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
   const assignmentMode = managedActivity ? 'fixed' : (form.querySelector('#task-assignment-mode')?.value || 'fixed');
   const rotationUserIds = managedActivity ? [] : getRotationUserIds(form);
   const rotationGroup = managedActivity ? '' : (form.querySelector('#task-rotation-group')?.value.trim() || '');
-  const selectedGroupId=!managedActivity?Number(form.querySelector('[data-task-assignment-group]')?.value)||null:null;
+  const selectedGroupId=!managedActivity||selectedTemplate?.assignment_strategy==='group_rotation'
+    ?Number(form.querySelector('[data-task-assignment-group]')?.value)||null:null;
   const rotationPosition = Number(form.querySelector('#task-rotation-position')?.value || 1);
 
   const body = {

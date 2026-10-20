@@ -37,7 +37,10 @@ const templates = [
   { id: 16, name: 'Weekly homework', title_template: 'Weekly Homework', points: 5, assignment_strategy: 'fixed', fixed_user_id: 2,
     due_date_offset_days: 4, start_time: '15:30', due_time: '07:30', recurrence_rule: 'FREQ=WEEKLY;BYDAY=MO', expiration_policy: 'keep_overdue', checklist: [] },
   { id: 17, name: 'Saved shared group', title_template: 'Shared group work', category: 'misc', points: 0,
-    assignment_strategy: 'group_rotation', assignment_group_json: JSON.stringify({group_id:32,start_mode:'random',direction:'last_to_first'}), checklist: [] },
+    assignment_strategy: 'eligible_round_robin', assignment_policy:'group_rotation', assignment_group_json: JSON.stringify({group_id:32,start_mode:'random',direction:'last_to_first'}), checklist: [] },
+  { id: 18, name: 'Saved independent group', title_template: 'Independent group work', category: 'misc', points: 0,
+    assignment_strategy: 'eligible_round_robin', assignment_policy:'group_rotation', assignment_group_json: JSON.stringify({group_id:31,start_mode:'first',direction:'first_to_last',member_order:[2,1]}),
+    checklist:[{id:181,title_template:'Group action',assignment_group_json:JSON.stringify({group_id:31,start_mode:'first',direction:'first_to_last',member_order:[2,1]})}] },
 ];
 const workflow = { id: 21, name: 'Evening reset', description: 'Two connected Tasks', subject_required: 0, input_schema: [], steps: [] };
 const preferenceValues = new Map(), requests = [];
@@ -181,7 +184,7 @@ for(const width of [1366,390])test(`Group chips and subtask picker save first/ra
   }finally{await page.dispose();}
 });
 
-test('independent root, subtask and Template keep their own keyboard-editable member orders',async()=>{
+test('independent root and subtask keep their own keyboard-editable member orders; Template instance starts from Group order',async()=>{
   requests.length=0;createReceipts.clear();
   const page=await mounted({width:390});
   try{
@@ -203,16 +206,94 @@ test('independent root, subtask and Template keep their own keyboard-editable me
     assert.deepEqual(created.subtasks[0].assignment_group.member_order,[2,1]);
     await page.evaluate(async()=>{const root=document.createElement('div');document.body.append(root);
       const {renderAutomationManager}=await import('/components/activity-automation.js');await renderAutomationManager(root,{tab:'activities'});});
-    await page.click('[data-edit-activity="17"]');await page.waitForSelector('#automation-activity-form');
-    await page.select('#automation-assignment-strategy','group_rotation');
-    await page.select('[name="assignment_group_id"]','31');
-    await page.focus('[data-template-group-order] [data-group-order-move="down"]:not([disabled])');
-    await page.keyboard.press('Enter');
+    await page.click('[data-edit-activity="18"]');await page.waitForSelector('#automation-activity-form');
+    assert.equal(await page.$('[data-template-group-order]'),null);
     await page.click('#shared-modal-overlay [type="submit"]');
     await page.waitForFunction(()=>!document.querySelector('#automation-activity-form'));
-    const template=requests.find(row=>row.path==='/automation/admin/activity-templates/17'&&row.method==='PUT')?.body;
+    const template=requests.find(row=>row.path==='/automation/admin/activity-templates/18'&&row.method==='PUT')?.body;
     assert.deepEqual(template?.assignment_group.member_order,[2,1]);
   }finally{await page.dispose();}
+});
+
+test('Template-created independent Activity can choose its own order on the create form',async()=>{
+  requests.length=0;createReceipts.clear();
+  preferenceValues.set(1,{tasks_template_switch_warning:false});
+  const page=await mounted({width:390});
+  try{
+    await page.select('#task-activity-template','18');
+    await page.waitForFunction(()=>!document.querySelector('#task-group-assignment').hidden);
+    assert.equal(await page.$eval('#task-group-assignment',node=>node.groupOrderEditor.getValue()),null);
+    assert.deepEqual(await page.$eval('#task-group-assignment',node=>node.groupOrderEditor.getOrder()),[1,2]);
+    assert.equal(await value(page,'[data-task-assignment-group]'),'31');
+    assert.equal(await page.$eval('[data-task-group-behavior]',node=>node.open),true);
+    assert.equal(await value(page,'[data-task-subtask-group]'),'31');
+    assert.deepEqual(await page.$$eval('[data-task-subtask-group-order] [data-group-order-id]',nodes=>nodes.map(node=>Number(node.dataset.groupOrderId))),[1,2]);
+    await page.focus('[data-task-group-order] [data-group-order-move="down"]:not([disabled])');
+    await page.keyboard.press('Enter');
+    assert.deepEqual(await page.$eval('#task-group-assignment',node=>node.groupOrderEditor.getValue()),[2,1]);
+    await page.click('#task-submit-btn');await page.waitForFunction(()=>!document.querySelector('#task-form'));
+    const body=requests.find(row=>row.path==='/tasks'&&row.method==='POST')?.body;
+    assert.equal(body?.activity_template_id,18);
+    assert.deepEqual(body?.assignment_group.member_order,[2,1]);
+    assert.deepEqual(body?.subtasks[0].assignment_group,{group_id:31,start_mode:'first',direction:'first_to_last'});
+  }finally{await page.dispose();}
+});
+
+test('Template-created independent Activity edits its saved order despite later Template changes',async()=>{
+  const source=templates.find(item=>item.id===18),original=source.assignment_group_json;
+  source.assignment_group_json=JSON.stringify({group_id:32,start_mode:'random',direction:'last_to_first'});
+  const config={group_id:31,start_mode:'first',direction:'first_to_last',member_order:[2,1]};
+  const fixture={...seriesEditFixture(),activity_template_id:18,activity_assignment_strategy:'eligible_round_robin',activity_assignment_policy:'group_rotation',
+    activity_subject_required:0,assignment_group_json:JSON.stringify(config)};
+  const page=await mounted({editTask:fixture,width:390});requests.length=0;
+  try{
+    assert.equal(await page.$eval('#task-group-assignment',node=>node.hidden),false);
+    assert.equal(await value(page,'[data-task-assignment-group]'),'31');
+    assert.deepEqual(await page.$eval('#task-group-assignment',node=>node.groupOrderEditor.getValue()),[2,1]);
+    await page.focus('[data-task-group-order] [data-group-order-move="down"]:not([disabled])');
+    await page.keyboard.press('Enter');
+    assert.deepEqual(await page.$eval('#task-group-assignment',node=>node.groupOrderEditor.getValue()),[1,2]);
+    await saveEdit(page);await page.waitForSelector('#task-edit-scope-form');
+    await page.click('[name="edit_scope"][value="future"]');await page.click('#task-scope-apply');
+    await page.waitForSelector('#task-scoring-confirm');await page.focus('#task-scoring-confirm');await page.keyboard.press('Enter');
+    await page.waitForFunction(()=>!document.querySelector('#task-form'));
+    const body=requests.find(row=>row.path==='/tasks/70'&&row.method==='PUT')?.body;
+    assert.deepEqual(body?.assignment_group.member_order,[1,2]);
+    assert.equal(body?.activity_template_id,18);
+  }finally{source.assignment_group_json=original;await page.dispose();}
+});
+
+test('canceling a Template switch keeps an order-only Task draft',async()=>{
+  preferenceValues.clear();
+  const page=await mounted({width:390});
+  try{
+    await selectTemplate(page,18,'Independent group work');
+    await page.evaluate(()=>{window.orderDraftForm=document.querySelector('#task-form');});
+    await page.focus('[data-task-group-order] [data-group-order-move="down"]:not([disabled])');
+    await page.keyboard.press('Enter');
+    assert.deepEqual(await page.$eval('#task-group-assignment',node=>node.groupOrderEditor.getValue()),[2,1]);
+    await page.select('#task-activity-template','17');
+    await page.waitForSelector('#confirm-modal-cancel');
+    await page.click('#confirm-modal-cancel');
+    await page.waitForFunction(()=>!document.querySelector('#confirm-modal-cancel'));
+    assert.equal(await value(page,'#task-activity-template'),'18');
+    assert.deepEqual(await page.$eval('#task-group-assignment',node=>node.groupOrderEditor.getValue()),[2,1]);
+    assert.equal(await page.evaluate(()=>window.orderDraftForm===document.querySelector('#task-form')),true);
+  }finally{await page.dispose();}
+});
+
+test('Template Group with no visible Group picker does not crash the Task form',async()=>{
+  const saved=[...rotationGroups];rotationGroups.splice(0);
+  preferenceValues.set(1,{tasks_template_switch_warning:false});
+  let page;
+  try{
+    page=await mounted({width:390,role:'member'});
+    await page.select('#task-activity-template','18');
+    await page.waitForFunction(()=>document.querySelector('#task-title')?.value==='Independent group work');
+    const panel=await page.$('#task-group-assignment');
+    if(panel)assert.equal(await page.$eval('#task-group-assignment',node=>node.hidden),true);
+    assert.deepEqual(page.fixtureErrors||[],[]);
+  }finally{rotationGroups.splice(0,rotationGroups.length,...saved);if(page)await page.dispose();}
 });
 
 test('explicit Activity order survives a matching Group reorder until deliberately reset',async()=>{
@@ -874,7 +955,7 @@ test('contextual Assignee resolution follows the selected Eleanor and blocked re
 });
 
 const seriesEditFixture = () => ({ id: 70, title: 'Weekly homework', description: 'Read and write', revision: 7,
-  permissions: Object.fromEntries(['edit', 'edit_series', 'complete', 'delete_archive', 'change_priority', 'change_points', 'change_category_tags', 'change_dates', 'change_assignment', 'change_required_skills'].map(key => [key, true])),
+  permissions: Object.fromEntries(['edit', 'edit_series', 'complete', 'delete_archive', 'change_priority', 'change_points', 'change_category_tags', 'change_dates', 'change_assignment', 'reassign', 'change_required_skills'].map(key => [key, true])),
   recurrence_series_id: 9, recurrence_series_revision: 3, is_recurring: 1, recurrence_rule: 'FREQ=WEEKLY;BYDAY=MO',
   status: 'open', priority: 'none', category: 'misc', points: 5, tags: ['School'], assigned_to: 2, created_by: 1,
   start_date: '2026-09-21', due_date: '2026-09-25', start_time: '15:30', due_time: '07:30',

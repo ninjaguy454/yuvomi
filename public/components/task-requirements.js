@@ -18,6 +18,7 @@ export function assignmentGroupBehavior(group,{dateKey=null,template=false}={}) 
 
 export function assignmentGroupSummary(group,{scope='Activity'}={}) {
   const members=group?.members?.filter(member=>member.active==null||Boolean(member.active)).map(member=>member.display_name).filter(Boolean).join(', ');
+  if(scope==='template'&&group?.usage_mode!=='shared')return `${members||'Group membership is shared.'} - ${group?.usage_mode==='mixed'?'This Group changes between independent and shared rotations by Activity date. ':''}New independent Activities start from the Group order and can change their own order. ${group?.usage_mode==='mixed'?'Shared dates use the Group schedule. ':''}The template sets the initial independent start and direction; presence and skills still apply to each Activity.`;
   if(group?.usage_mode==='mixed')return `${members||group.name} · This Group changes between independent and shared rotations by Activity date. Set an order, start and direction for independent dates; shared dates use the Group schedule. Presence and skills on this ${scope} also apply.`;
   if(group?.usage_mode!=='shared')return `${members||'Group membership is shared.'} · This ${scope} chooses its member order, starting member and direction. Presence and skills follow this ${scope}.`;
   const config=group.shared_config||{};

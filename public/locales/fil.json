@@ -4020,6 +4020,11 @@
     },
     "help": {
         "title": "Tulong",
+        "artworkHeading": "About the artwork",
+        "artworkAdaptation": "The Local Weather scene is an adaptation of this public-domain image, with added weather effects.",
+        "artworkCourtesy": "Courtesy National Gallery of Art, Washington.",
+        "artworkSource": "Original artwork and source",
+        "artworkLicense": "NGA open access policy (CC0)",
         "mobileNavigate": "Gamitin ang bar sa ibaba at ang \"Higit pa\" para mag-navigate.",
         "mobileCreate": "Gumawa ng bagong item gamit ang + button sa kanang ibaba.",
         "mobileSearch": "Buksan ang paghahanap sa \"Higit pa\" → Maghanap.",

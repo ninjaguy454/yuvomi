@@ -4020,6 +4020,11 @@
     },
     "help": {
         "title": "Hilfe",
+        "artworkHeading": "Über das Kunstwerk",
+        "artworkAdaptation": "Die lokale Wetterszene ist eine Adaption dieses gemeinfreien Bildes mit zusätzlichen Wettereffekten.",
+        "artworkCourtesy": "Courtesy National Gallery of Art, Washington.",
+        "artworkSource": "Originalkunstwerk und Quelle",
+        "artworkLicense": "Open-Access-Richtlinie der NGA (CC0)",
         "mobileNavigate": "Navigiere über die Leiste unten und „Mehr“.",
         "mobileCreate": "Mit dem +-Knopf unten rechts legst du Neues an.",
         "mobileSearch": "Suche öffnest du über „Mehr“ → Suchen.",

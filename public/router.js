@@ -1645,7 +1645,7 @@ function buildMoreSheetBody() {
     className: 'more-item--help',
     onClick: () => {
       if (window._closeMoreSheet) window._closeMoreSheet({ restoreFocus: false });
-      showHelpModal();
+      showHelpModal(document.querySelector('#more-btn'));
     },
   }));
   system.appendChild(moreActionEl({
@@ -2689,7 +2689,7 @@ function initKeyboardShortcuts() {
   });
 }
 
-function showHelpModal() {
+function showHelpModal(focusReturnTarget = document.activeElement) {
   // Mirrors the CSS sidebar↔bottom-nav breakpoint (sidebar is min-width:1024px):
   // without a keyboard, shortcut rows are useless — show a plain-language guide.
   const coarsePointer = window.matchMedia('(max-width: 1023px)').matches;
@@ -2698,7 +2698,17 @@ function showHelpModal() {
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.setAttribute('aria-modal', 'true');
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  function closeHelpModal() {
+    if (!overlay.isConnected) return;
+    const restoreFocus = overlay.contains(document.activeElement) && focusReturnTarget?.isConnected;
+    overlay.remove();
+    document.removeEventListener('keydown', onEsc);
+    if (restoreFocus) focusReturnTarget.focus({ preventScroll: true });
+  }
+  function onEsc(e) {
+    if (e.key === 'Escape') { e.preventDefault(); closeHelpModal(); }
+  }
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeHelpModal(); });
 
   const panel = document.createElement('div');
   panel.className = 'modal-panel modal-panel--sm';
@@ -2725,20 +2735,28 @@ function showHelpModal() {
     </div>
     <div class="modal-panel__body">
       <div class="shortcuts-list">${rows}</div>
+      <section class="help-artwork" aria-labelledby="help-artwork-heading">
+        <h2 class="help-artwork__title" id="help-artwork-heading">${esc(t('help.artworkHeading'))}</h2>
+        <p><cite>A View of the Mountain Pass Called the Notch of the White Mountains (Crawford Notch)</cite> — Thomas Cole, 1839.</p>
+        <p>${esc(t('help.artworkAdaptation'))} ${esc(t('help.artworkCourtesy'))}</p>
+        <div class="help-artwork__links">
+          <a href="https://www.nga.gov/artworks/50727-view-mountain-pass-called-notch-white-mountains-crawford-notch" target="_blank" rel="noopener noreferrer">${esc(t('help.artworkSource'))}</a>
+          <a href="https://www.nga.gov/terms-and-notices#open-access-policy" target="_blank" rel="noopener noreferrer">${esc(t('help.artworkLicense'))}</a>
+        </div>
+      </section>
     </div>
   `);
 
-  panel.querySelector('.modal-panel__close').addEventListener('click', () => overlay.remove());
-  document.addEventListener('keydown', function onEsc(e) {
-    if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', onEsc); }
-  });
+  panel.querySelector('.modal-panel__close').addEventListener('click', closeHelpModal);
+  document.addEventListener('keydown', onEsc);
 
   overlay.appendChild(panel);
   document.body.appendChild(overlay);
   // Die Zurueck-Geste schliesst auch diesen Dialog (#871). `attachOverlay`
-  // statt `pushOverlay`, weil er auf drei Wegen per `remove()` verschwindet.
-  attachOverlay(overlay, () => overlay.remove());
+  // statt `pushOverlay`, weil er auf mehreren Wegen verschwindet.
+  attachOverlay(overlay, closeHelpModal);
   if (window.lucide) window.lucide.createIcons({ el: panel });
+  panel.querySelector('.modal-panel__close').focus();
 }
 
 // --------------------------------------------------------

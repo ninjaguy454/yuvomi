@@ -4020,6 +4020,11 @@
     },
     "help": {
         "title": "Bantuan",
+        "artworkHeading": "About the artwork",
+        "artworkAdaptation": "The Local Weather scene is an adaptation of this public-domain image, with added weather effects.",
+        "artworkCourtesy": "Courtesy National Gallery of Art, Washington.",
+        "artworkSource": "Original artwork and source",
+        "artworkLicense": "NGA open access policy (CC0)",
         "mobileNavigate": "Bernavigasi melalui bilah bawah dan „Lainnya\".",
         "mobileCreate": "Dengan tombol + di kanan bawah, Anda membuat sesuatu yang baru.",
         "mobileSearch": "Pencarian dibuka melalui „Lainnya\" → Cari.",

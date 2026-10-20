@@ -6488,6 +6488,16 @@ textarea::placeholder {
   color: var(--color-text-secondary);
 }
 
+.help-artwork {
+  border-top: 1px solid var(--color-border-subtle);
+  padding-top: var(--space-4);
+  overflow-wrap: anywhere;
+}
+.help-artwork__title { font-size: var(--text-sm); }
+.help-artwork p { margin-top: var(--space-2); }
+.help-artwork__links { display: flex; flex-direction: column; align-items: flex-start; margin-top: var(--space-2); }
+.help-artwork__links a { display: flex; align-items: center; min-height: 44px; text-decoration: underline; text-underline-offset: 2px; }
+
 .shortcut-kbd {
   display: inline-flex;
   align-items: center;

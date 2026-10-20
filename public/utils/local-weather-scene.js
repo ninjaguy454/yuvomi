@@ -2,8 +2,6 @@ import {cameraGeometry,chooseVisibleSkyPoint,createSceneDynamics,deriveNightSky,
 import {CARD_SELECTOR,createCardMaterials} from './local-weather-scene/materials.js';
 
 const ASSET='/assets/weather/cole-';
-const CREDIT='Crawford Notch — Thomas Cole, 1839 · Weather adaptation';
-const NGA='https://www.nga.gov/artworks/50727-view-mountain-pass-called-notch-white-mountains-crawford-notch';
 const seeded=i=>{let value=i|0;value=Math.imul(value^(value>>>16),0x45d9f3b);value=Math.imul(value^(value>>>16),0x45d9f3b);return ((value^(value>>>16))>>>0)/4294967296;};
 
 /** Mount household-owned decorative art. Weather validation and sound belong to callers. */
@@ -22,7 +20,6 @@ export function mountLocalWeatherScene({onFlash=()=>{}}={}) {
   const dynamics=createSceneDynamics();
   const element=(name,className)=>{const node=doc.createElement(name);node.className=className;return node;};
   const stage=element('div','local-weather-scene');stage.setAttribute('aria-hidden','true');stage.dataset.phase='day';
-  const credit=element('a','local-weather-credit');credit.textContent=CREDIT;credit.href=NGA;credit.target='_blank';credit.rel='noopener noreferrer';
   const scrollTail=element('span','local-weather-scroll-tail');scrollTail.setAttribute('aria-hidden','true');
   const stylesheet=doc.createElement('link');stylesheet.rel='stylesheet';stylesheet.href='/styles/local-weather-scene.css';
   const listen=(target,name,handler)=>{if(!target?.addEventListener)return;target.addEventListener(name,handler);listeners.push(()=>target.removeEventListener(name,handler));};
@@ -40,7 +37,7 @@ export function mountLocalWeatherScene({onFlash=()=>{}}={}) {
     image.width=1600;image.height=1042;image.decoding='async';image.src=ASSET+grade+'.webp';art.push(image);stage.append(image);listen(image,'load',resize);
   }
   for(let i=0;i<4;i++){const tile=element('img','local-weather-cloud-tile');tile.alt='';tile.draggable=false;tile.src=ASSET+'clouds.webp';strip.append(tile);cloudTiles.push(tile);}
-  stage.append(skyViewport,canvas);doc.body.prepend(stage);doc.body.append(credit);doc.head?.append(stylesheet);
+  stage.append(skyViewport,canvas);doc.body.prepend(stage);doc.head?.append(stylesheet);
   doc.documentElement?.setAttribute('data-local-weather-scene','');
   const particles=Array.from({length:160},(_,i)=>({x:seeded(i+7),y:seeded(i+101),r:1+seeded(i+79)*2.5,speed:.11+seeded(i+31)*.15}));
 
@@ -63,7 +60,7 @@ export function mountLocalWeatherScene({onFlash=()=>{}}={}) {
     const scale=Math.min(1,1280/geometry.boxWidth,800/geometry.boxHeight);
     canvasWidth=Math.max(1,Math.round(geometry.boxWidth*scale));canvasHeight=Math.max(1,Math.round(geometry.boxHeight*scale));
     canvas.width=canvasWidth;canvas.height=canvasHeight;canvasDirty=false;
-    positionCredit();positionPan();
+    positionPan();
     run();
   }
   function positionPan(){
@@ -89,15 +86,8 @@ export function mountLocalWeatherScene({onFlash=()=>{}}={}) {
     stage.style.transform=panOffset?'translate3d(0,'+(-panOffset)+'px,0)':'none';
   }
   doc.addEventListener('scroll',panScene,true);listeners.push(()=>doc.removeEventListener('scroll',panScene,true));
-  function positionCredit(){
-    if(disposed)return;
-    // A scrollport footer cannot intercept any card or fixed navigation control.
-    const host=doc.querySelector('.app-content .page-scrollport')||doc.querySelector('.app-content')||doc.body;
-    credit.classList.add('local-weather-credit--flow');
-    if(credit.parentNode!==host)host.append(credit);
-  }
   function blockedRects(){
-    return [...doc.querySelectorAll(CARD_SELECTOR+',button,input,select,textarea,.nav-sidebar,.nav-bottom,.page-header,.dashboard-overview,.wall-dashboard__header,.modal-panel,.local-weather-credit')]
+    return [...doc.querySelectorAll(CARD_SELECTOR+',button,input,select,textarea,.nav-sidebar,.nav-bottom,.page-header,.dashboard-overview,.wall-dashboard__header,.modal-panel')]
       .filter(node=>!node.closest('[hidden]')).map(node=>{const r=node.getBoundingClientRect();return {left:r.left,top:r.top+panOffset,right:r.right,bottom:r.bottom+panOffset};}).filter(r=>r.right>r.left&&r.bottom>r.top);
   }
   function flash(now){
@@ -179,7 +169,7 @@ export function mountLocalWeatherScene({onFlash=()=>{}}={}) {
   listen(win,'pagehide',()=>{parked=true;stopFlash();run();});
   listen(win,'pageshow',()=>{parked=false;run();});
   for(const media of [reduced,transparency,forced])listen(media,'change',()=>{stopFlash();run();});
-  materials=createCardMaterials({document:doc,window:win,onChange:()=>{if(disposed)return;positionCredit();positionPan();if(frame)materials?.update(frame,time,frozen(),forced.matches||transparency.matches||!frame.rich);}});
+  materials=createCardMaterials({document:doc,window:win,onChange:()=>{if(disposed)return;positionPan();if(frame)materials?.update(frame,time,frozen(),forced.matches||transparency.matches||!frame.rich);}});
   if(typeof win.ResizeObserver==='function'){resizeObserver=new win.ResizeObserver(resize);resizeObserver.observe(stage);}
   resize();
   return {
@@ -192,7 +182,7 @@ export function mountLocalWeatherScene({onFlash=()=>{}}={}) {
     dispose(){
       if(disposed)return;disposed=true;stop();stopFlash();dynamics.clear();frame=null;materials?.dispose();resizeObserver?.disconnect();resizeObserver=null;
       for(const remove of listeners)remove();listeners.length=0;
-      stage.remove();credit.remove();scrollTail.remove();stylesheet.remove();doc.documentElement?.removeAttribute('data-local-weather-scene');
+      stage.remove();scrollTail.remove();stylesheet.remove();doc.documentElement?.removeAttribute('data-local-weather-scene');
       for(const image of [...art,...cloudTiles,maskImage])image.removeAttribute('src');art.length=0;cloudTiles.length=0;maskPixels=null;previousFlash=null;geometry=null;
       stars.replaceChildren();starCount=0;
       canvas.width=1;canvas.height=1;maskCanvas.width=1;maskCanvas.height=1;particles.length=0;flashes.length=0;stats.particles=0;

@@ -31,7 +31,7 @@ test.before(async()=>{
   server=fork(new URL('./helpers/local-weather-scene-full-app-server.mjs',import.meta.url),[],{env:{...process.env,PORT:'0'},windowsHide:true,stdio:['ignore','pipe','pipe','ipc']});
   let log='';for(const stream of [server.stdout,server.stderr])stream.on('data',data=>log=(log+data).slice(-5000));
   origin=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error(log)),30000);server.once('message',message=>{clearTimeout(timer);resolve(message.origin);});server.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code+log));});});
-  browser=await puppeteer.launch({headless:true,executablePath:process.env.PUPPETEER_EXECUTABLE_PATH,args:['--mute-audio']});report.browserPid=browser.process()?.pid;report.serverPid=server.pid;
+  browser=await puppeteer.launch({headless:true,executablePath:process.env.PUPPETEER_EXECUTABLE_PATH,args:['--mute-audio',...(process.env.VIDAMIA_BROWSER_NO_SANDBOX==='1'?['--no-sandbox']:[])]});report.browserPid=browser.process()?.pid;report.serverPid=server.pid;
 });
 test.after(async()=>{
   await browser?.close();report.browserClosed=true;
@@ -54,8 +54,7 @@ test('real personal app receives whitelisted household facts and mounts approved
     const legacy=await page.evaluate(async()=>{const {api}=await import('/api.js');return(await api.get('/weather/theme')).data;});
     check('existing seven-field theme route remains unchanged',Object.keys(legacy).sort().join(',')==='condition,expires_at,fetched_at,is_day,observed_at,sunrise_at,sunset_at');
     check('appearance uses scene route',requests.includes('/api/v1/weather/scene'));
-    check('readable artwork credit is present',await page.$eval('.local-weather-credit',node=>node.textContent.includes('Thomas Cole')));
-    check('artwork credit uses flow placement instead of covering task controls',await page.$eval('.local-weather-credit',node=>getComputedStyle(node).position==='static'));
+    check('artwork credit is absent from task content',await page.$('.local-weather-credit')===null);
     for(const viewport of [{width:1920,height:1080},{width:3440,height:1440},{width:2048,height:667},{width:390,height:844},{width:320,height:720}]){
       await page.setViewport({...viewport,deviceScaleFactor:1});await new Promise(resolve=>setTimeout(resolve,100));
       check(viewport.width+'px has no horizontal overflow',await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
@@ -147,6 +146,71 @@ test('real settings use trusted consent and native Web Audio while owner ending 
     check('ending owner clears art and all card rims',await page.evaluate(()=>!document.querySelector('.local-weather-scene,.local-weather-card-rim')));
     check('native Web Audio path has no runtime errors',errors.length===0);
   }finally{await focus.detach();await context.close();}
+});
+
+test('artwork attribution lives in Help across personal routes and paired-device sizes',async()=>{
+  const personal=await browser.createBrowserContext(),page=await personal.newPage();track(page);
+  let stage='login';
+  try{
+    await login(page);
+    for(const route of ['/tasks?view=list','/notes','/calendar']){
+      stage=`navigate ${route}`;
+      await page.goto(origin+route);
+      stage=`app content ${route}`;
+      await page.waitForSelector('.app-content');
+      stage=`mount ${route}`;
+      await page.evaluate(async()=>{if(!document.querySelector('.local-weather-scene'))window.testAttributionScene=(await import('/utils/local-weather-scene.js')).mountLocalWeatherScene();});
+      await page.waitForSelector('.local-weather-scene');
+      for(const viewport of [{width:390,height:844},{width:800,height:1024},{width:1440,height:900}]){
+        await page.setViewport(viewport);
+        stage=`scene ${route} at ${viewport.width}px`;
+        assert.equal(await page.$('.local-weather-credit'),null,`${route} has no scene credit at ${viewport.width}px`);
+        assert.equal(await page.$eval('.app-content',node=>node.textContent.includes('Thomas Cole')),false,`${route} has no content credit at ${viewport.width}px`);
+      }
+    }
+    for(const viewport of [{width:390,height:844},{width:800,height:1024},{width:1440,height:900}]){
+      await page.setViewport(viewport);
+      stage=`open Help at ${viewport.width}px`;
+      if(viewport.width>=1024){await page.focus('.nav-item--help');await page.keyboard.press('Enter');}
+      else{await page.click('#more-btn');await page.waitForSelector('.more-sheet .more-item--help',{visible:true});await page.waitForFunction(()=>!document.querySelector('#more-sheet')?.getAnimations().some(animation=>animation.playState==='running'));await page.click('.more-item--help');}
+      await page.waitForSelector('.help-artwork');
+      assert.equal(await page.$eval('.help-artwork',node=>node.getAttribute('aria-labelledby')),'help-artwork-heading');
+      assert.equal(await page.$eval('.modal-panel[role="dialog"]',node=>document.activeElement===node.querySelector('.modal-panel__close')),true,'Help moves keyboard focus inside the dialog');
+      assert.match(await page.$eval('.help-artwork',node=>node.textContent),/Thomas Cole/);
+      assert.match(await page.$eval('.help-artwork',node=>node.textContent),/A View of the Mountain Pass Called the Notch of the White Mountains/);
+      assert.match(await page.$eval('.help-artwork',node=>node.textContent),/National Gallery of Art/);
+      assert.match(await page.$eval('.help-artwork',node=>node.textContent),/CC0|public domain/i);
+      assert.match(await page.$eval('.help-artwork',node=>node.textContent),/adaptation/i);
+      assert.equal(await page.$eval('.help-artwork a[href*="nga.gov/artworks/50727"]',node=>node.rel),'noopener noreferrer');
+      await page.waitForFunction(()=>!document.querySelector('.modal-panel')?.getAnimations().some(animation=>animation.playState==='running'));
+      await page.focus('.help-artwork__links a:last-child');
+      const linkState=await page.$eval('.help-artwork__links a:last-child',node=>{const rect=node.getBoundingClientRect();return{focused:document.activeElement===node,width:rect.width,top:rect.top,bottom:rect.bottom,height:innerHeight};});
+      assert.ok(linkState.focused&&linkState.width>0&&linkState.top>=0&&linkState.bottom<=linkState.height,`policy link is reachable by keyboard within the viewport: ${JSON.stringify(linkState)}`);
+      await page.keyboard.press('Escape');
+      assert.equal(await page.evaluate(width=>document.activeElement===document.querySelector(width>=1024?'.nav-item--help':'#more-btn'),viewport.width),true,`Help returns focus to its opener at ${viewport.width}px`);
+    }
+  }catch(error){throw Error(`Stage ${stage}; URL ${page.url()}; page ${JSON.stringify(await page.evaluate(()=>({ready:document.readyState,body:document.body?.innerText.slice(0,500)})))}; page errors ${JSON.stringify(errors)}`,{cause:error});
+  }finally{await personal.close();}
+  const preferences=normalizeDevicePreferences(db,{}),device=createDevice(db,{name:'Synthetic artwork Help display',preferences},1),token='synthetic-artwork-help-'+device.id;
+  db.prepare('INSERT INTO device_credentials(device_id,token_hash,context_key) VALUES(?,?,?)').run(device.id,deviceHash(token),'synthetic-artwork-help-context-'+device.id);
+  const context=await browser.createBrowserContext(),paired=await context.newPage();track(paired);
+  try{
+    await paired.evaluateOnNewDocument(()=>{localStorage.setItem('vidamia-paired-device','1');localStorage.setItem('yuvomi-lang','en');localStorage.setItem('yuvomi-locale','en');});
+    await paired.setCookie({name:'vidamia.device',value:token,url:origin,httpOnly:true});
+    await paired.goto(origin+'/device');await paired.waitForSelector('[data-device-theme]');
+    for(const viewport of [{width:390,height:844},{width:800,height:1024},{width:1440,height:900}]){
+      await paired.setViewport(viewport);
+      assert.equal(await paired.$('.local-weather-credit'),null);
+      if(viewport.width>=1024){await paired.focus('.nav-item--help');await paired.keyboard.press('Enter');}
+      else{await paired.click('#more-btn');await paired.waitForSelector('.more-sheet .more-item--help',{visible:true});await paired.waitForFunction(()=>!document.querySelector('#more-sheet')?.getAnimations().some(animation=>animation.playState==='running'));await paired.click('.more-item--help');}
+      await paired.waitForSelector('.help-artwork');
+      assert.match(await paired.$eval('.help-artwork',node=>node.textContent),/Thomas Cole/);
+      assert.equal(await paired.$eval('.modal-panel[role="dialog"]',node=>document.activeElement===node.querySelector('.modal-panel__close')),true);
+      await paired.keyboard.press('Escape');
+      assert.equal(await paired.evaluate(width=>document.activeElement===document.querySelector(width>=1024?'.nav-item--help':'#more-btn'),viewport.width),true,`paired Help returns focus to its opener at ${viewport.width}px`);
+    }
+  }finally{await context.close();}
+  assert.deepEqual(errors,[]);
 });
 
 // Run separately by name: no screenshots/recordings or parallel browser suites.

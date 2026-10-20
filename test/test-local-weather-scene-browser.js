@@ -21,7 +21,7 @@ async function fixture(){
   });
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   let browser;
-  try{browser=await puppeteer.launch({headless:true,timeout:12000,args:['--mute-audio'],executablePath:process.env.PUPPETEER_EXECUTABLE_PATH||(process.platform==='win32'?'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe':undefined)});}
+  try{browser=await puppeteer.launch({headless:true,timeout:12000,args:['--mute-audio',...(process.env.VIDAMIA_BROWSER_NO_SANDBOX==='1'?['--no-sandbox']:[])],executablePath:process.env.PUPPETEER_EXECUTABLE_PATH||(process.platform==='win32'?'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe':undefined)});}
   catch(error){server.closeAllConnections();await new Promise(resolve=>server.close(resolve));throw error;}
   console.log('RENDERER_BROWSER_PID='+browser.process()?.pid);
   const page=await browser.newPage();page.on('pageerror',e=>errors.push(e.message));
@@ -49,7 +49,7 @@ async function compareSkyPixels(page){
   return page.evaluate(async({visible,plain})=>{
     async function decode(source,width=null,height=null){const image=new Image();image.src=source;await image.decode();const canvas=document.createElement('canvas');canvas.width=width||image.naturalWidth;canvas.height=height||image.naturalHeight;const context=canvas.getContext('2d');context.drawImage(image,0,0,canvas.width,canvas.height);return{width:canvas.width,height:canvas.height,pixels:context.getImageData(0,0,canvas.width,canvas.height).data};}
     const a=await decode('data:image/png;base64,'+visible),b=await decode('data:image/png;base64,'+plain),mask=await decode('/assets/weather/cole-sky-mask.webp',96,63),g=window.testScene.getStats().artCamera;
-    const blocked=[...document.querySelectorAll('.activity-card,.note-card,.agenda-event,.local-weather-credit,button')].map(node=>node.getBoundingClientRect());
+    const blocked=[...document.querySelectorAll('.activity-card,.note-card,.agenda-event,button')].map(node=>node.getBoundingClientRect());
     const scale=a.width/innerWidth,at=(image,x,y)=>{const i=(Math.round(y*scale)*image.width+Math.round(x*scale))*4;return Array.from(image.pixels.slice(i,i+3));};
     const luminance=rgb=>rgb.map(value=>value/255).map(value=>value<=.04045?value/12.92:((value+.055)/1.055)**2.4).reduce((sum,value,i)=>sum+value*[.2126,.7152,.0722][i],0);
     const sky=[];
@@ -152,8 +152,7 @@ test('real card CSS keeps fills, content, bounds and controls while registered w
     await mount(page,f.origin);await page.waitForFunction(()=>window.testScene.getStats().skyPickerReady&&window.testScene.getStats().materialFaces===3).catch(async error=>{throw Error(error.message+' '+JSON.stringify({errors:f.errors,stats:await page.evaluate(()=>window.testScene?.getStats())}));});
     await page.waitForFunction(()=>window.testScene.getStats().scene.snowMass>.03);
     assert.deepEqual(await cards(page),before);
-    assert.equal(await page.$eval('.local-weather-credit',n=>n.textContent),'Crawford Notch — Thomas Cole, 1839 · Weather adaptation');
-    assert.ok((await page.$eval('.local-weather-credit',n=>n.href)).startsWith('https://www.nga.gov/artworks/50727'));
+    assert.equal(await page.$('.local-weather-credit'),null,'renderer leaves task, note and calendar content free of artwork credit');
     const imageGeometry=await page.$$eval('.local-weather-art',nodes=>nodes.map(n=>{const r=n.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height};}));
     assert.ok(imageGeometry.every(g=>JSON.stringify(g)===JSON.stringify(imageGeometry[0])));
     assert.equal(await page.$eval('.local-weather-card-rim',n=>getComputedStyle(n).pointerEvents),'none');

@@ -95,7 +95,7 @@
     "Registered masked clouds and synthetic visible-sky illumination; no observed strike, chimney, lights or blizzard is asserted.",
     "Runtime clear-night treatment darkens only the registered sky and adds at most72static illustrative star points under cloud layers. Star points follow the verified sky matte, fade with solar/cloud conditions, and are hidden in fog, precipitation and thunderstorms. The six WebP derivatives remain unchanged.",
     "Cards retain their existing fills, content, typography, transforms and controls; bounded artwork appears only on a narrow decorative rim.",
-    "The readable linked credit is an app-scrollport footer at every screen size, keeping it clear of card controls and fixed navigation."
+    "The accessible sidebar Help dialog and mobile More menu retain the linked source, public-domain/CC0 policy, artist, title and weather-adaptation credit without adding a label to page content."
   ],
   "sourceEvidencePrototypeOnly": true
 }

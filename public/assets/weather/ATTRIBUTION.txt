@@ -29,5 +29,6 @@ normal app scrolling reveals the lower artwork without moving card targets.
 Mobile fills its viewport with the same cover camera, cropping horizontally in
 portrait. All grades and the original sky mask share the same camera, including
 the scroll offset used to select visible illumination.
-The readable linked credit sits in the existing app scrollport footer at every
-screen size, keeping it clear of task controls and fixed navigation.
+The accessible Help dialog in the app sidebar and mobile More menu retains the
+artwork title, artist, source link, public-domain/CC0 policy and adaptation
+credit without placing a label among Tasks, Notes or Calendar content.

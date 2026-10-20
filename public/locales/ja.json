@@ -4020,6 +4020,11 @@
     },
     "help": {
         "title": "ヘルプ",
+        "artworkHeading": "About the artwork",
+        "artworkAdaptation": "The Local Weather scene is an adaptation of this public-domain image, with added weather effects.",
+        "artworkCourtesy": "Courtesy National Gallery of Art, Washington.",
+        "artworkSource": "Original artwork and source",
+        "artworkLicense": "NGA open access policy (CC0)",
         "mobileNavigate": "下部のバーと「その他」でナビゲートします。",
         "mobileCreate": "右下の＋ボタンで新規作成できます。",
         "mobileSearch": "検索は「その他」→「検索」で開きます。",

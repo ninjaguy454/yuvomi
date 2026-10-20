@@ -4020,6 +4020,11 @@
     },
     "help": {
         "title": "Βοήθεια",
+        "artworkHeading": "About the artwork",
+        "artworkAdaptation": "The Local Weather scene is an adaptation of this public-domain image, with added weather effects.",
+        "artworkCourtesy": "Courtesy National Gallery of Art, Washington.",
+        "artworkSource": "Original artwork and source",
+        "artworkLicense": "NGA open access policy (CC0)",
         "mobileNavigate": "Πλοηγήσου μέσω της μπάρας κάτω και «Περισσότερα».",
         "mobileCreate": "Δημιούργησε νέα με το κουμπί + κάτω δεξιά.",
         "mobileSearch": "Άνοιξε την αναζήτηση μέσω «Περισσότερα» → Αναζήτηση.",

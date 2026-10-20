@@ -422,6 +422,78 @@ test('nested Activity subtask Skill creation selects the saved Skill and returns
   } finally { await page.dispose(); }
 });
 
+async function checkRootSkillCreation(page, { form, picker, draft, expected, skillName }) {
+  await page.evaluate(selector => { window.originalSkillParentForm = document.querySelector(selector); }, form);
+  await page.focus(`${picker} summary`); await page.keyboard.press('Enter');
+  await page.waitForSelector(`${picker} details[open] [data-create-skill]`, { visible: true });
+  await page.focus(`${picker} [data-create-skill]`); await page.keyboard.press('Enter');
+  await page.waitForSelector('#automation-skill-form');
+  await page.click('#shared-modal-overlay [data-action="close-modal"]');
+  await page.waitForFunction(() => !document.querySelector('#automation-skill-form'));
+  assert.equal(await value(page, draft), expected, 'cancelling Skill creation retains the draft');
+  assert.equal(skills.length, 1, 'cancel does not create a Skill');
+  await page.focus(`${picker} [data-create-skill]`); await page.keyboard.press('Enter');
+  await page.waitForSelector('#automation-skill-form');
+  await set(page, '#automation-skill-form [name="name"]', skillName);
+  await page.focus('#shared-modal-overlay [type="submit"]'); await page.keyboard.press('Enter');
+  await page.waitForFunction(() => !document.querySelector('#automation-skill-form'));
+  await page.waitForFunction(selector => document.querySelector(`${selector} [data-task-skill-id][value="101"]`)?.checked, {}, picker);
+  assert.equal(await page.evaluate(selector => document.querySelector(selector) === window.originalSkillParentForm, form), true,
+    'the same Activity editor remains mounted after Skill creation');
+  assert.equal(await value(page, draft), expected);
+}
+
+test('Activity create root Required skills opens Skill editor and keeps its draft on cancel and save', async () => {
+  skills.splice(1);
+  const page = await mounted({ width: 390 });
+  try {
+    await set(page, '#task-title', 'New activity draft');
+    await checkRootSkillCreation(page, { form: '#task-form', picker: '#task-root-skills', draft: '#task-title',
+      expected: 'New activity draft', skillName: 'Create activity root skill' });
+  } finally { await page.dispose(); }
+});
+
+test('Activity edit root Required skills opens Skill editor and keeps its draft on cancel and save', async () => {
+  skills.splice(1);
+  const page = await mounted({ width: 390, editTask: seriesEditFixture() });
+  try {
+    await set(page, '#task-title', 'Edited activity draft');
+    await checkRootSkillCreation(page, { form: '#task-form', picker: '#task-root-skills', draft: '#task-title',
+      expected: 'Edited activity draft', skillName: 'Edit activity root skill' });
+  } finally { await page.dispose(); }
+});
+
+test('Activity Template create root Required skills opens Skill editor and keeps its draft on cancel and save', async () => {
+  skills.splice(1);
+  const page = await mounted({ width: 390 });
+  try {
+    await set(page, '#task-title', 'Template source draft');
+    await page.click('[data-save-as-template]');
+    await page.waitForSelector('#automation-activity-form');
+    await set(page, '#automation-activity-form [name="name"]', 'New template draft');
+    await checkRootSkillCreation(page, { form: '#automation-activity-form', picker: '[data-activity-skills]',
+      draft: '#automation-activity-form [name="name"]', expected: 'New template draft', skillName: 'Create template root skill' });
+    assert.equal(await value(page, '#task-title'), 'Template source draft', 'source Task draft is also retained');
+  } finally { await page.dispose(); }
+});
+
+test('Activity Template edit root Required skills opens Skill editor and keeps its draft on cancel and save', async () => {
+  skills.splice(1);
+  const page = await mounted({ width: 390, newTask: false });
+  try {
+    await page.evaluate(async () => {
+      const root = document.createElement('div'); document.body.append(root);
+      const { renderAutomationManager } = await import('/components/activity-automation.js');
+      await renderAutomationManager(root, { tab: 'activities' });
+    });
+    await page.click('[data-edit-activity="11"]');
+    await page.waitForSelector('#automation-activity-form');
+    await set(page, '#automation-activity-form [name="name"]', 'Edited template draft');
+    await checkRootSkillCreation(page, { form: '#automation-activity-form', picker: '[data-activity-skills]',
+      draft: '#automation-activity-form [name="name"]', expected: 'Edited template draft', skillName: 'Edit template root skill' });
+  } finally { await page.dispose(); }
+});
+
 test('members can select existing subtask Skills without seeing administrator-only creation', async () => {
   const page = await mounted({ role: 'member' });
   try {

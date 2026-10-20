@@ -15,6 +15,7 @@ import {addTaskScoringCompletionSchema} from './services/task-scoring-completion
 import {addTaskTemplateLaunchSchema} from './services/task-template-launch-schema.js';
 import {addTaskCloseSchema} from './services/task-close-schema.js';
 import {addGroupCompatibilityReviewSchema} from './services/group-compatibility-schema.js';
+import {convertLegacyRotationGroups} from './services/legacy-rotation-conversion.js';
 /**
  * Modul: Datenbank (Database)
  * Zweck: SQLite/SQLCipher Verbindung, Schema-Migration (versioniert) und Query-Helfer
@@ -9154,6 +9155,7 @@ FORK_MIGRATIONS.push({version:10065,description:'Persist Rotation Group assignme
   `);
 }});
 FORK_MIGRATIONS.push({version:10066,description:'Classify legacy Rotation definitions requiring reviewed conversion',up:addGroupCompatibilityReviewSchema});
+FORK_MIGRATIONS.push({version:10067,description:'Map consistent legacy Task cohorts to reusable Rotation Groups',up:convertLegacyRotationGroups});
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];
 
 const FORK_MIGRATION_REMAPS = [

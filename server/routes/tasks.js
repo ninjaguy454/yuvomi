@@ -54,6 +54,7 @@ import { taskUnskippedWhere } from '../services/task-window.js';
 import { normalizeRotationBindings, parseRotationBindings, rotationBindingsEqual, assertRotationBindingsChange, bindTaskRotations, taskRotationContexts } from '../services/task-rotation.js';
 import { householdMembers } from '../services/activity-eligibility.js';
 import {normalizeGroupAssignment,recordGroupAssignment} from '../services/group-assignment.js';
+import {mappedLegacyRotationGroups,refreshLegacyRotationGroupMapping,convertedLegacyFutureDefinition} from '../services/legacy-rotation-conversion.js';
 import {selectTaskGroupMember as selectTaskGroupMemberForDatabase} from '../services/task-group-assignment.js';
 import { initializeTaskRotationRendering, applyTaskRotationRendering, refreshTaskRotationRendering } from '../services/task-rotation-rendering.js';
 import { rotationCompletionEvidence } from '../services/rotation-completion-evidence.js';
@@ -93,7 +94,7 @@ import { attachTaskSupervision, reconcileTaskSupervision, assertTaskSupervisionA
 import { EXPIRATION_POLICIES, taskDeadlineMs, taskStartMs, taskWindowAncestors } from '../services/task-window.js';
 import { createTaskOptionalContextReader } from '../services/task-optional.js';
 import { taskChangesStream } from '../services/task-changes.js';
-import { assertCapability } from '../permissions.js';
+import { assertCapability,hasCapability } from '../permissions.js';
 
 const log = createLogger('Tasks');
 
@@ -1607,11 +1608,18 @@ function loadSubtasks(taskId, me, supervisionViews) {
 }
 
 const rotationReadCacheKey = Symbol('taskRotationReadCache');
+const legacyGroupReadCacheKey = Symbol('legacyGroupReadCache');
 export function hydrateTask(task, me, supervisionViews = new Map(), starts = null) {
   if (!task) return task;
   task = db.get().prepare(`SELECT t.*,u.display_name AS assigned_name,u.avatar_color AS assigned_color,
     u.avatar_data AS assigned_avatar,${ASSIGNED_USERS_SQL}
     FROM tasks t LEFT JOIN users u ON u.id=t.assigned_to WHERE t.id=?`).get(task.id);
+  if(task.rotation_group&&!supervisionViews.has(legacyGroupReadCacheKey))
+    supervisionViews.set(legacyGroupReadCacheKey,hasCapability(db.get(),me,'rotations.view')
+      ?mappedLegacyRotationGroups(db.get()):new Map());
+  const legacyGroup=supervisionViews.get(legacyGroupReadCacheKey)?.get(task.rotation_group.replace(/[A-Z]/g,letter=>letter.toLowerCase()));
+  task.legacy_rotation_group=legacyGroup?{group_id:legacyGroup.group_id,compatibility_mode:legacyGroup.compatibility_mode,
+    name:legacyGroup.name,slot:Number(task.rotation_slot||0)+1}:null;
   const offer=taskOfferState(db.get(),me,task,{starts});
   addAssignedUsers(task);
   task.subtasks=loadSubtasks(task.id,me,supervisionViews);
@@ -2562,6 +2570,7 @@ export function createTaskDefinition(req, res) {
       db.get().prepare('UPDATE tasks SET rotation_bindings_json=? WHERE id=?').run(JSON.stringify(rotationBindings),result.lastInsertRowid);
       setTaskSkills(db.get(), result.lastInsertRowid, skillIds);
       setRotationMembers(db.get(), result.lastInsertRowid, assignmentMode === 'round_robin' ? rotationUserIds : []);
+      if(rotationGroup)refreshLegacyRotationGroupMapping(db.get(),rotationGroup);
       if (req.body.tags !== undefined) setTags(db.get(), result.lastInsertRowid, req.body.tags);
       else if (templateDefaults) setTags(db.get(), result.lastInsertRowid, JSON.parse(templateDefaults.tags_json));
       if (activityBinding) {
@@ -3164,6 +3173,12 @@ export function updateTaskDefinition(req, res) {
         db.get().prepare('UPDATE task_activity_bindings SET definition_snapshot_json=? WHERE task_id=?')
           .run(JSON.stringify(activitySkillSnapshot),task.id);
       setRotationMembers(db.get(), task.id, assignmentMode === 'round_robin' ? rotationUserIds : []);
+      if(rotationGroup!==task.rotation_group||assignmentMode!==task.assignment_mode
+        ||Number(rotationSlot||0)!==Number(task.rotation_slot||0)||Number(!!is_recurring)!==Number(!!task.is_recurring)
+        ||!sameIdOrder(rotationUserIds,rotationBefore)){
+        if(task.rotation_group)refreshLegacyRotationGroupMapping(db.get(),task.rotation_group);
+        if(rotationGroup&&rotationGroup!==task.rotation_group)refreshLegacyRotationGroupMapping(db.get(),rotationGroup);
+      }
       if (taskWindowChanged) {
         // Checklist dates copied from the parent follow its edit. Explicit
         // child-specific dates/times retain their independent meaning.
@@ -3229,11 +3244,25 @@ export function updateTaskDefinition(req, res) {
           const colorBase=seriesDefinitionForGeneration(db.get(),series.series_id,series.occurrence.generation+1)?.data||series.definition.data;
           preserveFutureCardColorPolicies(definition,colorBase,req.body.card_color_choice);
           assertCompatibleFutureDefinition(req,current,series,definition,{capturedDirectIds:definition.assignee_policy?.direct_assignee_ids??null});
+          const convertedFuture=convertedLegacyFutureDefinition(db.get(),task.rotation_group,
+            series.series_id,series.occurrence.generation+1,definition);
           const revised=appendSeriesDefinition(db.get(),task.id,{expectedRevision:req.body.expected_series_revision,
             actorId:req.authUserId||req.session.userId,definition});
           const occurrence=recordOccurrenceDefinition(db.get(),task.id,{definitionId:revised.definition.id,
             startDate:definition.task.start_date,dueDate:definition.task.due_date});
-          seriesEdit=revised.changed?reconcileSeriesFuture(db.get(),{...revised,occurrence},{actor:req})
+          // A current legacy Task and its converted future definition are two
+          // intentional series boundaries. Reapply the latter after this edit,
+          // since the newest definition otherwise wins at every generation.
+          let futureDefinition=revised.definition;
+          if(revised.changed&&convertedFuture){
+            db.get().prepare(`INSERT INTO task_recurrence_definitions
+              (series_id,effective_generation,definition_json,actor_user_id,source_task_id)
+              VALUES(?,?,?,?,?)`).run(series.series_id,series.occurrence.generation+1,JSON.stringify(convertedFuture),
+                req.authUserId||req.session.userId,task.id);
+            futureDefinition=seriesDefinitionForGeneration(db.get(),series.series_id,series.occurrence.generation+1);
+          }
+          seriesEdit=revised.changed?reconcileSeriesFuture(db.get(),{...revised,occurrence,
+            definition:futureDefinition,currentDefinitionId:revised.definition.id},{actor:req})
             :{scope:'occurrence',series_id:revised.series_id,revision:revised.revision,updated:[],preserved:[]};
         } else db.get().prepare("UPDATE task_recurrence_occurrences SET exception_reason='occurrence_edit' WHERE task_id=?").run(task.id);
       } else if(is_recurring) {

@@ -9,6 +9,7 @@ import { addCalendarDays } from './activity-schedule.js';
 import { nextDueAfterCompletion, nextDueAfterExpiration, nextOccurrenceAfter, parseRRule } from './recurrence.js';
 import { captureTaskActivityBindingDefinition } from './task-activity-snapshot.js';
 import { captureTaskRotationRendering } from './task-rotation-rendering.js';
+import {refreshLegacyRotationGroupMapping} from './legacy-rotation-conversion.js';
 
 export const TASK_SERIES_SCHEMA_SQL = `
   CREATE TABLE task_recurrence_series (
@@ -236,6 +237,16 @@ export function appendSeriesDefinition(d,taskId,{expectedRevision,actorId=null,d
   if(!force && previous && definitionEqual(previous.data,value))return {...state,changed:false};
   const info=d.prepare(`INSERT INTO task_recurrence_definitions(series_id,effective_generation,definition_json,actor_user_id,source_task_id)
     VALUES(?,?,?,?,?)`).run(state.series_id,generation,json,actorId,taskId);
+  const oldRotation=previous?.data?.task,newRotation=value.task;
+  if(oldRotation?.rotation_group!==newRotation?.rotation_group
+    ||oldRotation?.assignment_mode!==newRotation?.assignment_mode
+    ||Number(oldRotation?.rotation_slot||0)!==Number(newRotation?.rotation_slot||0)
+    ||JSON.stringify(previous?.data?.rotation_user_ids)!==JSON.stringify(value.rotation_user_ids)
+    ||oldRotation?.assignment_group_json!==newRotation?.assignment_group_json){
+    if(oldRotation?.rotation_group)refreshLegacyRotationGroupMapping(d,oldRotation.rotation_group);
+    if(newRotation?.rotation_group&&newRotation.rotation_group!==oldRotation?.rotation_group)
+      refreshLegacyRotationGroupMapping(d,newRotation.rotation_group);
+  }
   d.prepare('UPDATE task_recurrence_series SET revision=revision+1 WHERE series_id=?').run(state.series_id);
   return {...taskSeriesState(d,taskId),changed:true,definition:parseDefinition(d.prepare('SELECT * FROM task_recurrence_definitions WHERE id=?').get(info.lastInsertRowid))};
 }

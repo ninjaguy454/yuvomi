@@ -1059,6 +1059,7 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
   const assignmentMode = task?.assignment_mode || 'fixed';
   const rotationGroup = task?.rotation_group || '';
   const savedAssignmentGroup=typeof task?.assignment_group_json==='string'?JSON.parse(task.assignment_group_json):task?.assignment_group_json;
+  const legacyMappedGroup=task?.legacy_rotation_group;
   const missingSavedGroup=savedAssignmentGroup&&!state.rotationGroups.some(group=>Number(group.id)===Number(savedAssignmentGroup.group_id));
   const rotationPosition = Number(task?.rotation_slot ?? 0) + 1;
   const visibility  = task?.visibility || 'all';
@@ -1271,8 +1272,9 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
         ${renderUserMultiSelect(users, selectedIds, 'task_assigned', 'tasks.assignedLabel', { variant: 'people' })}
         <p id="task-template-assignment-hint" class="task-field-hint" hidden></p>
       </div>
-      ${state.rotationGroups.length||canCapability('rotations.manage')||savedAssignmentGroup?`<div id="task-group-assignment" class="form-group"><strong>Rotation Groups</strong>
+      ${state.rotationGroups.length||canCapability('rotations.manage')||savedAssignmentGroup||legacyMappedGroup?`<div id="task-group-assignment" class="form-group"><strong>Rotation Groups</strong>
         <p class="task-field-hint">Choose a Group for this Activity's assignee. Group members and order are shared; this Activity keeps its own starting choice.</p>
+        ${legacyMappedGroup?`<details class="task-field-hint"><summary><span class="rotation-group-choice__avatar" aria-hidden="true"><i data-lucide="users-round"></i></span> ${esc(legacyMappedGroup.name||'Imported Group')}</summary><p>${legacyMappedGroup.compatibility_mode==='converted_independent'?'This Task keeps its recorded assignee. Future occurrences use this Group and an independent turn cursor.':'This recurring Task uses position '+Number(legacyMappedGroup.slot)+' in a synchronized Group. Its saved member order and cursor remain in effect. Group membership and schedule changes are locked to preserve the other Tasks in this cycle.'} Choosing another Group replaces this legacy rotation.</p></details>`:''}
         <div class="rotation-group-choices" role="group" aria-label="Rotation Groups for assignment">${state.rotationGroups.filter(group=>group.active).map(group=>`<button type="button" class="rotation-group-choice" data-task-group-choice="${Number(group.id)}"><span class="rotation-group-choice__avatar" aria-hidden="true"><i data-lucide="users-round"></i></span><span class="rotation-group-choice__name">${esc(group.name)}</span></button>`).join('')}</div>
         <details data-task-group-behavior><summary>Edit assigned Group behavior</summary>
           <p class="task-field-hint" data-task-group-summary>Group membership and order are shared. This Activity's starting choice and direction apply to independent Groups.</p>

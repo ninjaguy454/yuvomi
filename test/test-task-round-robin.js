@@ -10,6 +10,8 @@ process.env.TZ = 'UTC';
 
 const { ALL_MIGRATIONS, _setTestDatabase } = await import('../server/db.js');
 const { default: tasksRouter } = await import('../server/routes/tasks.js');
+const {convertLegacyRotationGroups}=await import('../server/services/legacy-rotation-conversion.js');
+const {ensureSeriesDefinition}=await import('../server/services/task-series.js');
 
 function buildTestDb() {
   const database = new Database(':memory:');
@@ -205,6 +207,91 @@ test('rotation group advances the whole cohort atomically and preserves slot off
   assert.equal(followupOf(first.body.data.id), undefined);
   assert.equal(followupOf(second.body.data.id), undefined);
   assert.equal(followupOf(third.body.data.id), undefined);
+});
+
+test('mapped legacy cohort keeps distinct offsets after a full status cycle', async()=>{
+  const due=new Date().toISOString().slice(0,10),key=`Imported rotation ${Date.now()}`;
+  const common={due_date:due,is_recurring:1,recurrence_rule:'FREQ=DAILY',assignment_mode:'round_robin',
+    rotation_user_ids:[grace,eleanor,frank],rotation_group:key};
+  const first=await call('POST','',{...common,title:'Imported first',rotation_slot:0});
+  const second=await call('POST','',{...common,title:'Imported second',rotation_slot:1});
+  assert.equal(first.status,201);assert.equal(second.status,201);
+  db.transaction(()=>convertLegacyRotationGroups(db))();
+  const mapped=db.prepare('SELECT group_id FROM legacy_rotation_group_mappings WHERE source_key=?').get(key);
+  assert.ok(mapped);
+  const detail=await call('GET',`/${first.body.data.id}`);
+  assert.equal(detail.status,200);assert.equal(detail.body.data.legacy_rotation_group.group_id,mapped.group_id);
+  assert.equal(detail.body.data.legacy_rotation_group.slot,1);
+  assert.equal((await call('PATCH',`/${first.body.data.id}/status`,{status:'done'})).status,200);
+  assert.equal(followupOf(first.body.data.id),undefined);
+  assert.equal((await call('PATCH',`/${second.body.data.id}/status`,{status:'done'})).status,200);
+  assert.equal(followupOf(first.body.data.id).assigned_to,eleanor);
+  assert.equal(followupOf(second.body.data.id).assigned_to,frank);
+  assert.equal((await call('GET',`/${followupOf(first.body.data.id).id}`)).body.data.legacy_rotation_group.group_id,mapped.group_id);
+});
+
+test('editing a mapped cohort roster invalidates its Group projection without changing the saved cursor',async()=>{
+  const key=`Mapped edit ${Date.now()}`,due=new Date().toISOString().slice(0,10);
+  const created=await call('POST','',{title:'Mapped edit',due_date:due,is_recurring:1,recurrence_rule:'FREQ=DAILY',
+    assignment_mode:'round_robin',rotation_user_ids:[grace,eleanor,frank],rotation_group:key,rotation_slot:0});
+  assert.equal(created.status,201);
+  db.transaction(()=>convertLegacyRotationGroups(db))();
+  const id=created.body.data.id;
+  assert.ok((await call('GET',`/${id}`)).body.data.legacy_rotation_group);
+  const changed=await call('PUT',`/${id}`,{title:'Mapped edit',due_date:due,is_recurring:1,recurrence_rule:'FREQ=DAILY',
+    assignment_mode:'round_robin',rotation_user_ids:[eleanor,grace,frank],rotation_group:key,rotation_slot:0});
+  assert.equal(changed.status,200,JSON.stringify(changed.body));
+  assert.equal(db.prepare('SELECT is_current FROM legacy_rotation_group_mappings WHERE source_key=?').get(key).is_current,0);
+  assert.equal((await call('GET',`/${id}`)).body.data.legacy_rotation_group,null);
+  assert.equal(db.prepare('SELECT rotation_index FROM tasks WHERE id=?').get(id).rotation_index,0);
+});
+
+test('single legacy series converts its future turn to a Group without changing the current Task',async()=>{
+  const key=`Solo conversion ${Date.now()}`,due=new Date().toISOString().slice(0,10);
+  const created=await call('POST','',{title:'Solo rotation',due_date:due,is_recurring:1,recurrence_rule:'FREQ=DAILY',
+    assignment_mode:'round_robin',rotation_user_ids:[grace,eleanor,frank],rotation_group:key,rotation_slot:0});
+  assert.equal(created.status,201);
+  const id=created.body.data.id,source=db.prepare('SELECT * FROM tasks WHERE id=?').get(id);
+  ensureSeriesDefinition(db,id);
+  db.transaction(()=>convertLegacyRotationGroups(db))();
+  const map=db.prepare('SELECT * FROM legacy_rotation_group_mappings WHERE source_key=?').get(key);
+  assert.equal(map.compatibility_mode,'converted_independent');
+  assert.equal(db.prepare('SELECT * FROM tasks WHERE id=?').get(id).assigned_to,source.assigned_to);
+  assert.equal(db.prepare('SELECT * FROM tasks WHERE id=?').get(id).rotation_group,key);
+  const nextDef=db.prepare('SELECT definition_json FROM task_recurrence_definitions WHERE series_id=? ORDER BY id DESC LIMIT 1')
+    .get(db.prepare('SELECT series_id FROM task_recurrence_occurrences WHERE task_id=?').get(id).series_id);
+  assert.equal(JSON.parse(nextDef.definition_json).task.assignment_mode,'fixed');
+  assert.equal((await call('PATCH',`/${id}/status`,{status:'done'})).status,200);
+  const followup=followupOf(id);assert.ok(followup);
+  assert.equal(followup.assigned_to,eleanor);
+  assert.equal(followup.assignment_mode,'fixed');
+  assert.equal(JSON.parse(followup.assignment_group_json).group_id,map.group_id);
+  assert.equal(followup.rotation_group,null);
+  assert.equal((await call('PATCH',`/${followup.id}/status`,{status:'done'})).status,200);
+  assert.equal(followupOf(followup.id).assigned_to,frank);
+});
+
+test('editing the current legacy Task title keeps its converted future Group assignment',async()=>{
+  const key=`Solo future edit ${Date.now()}`,due=new Date().toISOString().slice(0,10);
+  const created=await call('POST','',{title:'Before rename',due_date:due,is_recurring:1,recurrence_rule:'FREQ=DAILY',
+    assignment_mode:'round_robin',rotation_user_ids:[grace,eleanor,frank],rotation_group:key,rotation_slot:0});
+  assert.equal(created.status,201);
+  const id=created.body.data.id;
+  ensureSeriesDefinition(db,id);
+  db.transaction(()=>convertLegacyRotationGroups(db))();
+  const seriesId=db.prepare('SELECT series_id FROM task_recurrence_occurrences WHERE task_id=?').get(id).series_id;
+  const seriesRevision=db.prepare('SELECT revision FROM task_recurrence_series WHERE series_id=?').get(seriesId).revision;
+  const edited=await call('PUT',`/${id}`,{title:'After rename',due_date:due,is_recurring:1,recurrence_rule:'FREQ=DAILY',
+    assignment_mode:'round_robin',rotation_user_ids:[grace,eleanor,frank],rotation_group:key,rotation_slot:0,
+    edit_scope:'future',expected_series_revision:seriesRevision});
+  assert.equal(edited.status,200,JSON.stringify(edited.body));
+  assert.equal((await call('PATCH',`/${id}/status`,{status:'done'})).status,200);
+  const next=followupOf(id);
+  assert.ok(next);
+  assert.equal(next.assigned_to,eleanor);
+  assert.equal(next.assignment_mode,'fixed');
+  assert.equal(JSON.parse(next.assignment_group_json).group_id,
+    db.prepare('SELECT group_id FROM legacy_rotation_group_mappings WHERE source_key=?').get(key).group_id);
 });
 
 test('rotation group rejects roster mismatch and duplicate positions', async () => {

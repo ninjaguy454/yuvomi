@@ -395,7 +395,7 @@ export function reconcileSeriesFuture(d,state,{actor,definition=state.definition
   let previous={...state.occurrence};
   const selected=read(d,state.occurrence.task_id);
   if(scope!=='future_only'&&!selected.archived_at&&!['done','expired','skipped','closed_incomplete'].includes(selected.status))
-    previous={...previous,definition_id:definition.id};
+    previous={...previous,definition_id:state.currentDefinitionId??definition.id};
   const future=d.prepare(`SELECT o.* FROM task_recurrence_occurrences o JOIN tasks t ON t.id=o.task_id
     WHERE o.series_id=? AND o.generation>? AND o.state='materialized' ORDER BY o.generation,o.task_id`).all(state.series_id,state.occurrence.generation);
   for(const occurrence of future) {

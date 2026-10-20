@@ -21,7 +21,9 @@ const errorBox = '<p role="alert" tabindex="-1" data-rotation-error hidden></p>'
 const draftNotice = '<p data-rotation-draft-notice role="status" hidden></p>';
 const isShared = group => group?.usage_mode === 'shared';
 const weekdays = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-const modeLabel = group => isShared(group)?'Shared across activities':'Independent per activity';
+const modeLabel = group => group?.legacy_compatibility==='synchronized_slots'?'Imported synchronized Tasks'
+  :group?.legacy_compatibility==='converted_independent'?'Converted recurring Task'
+  :isShared(group)?'Shared across activities':'Independent per activity';
 const dayText = days => days?.length===7?'Every day':(days||[]).map(day=>weekdays[day]?.slice(0,3)).join(', ')||'No days selected';
 const orderList = (members=[], empty='No members yet') => members.length?`<ol class="rotation-order">${members.map(member=>`<li><span>${esc(memberLabel(member))}</span></li>`).join('')}</ol>`:`<p class="form-hint">${esc(empty)}</p>`;
 const toggle = (name, label, checked, hint='') => `<label class="rotation-switch"><span class="rotation-switch__copy"><strong>${esc(label)}</strong>${hint?`<span class="form-hint">${esc(hint)}</span>`:''}</span><span class="toggle"><input name="${name}" type="checkbox" ${checked?'checked':''} aria-label="${esc(label)}"><span class="toggle__track" aria-hidden="true"></span></span></label>`;
@@ -117,6 +119,7 @@ async function editGroup(group,onSaved,live) {
   let modal,dispose,savedGroup=null;
   modal=openChildModal({title:group?'Edit Rotation Group':'New Rotation Group',size:'lg',content:`<form class="rotation-editor" data-rotation-group-form novalidate>
     ${errorBox}${draftNotice}
+    ${group?.legacy_compatibility==='synchronized_slots'?'<p class="form-hint">This imported Group keeps the member order and synchronized positions of existing recurring Tasks. You can rename it or update its description. Membership and usage schedule are locked so other Tasks keep their assigned positions.</p>':''}
     <section class="rotation-section" aria-label="Group details">
     <label class="form-label">Group name<input class="form-input" name="name" maxlength="120" placeholder="e.g. Kids Shower Order" value="${esc(group?.name||'')}" required></label>
     <label class="form-label">Description <span class="form-label__hint">Optional</span><textarea class="form-input" name="description" maxlength="2000" rows="2" placeholder="What is this group used for?">${esc(group?.description||'')}</textarea></label>
@@ -142,6 +145,10 @@ async function editGroup(group,onSaved,live) {
   </form>`,onSave(panel){
     window.lucide?.createIcons({ el: panel });
     const form=panel.querySelector('form'),list=panel.querySelector('[data-rotation-member-list]'),select=panel.querySelector('[data-rotation-add-member]');
+    if(group?.legacy_compatibility==='synchronized_slots'){
+      form.elements.active.disabled=true;form.elements.usage_mode.disabled=true;select.disabled=true;
+      list.querySelectorAll('button').forEach(control=>control.disabled=true);
+    }
     const sharedValue=()=>({ ...sharedConfig(group),strategy:form.elements.shared_strategy.value,direction:form.elements.shared_direction.value,
       start_mode:form.elements.shared_start_mode.value,starting_member_id:form.elements.shared_start_mode.value==='explicit'?Number(form.elements.shared_starting_member.value)||null:null,effective_date:form.elements.shared_effective_date.value,
       weekdays:[...form.querySelectorAll('[data-rotation-weekday]:checked')].map(input=>Number(input.value)),
@@ -175,9 +182,10 @@ async function editGroup(group,onSaved,live) {
       form.dispatchEvent(new Event('input',{bubbles:true}));
     };
     for(const option of select.options)option.disabled=memberIds(list).includes(Number(option.value));
-    dispose=bindOrder(list,sync);
+    dispose=group?.legacy_compatibility==='synchronized_slots'?()=>{}:bindOrder(list,sync);
     form.addEventListener('change',event=>{if(event.target!==select)paintShared();});paintShared();
     select.addEventListener('change',()=>{
+      if(group?.legacy_compatibility==='synchronized_slots')return;
       const member=members.find(m=>m.id===Number(select.value));if(member&&!memberIds(list).includes(member.id))list.insertAdjacentHTML('beforeend',orderedRows([member]));
       select.value='';sync();
     });
@@ -371,6 +379,7 @@ async function groupDetail(groupId,live) {
     render:group=>`${errorBox}<div class="rotation-detail" data-rotation-group-detail="${group.id}">
       <div class="rotation-heading"><div class="rotation-badges"><span class="rotation-badge rotation-badge--mode">${modeLabel(group)}</span><span class="rotation-badge">${group.active?'Active':'Inactive'}</span></div>${canCapability('rotations.manage')?button('edit','Edit Group'):''}</div>
       ${group.description?`<p class="rotation-description">${esc(group.description)}</p>`:''}
+      ${group.legacy_compatibility==='synchronized_slots'?'<p class="form-hint">This imported Group preserves synchronized positions across recurring Tasks. Member order and schedule are locked; each Task keeps its saved assignment cursor.</p>':group.legacy_compatibility==='converted_independent'?'<p class="form-hint">The current Task keeps its recorded assignee. Future occurrences use this Group and its independent turn cursor.</p>':''}
       ${!isShared(group)&&group.usage_effective_date?`<p class="form-hint">Effective from ${esc(formatDate(group.usage_effective_date))}</p>`:''}
       <section class="rotation-section"><div class="rotation-section__heading"><h3>Members <span class="rotation-count">${group.members.length}</span></h3><p class="form-hint">Baseline order${isShared(group)?' · Current turns follow the shared schedule.':'. Each activity keeps its own turns.'}</p></div>${orderList(group.members)}</section>
       ${isShared(group)?sharedState(group):''}
@@ -378,7 +387,7 @@ async function groupDetail(groupId,live) {
       ${group.tracks.length?group.tracks.map(track=>`<section class="rotation-usage" data-rotation-usage="${track.id}"><div><strong>${esc(trackLabel(track))}</strong>
         ${consumerStatus(track)?`<p class="form-hint" data-rotation-consumer-status>${esc(consumerStatus(track))}</p>`:''}
         <p class="form-hint">${esc(methodText(track))} · Next: ${esc(orderText(track.next))}</p></div>
-        ${canCapability('rotations.history')?`<button type="button" class="btn btn--secondary btn--sm" data-rotation-history="${track.id}">History and controls</button>`:''}</section>`).join(''):'<p class="rotation-empty">Not used yet. Choose this group in an Activity, Workflow or Meal Plan to get started.</p>'}</section></div>`,
+        ${canCapability('rotations.history')?`<button type="button" class="btn btn--secondary btn--sm" data-rotation-history="${track.id}">History and controls</button>`:''}</section>`).join(''):group.legacy_compatibility?'<p class="form-hint">Existing recurring Tasks use this Group through their saved synchronized positions.</p>':'<p class="rotation-empty">Not used yet. Choose this group in an Activity, Workflow or Meal Plan to get started.</p>'}</section></div>`,
     onAction:async(action,group,reload)=>{
       if(action.hasAttribute('data-rotation-edit'))return editGroup(group,reload,live);
       if(action.hasAttribute('data-rotation-history'))return trackHistory(action.dataset.rotationHistory,live);

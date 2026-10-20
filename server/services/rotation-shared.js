@@ -325,6 +325,8 @@ export function saveRotationGroupUsage(d,input,{id:groupId=null,actorId,expected
     const meaningful=input.active===false?false:(prior?.usage_mode??'independent')!==normalized.usage_mode
       ||normalized.usage_mode==='shared'&&(json({...configOf(prior),timezone:undefined})!==json(normalized.shared_config)
         ||json(old?.members.map(member=>member.id))!==json(normalized.member_ids));
+    if(old?.legacy_compatibility==='synchronized_slots'&&(meaningful||input.active===false||input.active===0))
+      fail('This imported Group keeps synchronized Task positions. Its schedule cannot be changed from Group management.',409,'legacy_cohort_schedule');
     if(meaningful&&old) {
       const preview=proposal(d,old.id,input,actorId,now);
       if(preview.usage.hidden.length)fail('An administrator with access to every affected consumer must confirm this change.',403);

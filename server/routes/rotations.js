@@ -35,11 +35,13 @@ function authorizedPreviewContext(d,req,context={}) {
 const clock=createChangesStream({table:'rotation_change_clock',deniedMessage:'Rotation access is not enabled.',
   canRead:(d,req)=>hasCapability(d,req,'rotations.view')});
 router.get('/rotation-changes',clock);
-router.get('/rotation-groups',handle('view',(d,req,res)=>res.json({data:listRotationGroups(d,{includeInactive:req.query.include_inactive==='1'}).map(group=>({...group,...rotationGroupUsage(d,group.id)}))})));
+router.get('/rotation-groups',handle('view',(d,req,res)=>res.json({data:listRotationGroups(d,{includeInactive:req.query.include_inactive==='1',
+  includeLegacy:hasCapability(d,req,'rotations.manage')}).map(group=>({...group,...rotationGroupUsage(d,group.id)}))})));
 router.get('/rotation-members',handle('view',(d,_req,res)=>res.json({data:householdMembers(d).map(({id,display_name})=>({id,display_name}))})));
 router.post('/rotation-groups',handle('manage',(d,req,res)=>res.status(201).json({data:saveRotationGroupUsage(d,req.body,{actorId:actorId(req)})})));
 router.get('/rotation-groups/:id',handle('view',(d,req,res)=>{
   const group=found(getRotationGroup(d,req.params.id));
+  if(group.legacy_compatibility)assertCapability(d,req,'rotations.manage');
   const tracks=d.prepare('SELECT id FROM rotation_tracks WHERE group_id=? ORDER BY label,id').all(group.id).map(row=>{
     const visible=projectRotationTrack(d,req,getRotationTrack(d,row.id));if(!visible)return null;
     const track={...inspectRotationTrack(d,row.id),...visible};

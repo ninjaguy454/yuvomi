@@ -15,6 +15,7 @@ process.env.NODE_ENV = 'development'; process.env.LOG_LEVEL = 'error';
 const { get } = await import('../server/db.js');
 const { hashPassword } = await import('../server/utils/password.js');
 const { todayKey } = await import('../server/utils/timezone.js');
+const {convertLegacyRotationGroups}=await import('../server/services/legacy-rotation-conversion.js');
 // The real lifecycle intentionally requires the Tasks adapter for recurrence.
 await import('../server/routes/tasks.js');
 const db = get();
@@ -188,4 +189,32 @@ test('real app: Template to New Task accepts a draft-only shared Rotation and sh
     if(output){mkdirSync(output,{recursive:true});writeFileSync(join(output,'failure-state.json'),JSON.stringify({state,writes,serverOutput},null,2));}
     throw error;
   }finally{page.off('request',capture);await page.close();}
+});
+
+test('real app: imported synchronized Group is labeled in mobile Task edit and keyboard disclosure keeps draft', {timeout:120000}, async()=>{
+  const page=await openClient();
+  try{
+    const due=todayKey(db),key='Private bedtime rotation';
+    const created=(await api(page,'post','/tasks',{title:'Private bedtime work',due_date:due,is_recurring:1,
+      recurrence_rule:'FREQ=DAILY',assignment_mode:'round_robin',rotation_user_ids:kids,
+      rotation_group:key,rotation_slot:0,visibility:'private'})).data;
+    await api(page,'post','/tasks',{title:'Private bedtime companion',due_date:due,is_recurring:1,
+      recurrence_rule:'FREQ=DAILY',assignment_mode:'round_robin',rotation_user_ids:kids,
+      rotation_group:key,rotation_slot:1,visibility:'private'});
+    db.transaction(()=>convertLegacyRotationGroups(db))();
+    const before=db.prepare('SELECT assigned_to,rotation_index,rotation_group FROM tasks WHERE id=?').get(created.id);
+    await page.setViewport({width:390,height:780,isMobile:true,hasTouch:true});
+    await page.goto(`${origin}/tasks?view=list`);await tasksReady(page);
+    await page.evaluate(async id=>{const {openTaskById}=await import('/pages/tasks.js');await openTaskById(id)},created.id);
+    await page.waitForSelector('#detail-view-edit');await click(page,'#detail-view-edit');await page.waitForSelector('#task-form');
+    const summary=await page.$('#task-group-assignment details summary');assert.ok(summary);
+    assert.match(await page.$eval('#task-group-assignment details',element=>element.textContent),/synchronized Group/);
+    assert.doesNotMatch(await page.$eval('#task-group-assignment details summary',element=>element.textContent),/Private bedtime/);
+    await summary.focus();await page.keyboard.press('Enter');
+    assert.equal(await page.$eval('#task-group-assignment details',element=>element.open),true);
+    assert.equal(await page.$eval('#task-group-assignment details',element=>element.getBoundingClientRect().right<=innerWidth),true);
+    await page.keyboard.press('Escape');
+    assert.deepEqual(db.prepare('SELECT assigned_to,rotation_index,rotation_group FROM tasks WHERE id=?').get(created.id),before);
+    assert.deepEqual(page.appErrors||[],[]);
+  }finally{await page.close();}
 });

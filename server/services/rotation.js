@@ -57,13 +57,21 @@ function memberships(d,groupId,{activeOnly=true}={}) {
     FROM rotation_group_members m LEFT JOIN users u ON u.id=m.user_id WHERE m.group_id=? ${activeOnly?'AND m.active=1':''}
     ORDER BY m.sort_order,m.id`).all(groupId).map(m=>({...m,display_name:m.display_name||'Former household member'}));
 }
-export function getRotationGroup(d,groupId) {
+export function getRotationGroup(d,groupId,{legacyCompatibility}={}) {
   const group=d.prepare('SELECT * FROM rotation_groups WHERE id=? AND household_key=?').get(id(groupId,'Rotation Group'),HOUSEHOLD);
-  return group?{...group,members:memberships(d,group.id)}:null;
+  if(!group)return null;
+  if(legacyCompatibility===undefined)legacyCompatibility=d.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='legacy_rotation_group_mappings'").get()
+    ?d.prepare('SELECT compatibility_mode FROM legacy_rotation_group_mappings WHERE group_id=?').get(group.id)?.compatibility_mode:null;
+  return {...group,members:memberships(d,group.id),legacy_compatibility:legacyCompatibility||null};
 }
-export function listRotationGroups(d,{includeInactive=false}={}) {
-  return d.prepare(`SELECT id FROM rotation_groups WHERE household_key=? ${includeInactive?'':'AND active=1'} ORDER BY name COLLATE NOCASE,id`)
-    .all(HOUSEHOLD).map(row=>getRotationGroup(d,row.id));
+export function listRotationGroups(d,{includeInactive=false,includeLegacy=false}={}) {
+  const legacyTable=d.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='legacy_rotation_group_mappings'").get();
+  return d.prepare(`SELECT g.id,${legacyTable?'m.compatibility_mode':'NULL'} AS compatibility_mode
+    FROM rotation_groups g ${legacyTable?'LEFT JOIN legacy_rotation_group_mappings m ON m.group_id=g.id':''}
+    WHERE g.household_key=? ${includeInactive?'':'AND g.active=1'}
+    ${!includeLegacy&&legacyTable?'AND m.group_id IS NULL':''}
+    ORDER BY g.name COLLATE NOCASE,g.id`)
+    .all(HOUSEHOLD).map(row=>getRotationGroup(d,row.id,{legacyCompatibility:row.compatibility_mode}));
 }
 function survivingNext(previous, wanted, current, reverse=false) {
   const available=new Set(current.map(m=>m.membership_id));
@@ -85,7 +93,10 @@ export function saveRotationGroup(d,input,{id:groupId=null,actorId,expectedRevis
     const description=input.description===undefined?old?.description??null:String(input.description??'').trim()||null;
     if(description?.length>2000)fail('Description is limited to 2000 characters.');
     const active=flag(input.active,old?!!old.active:true);
+    if(old?.legacy_compatibility==='synchronized_slots'&&!active)fail('This imported Group must remain active while its recurring Tasks use it.',409,'legacy_cohort_active');
     const memberIds=ids(input.member_ids??old?.members.filter(m=>m.id).map(m=>m.id)??[]);
+    if(old?.legacy_compatibility==='synchronized_slots'&&JSON.stringify(memberIds)!==JSON.stringify(old.members.filter(m=>m.active&&m.id).map(m=>m.id)))
+      fail('This imported Group preserves synchronized Task positions. Its member order cannot be changed from Group management.',409,'legacy_cohort_order');
     if(!memberIds.length&&(!old||active))fail('Add at least one household member.');
     if(memberIds.length>100)fail('A Rotation Group supports at most 100 household members.');
     const members=new Set(householdMembers(d).map(m=>m.id));

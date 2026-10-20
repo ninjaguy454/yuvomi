@@ -59,6 +59,16 @@ test('shared start choices resolve once and legacy explicit starts remain valid'
     assert.equal(legacy.shared_config.starting_member_id,2);
   }finally{d.close();}
 });
+test('switching an existing shared Group to random does not reuse its former explicit start',()=>{
+  const d=fixture();try{
+    const now=at('2026-09-19T23:00:00Z'),group=make(d,{},now);
+    const input={name:group.name,member_ids:[2,3,4],usage_mode:'shared',shared_config:{...config('2026-09-20'),start_mode:'random',starting_member_id:null}};
+    const preview=S.previewRotationGroupUsage(d,group.id,input,{actorId:1,now});
+    const saved=S.saveRotationGroupUsage(d,{...input,confirmation_token:preview.confirmation_token},{id:group.id,actorId:1,expectedRevision:group.revision,now});
+    assert.equal(saved.shared_config.start_mode,'random');assert.equal(saved.shared_config.starting_member_id,4);
+    assert.equal(S.previewSharedRotation(d,group.id,{dateKey:'2026-09-20'}).member_ids[0],4);
+  }finally{d.close();}
+});
 test('late Task creation cannot jump unprocessed dates; bounded chronological reconciliation recovers after restart',()=>{
   const d=fixture();try{
     const group=make(d),now=at('2026-09-22T21:00:00-04:00');

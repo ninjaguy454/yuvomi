@@ -368,7 +368,8 @@ function scoringAssignmentIntent(task,body) {
     if(!bindingChanged)return {assigned,changed:false,binding:binding.binding,bindingChanged:false};
     const desired=binding.binding,activity=existing?.activity_template_id===desired.activityTemplateId
       ?scoringActivitySnapshot(task,body,desired,existing)
-      :captureActivityTemplateDefinition(d,desired.activityTemplateId);
+      :overrideTaskActivityAssignees({...captureActivityTemplateDefinition(d,desired.activityTemplateId),
+        required_skill_ids:taskSkillInput(body,task.id,desired.activityTemplateId)},desired.assignmentOverrideUserIds);
     // Save may select a random person. A read-only preview cannot promise who
     // that later draw will choose, and must never consume the assignment cursor.
     if(!desired.assignmentOverrideUserId&&['eligible_random','random'].includes(activity.assignment_policy||activity.assignment_strategy))
@@ -2796,7 +2797,7 @@ export function updateTaskDefinition(req, res) {
 
     const assignedBefore = db.get().prepare('SELECT user_id FROM task_assignments WHERE task_id = ?')
       .all(task.id).map((r) => r.user_id);
-    if(desiredActivityBinding&&!historicalSeriesOnly&&!sameIdOrder(skillIds,skillsBefore))
+    if(desiredActivityBinding&&!bindingChanged&&!historicalSeriesOnly&&!sameIdOrder(skillIds,skillsBefore))
       assertTaskSkillAssignments(db.get(),skillIds,assignedBefore,due_date||todayInHouseholdZone());
     const rotationBefore = loadRotationUserIds(db.get(), task.id);
     const assignmentMode = desiredActivityBinding
@@ -3129,8 +3130,10 @@ export function updateTaskDefinition(req, res) {
         rotationChanges=bindTaskRotations(db.get(),task.id,{actorId:req.authUserId||req.session.userId,scope:editScope,previousConfig:task.rotation_bindings_json,onlyMissing:!rotationsChanged});
       }
       if(rotationsChanged||sharedWindowChanged||performersChanged||editedSubtasks||bindingChanged)refreshTaskRotationRendering(db.get(),task.id);
-      if(firstUid && (performersChanged||editedSubtasks||!sameIdOrder(skillIds,skillsBefore)))
-        assertTaskSupervisionAssignee(db.get(),task.id,firstUid);
+      if(performersChanged||editedSubtasks||!sameIdOrder(skillIds,skillsBefore)) {
+        const actualAssignee=db.get().prepare('SELECT assigned_to FROM tasks WHERE id=?').get(task.id)?.assigned_to;
+        if(actualAssignee)assertTaskSupervisionAssignee(db.get(),task.id,actualAssignee);
+      }
       if(series) {
         if(editScope==='future') {
           const definition=normalizeSeriesSchedule(captureSeriesDefinition(db.get(),task.id),series.occurrence);

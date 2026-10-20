@@ -27,7 +27,7 @@ function row(binding, groups = [], { skills = [], places = [], workflowOperation
         <label class="form-label">Rotation method<select class="form-input" data-rotation-strategy>${options([['round_robin','Round Robin'],['rotating_order','Rotating Order'],['fixed_order','Fixed Order']], binding.strategy || 'rotating_order')}</select></label>
         <label class="form-label">Move to the next turn<select class="form-input" data-rotation-advance>${options([['on_finalized','After occurrence ends'],['on_completed','After successful completion'],['manual','Manually']], binding.advance_policy || 'on_finalized')}</select></label>
       </div>
-      <label class="form-label">Start with<select class="form-input" data-rotation-start-mode>${options([['first','First member in the group'],['random','Random member (chosen once)']],binding.start_mode||'first')}</select></label>
+      <label class="form-label">Start new rotation with<select class="form-input" data-rotation-start-mode>${options([['first','First member in the group'],['random','Random member (chosen once)']],binding.start_mode||'first')}</select></label>
       <p class="form-hint" data-rotation-method-help>${methodHelp[binding.strategy || 'rotating_order']}</p>
       <div data-rotation-direction-field ${(binding.strategy||'rotating_order')==='rotating_order'?'':'hidden'}>
         <label class="form-label">Rotation direction<select class="form-input" data-rotation-direction>${options(Object.entries(directions),binding.direction||'first_to_last')}</select></label>
@@ -60,7 +60,7 @@ function row(binding, groups = [], { skills = [], places = [], workflowOperation
   </fieldset>`;
 }
 export function renderRotationBindings(value = [], config = {}) {
-  return `<section class="rotation-bindings" data-rotation-bindings><div class="rotation-section__heading"><h3>Rotation groups</h3><p class="form-hint">Choose a group for this Activity. Group membership and order are shared; the behavior below belongs to this Activity.</p></div>
+  return `<section class="rotation-bindings" data-rotation-bindings><div class="rotation-section__heading"><h3>Rotation groups</h3><p class="form-hint">Choose a group for order and expressions in this Activity. Assignment still uses the Activity assignee controls. Group membership and order are shared; the behavior below belongs to this Activity.</p></div>
     <div class="rotation-group-choices" data-rotation-available role="group" aria-label="Available Rotation Groups"></div>
     <div data-rotation-rows>${bindings(value).map(binding => row(binding, [], config)).join('')}</div>
     ${canCapability('rotations.manage')?'<button class="btn btn--secondary btn--sm" type="button" data-rotation-create-group>Create Rotation Group</button>':''}

@@ -235,7 +235,8 @@ function normalizedInput(d,input,old,now) {
     if(!['first','random','explicit'].includes(start_mode))fail('Choose first, random, or a specific starting member.');
     const previousStart=configOf(savedVersion)?.starting_member_id;
     const starting_member_id=start_mode==='first'?members[0]:start_mode==='random'
-      ?(savedVersion?.usage_mode==='shared'&&members.includes(previousStart)?previousStart:stableRotationStart(members,`shared:${String(input.name??old?.name??'').trim().toLowerCase()}:${members.join(',')}`))
+      ?(savedVersion?.usage_mode==='shared'&&configOf(savedVersion)?.start_mode==='random'&&members.includes(previousStart)
+        ?previousStart:stableRotationStart(members,`shared:${String(input.name??old?.name??'').trim().toLowerCase()}:${members.join(',')}`))
       :Number(raw.starting_member_id);
     if(input.active!==false&&!members.includes(starting_member_id))fail('Choose a starting member in this Rotation Group.');
     const direction=raw.direction??'first_to_last';

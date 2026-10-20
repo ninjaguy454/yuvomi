@@ -59,3 +59,15 @@ test('recurring instance skill edits update the future definition but not templa
   assert.deepEqual(next.skill_ids,[skill]);assert.deepEqual(next.binding.snapshot.required_skill_ids,[skill]);
   assert.deepEqual(d.prepare('SELECT skill_id FROM activity_template_skills WHERE activity_template_id=?').all(template),[]);
 });
+
+test('switching template and assignee validates the proposed person against new skills',async t=>{
+  const f=await scoringFixture(t),d=f.d;
+  const template=Number(d.prepare("INSERT INTO activity_templates(name,title_template,category,assignment_strategy,assignment_policy,fixed_user_id,subject_required,presence_policy,created_by,points) VALUES('Old template','Work','misc','fixed','fixed',2,0,'ignore',1,0)").run().lastInsertRowid);
+  const replacement=Number(d.prepare("INSERT INTO activity_templates(name,title_template,category,assignment_strategy,assignment_policy,fixed_user_id,subject_required,presence_policy,created_by,points) VALUES('New template','Work','misc','fixed','fixed',3,0,'ignore',1,0)").run().lastInsertRowid);
+  const skill=Number(d.prepare("INSERT INTO skills(name,minimum_age,age_promotion,created_by) VALUES('New requirement',0,'normal',1)").run().lastInsertRowid);
+  d.prepare("INSERT INTO user_skill_proficiency(user_id,skill_id,proficiency,source,updated_by) VALUES(2,?,'excluded','manual',1)").run(skill);
+  const created=await f.create({activity_template_id:template,due_date:'2026-11-01'});assert.equal(created.status,201,JSON.stringify(created));
+  const edited=await f.edit(created.data.id,{activity_template_id:replacement,assigned_to:[3],skill_ids:[skill]});
+  assert.equal(edited.status,200,JSON.stringify(edited));assert.equal(edited.data.assigned_to,3);
+  assert.deepEqual(JSON.parse(d.prepare('SELECT definition_snapshot_json FROM task_activity_bindings WHERE task_id=?').get(created.data.id).definition_snapshot_json).required_skill_ids,[skill]);
+});

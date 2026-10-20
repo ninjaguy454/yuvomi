@@ -294,6 +294,59 @@ test('editing the current legacy Task title keeps its converted future Group ass
     db.prepare('SELECT group_id FROM legacy_rotation_group_mappings WHERE source_key=?').get(key).group_id);
 });
 
+test('converted solo rotation keeps an ineligible next position unassigned and advances exactly once',async()=>{
+  const key=`Solo skill position ${Date.now()}`,due=new Date().toISOString().slice(0,10);
+  const created=await call('POST','',{title:'Skill position',due_date:due,is_recurring:1,recurrence_rule:'FREQ=DAILY',
+    assignment_mode:'round_robin',rotation_user_ids:[grace,eleanor,frank],rotation_group:key,rotation_slot:0});
+  assert.equal(created.status,201);
+  const id=created.body.data.id;
+  const skill=Number(db.prepare("INSERT INTO skills(name,minimum_age,age_promotion,created_by) VALUES('Synthetic solo skill',0,'normal',?)")
+    .run(admin).lastInsertRowid);
+  for(const [member,proficiency] of [[grace,'normal'],[eleanor,'excluded'],[frank,'normal']])
+    db.prepare("INSERT INTO user_skill_proficiency(user_id,skill_id,proficiency,source,updated_by) VALUES(?,?,?,'manual',?)")
+      .run(member,skill,proficiency,admin);
+  db.prepare('INSERT INTO task_skill_requirements(task_id,skill_id,sort_order) VALUES(?,?,0)').run(id,skill);
+  ensureSeriesDefinition(db,id);
+  for(const row of db.prepare('SELECT id,definition_json FROM task_recurrence_definitions WHERE source_task_id=?').all(id)){
+    const definition=JSON.parse(row.definition_json);definition.skill_ids=[skill];
+    db.prepare('UPDATE task_recurrence_definitions SET definition_json=? WHERE id=?').run(JSON.stringify(definition),row.id);
+  }
+  db.transaction(()=>convertLegacyRotationGroups(db))();
+  assert.equal((await call('PATCH',`/${id}/status`,{status:'done'})).status,200);
+  const next=followupOf(id);
+  assert.ok(next);
+  assert.equal(next.assigned_to,null,'exact next person lacks the skill, so the occurrence stays unassigned');
+  assert.equal(next.assignment_mode,'fixed');
+  assert.equal(JSON.parse(next.assignment_group_json).legacy_exact_next,true);
+  // As in the legacy flow, required-skill work cannot be completed while
+  // unassigned. Supply a manual qualified performer to continue the series.
+  db.prepare('UPDATE tasks SET assigned_to=? WHERE id=?').run(frank,next.id);
+  db.prepare('INSERT INTO task_assignments(task_id,user_id) VALUES(?,?)').run(next.id,frank);
+  const completed=await call('PATCH',`/${next.id}/status`,{status:'done'});
+  assert.equal(completed.status,200,JSON.stringify(completed.body));
+  assert.equal(followupOf(next.id).assigned_to,frank,'the cursor advances from the ineligible position');
+});
+
+test('editing a converted Group occurrence keeps its exact future cursor',async()=>{
+  const key=`Converted Group edit ${Date.now()}`,due=new Date().toISOString().slice(0,10);
+  const created=await call('POST','',{title:'Group occurrence',due_date:due,is_recurring:1,recurrence_rule:'FREQ=DAILY',
+    assignment_mode:'round_robin',rotation_user_ids:[grace,eleanor,frank],rotation_group:key,rotation_slot:0});
+  assert.equal(created.status,201);
+  const id=created.body.data.id;ensureSeriesDefinition(db,id);
+  db.transaction(()=>convertLegacyRotationGroups(db))();
+  assert.equal((await call('PATCH',`/${id}/status`,{status:'done'})).status,200);
+  const current=followupOf(id),seriesId=db.prepare('SELECT series_id FROM task_recurrence_occurrences WHERE task_id=?').get(current.id).series_id;
+  const revision=db.prepare('SELECT revision FROM task_recurrence_series WHERE series_id=?').get(seriesId).revision;
+  const edited=await call('PUT',`/${current.id}`,{title:'Renamed Group occurrence',due_date:current.due_date,
+    is_recurring:1,recurrence_rule:'FREQ=DAILY',assignment_mode:'fixed',assignment_group:JSON.parse(current.assignment_group_json),
+    assigned_to:[current.assigned_to],edit_scope:'future',expected_series_revision:revision});
+  assert.equal(edited.status,200,JSON.stringify(edited.body));
+  assert.equal((await call('PATCH',`/${current.id}/status`,{status:'done'})).status,200);
+  const next=followupOf(current.id);
+  assert.equal(next.assigned_to,frank);
+  assert.equal(JSON.parse(next.assignment_group_json).legacy_exact_next,true);
+});
+
 test('rotation group rejects roster mismatch and duplicate positions', async () => {
   const due = new Date().toISOString().slice(0, 10);
   const group = `Validation group ${Date.now()}`;

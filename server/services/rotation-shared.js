@@ -40,7 +40,7 @@ export function sharedGroupConfiguration(d,groupId,dateKey=todayKey(d)) {
   const schedule=scheduleRow(d,groupId),version=versionRow(d,schedule,dateKey);
   if(!version||version.usage_mode!=='shared')return null;
   const c=configOf(version);
-  return {...normalizeRotationConfiguration(d,{...c,group_id:groupId,advance_policy:'on_finalized'},{allowMissingReferences:true}),
+  return {...normalizeRotationConfiguration(d,{...c,group_id:groupId,advance_policy:'on_finalized'},{allowMissingReferences:true,allowImported:true}),
     usage_mode:'shared',track_id:schedule.track_id,starting_member_id:c.starting_member_id,version_id:version.id,
     schedule:{effective_date:version.effective_date,weekdays:c.weekdays,active_time:c.active_time,finalize_time:c.finalize_time,
       finalize_day_offset:c.finalize_day_offset,timezone:version.timezone}};
@@ -322,11 +322,14 @@ export function saveRotationGroupUsage(d,input,{id:groupId=null,actorId,expected
   return d.transaction(()=>{
     const old=groupId?getRotationGroup(d,groupId):null;
     const normalized=normalizedInput(d,input,old,now),schedule=old?scheduleRow(d,old.id):null,prior=versionRow(d,schedule);
+    const membershipChanged=!!old&&json(old.members.filter(member=>member.active).map(member=>member.id))!==json(normalized.member_ids);
     const meaningful=input.active===false?false:(prior?.usage_mode??'independent')!==normalized.usage_mode
       ||normalized.usage_mode==='shared'&&(json({...configOf(prior),timezone:undefined})!==json(normalized.shared_config)
         ||json(old?.members.map(member=>member.id))!==json(normalized.member_ids));
-    if(old?.legacy_compatibility==='synchronized_slots'&&(meaningful||input.active===false||input.active===0))
+    if(old?.legacy_compatibility&&(meaningful||input.active===false||input.active===0))
       fail('This imported Group keeps synchronized Task positions. Its schedule cannot be changed from Group management.',409,'legacy_cohort_schedule');
+    if(membershipChanged&&!meaningful&&old&&consumers(d,old.id,actorId).hidden.length)
+      fail('An administrator with access to every affected consumer must confirm this change.',403);
     if(meaningful&&old) {
       const preview=proposal(d,old.id,input,actorId,now);
       if(preview.usage.hidden.length)fail('An administrator with access to every affected consumer must confirm this change.',403);
@@ -344,7 +347,7 @@ export function saveRotationGroupUsage(d,input,{id:groupId=null,actorId,expected
         d.prepare("UPDATE rotation_groups SET revision=revision+1,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?").run(group.id);
         group=getRotationGroup(d,group.id);
       }
-      if(normalized.usage_mode==='shared')normalizeRotationConfiguration(d,{...normalized.shared_config,group_id:group.id,advance_policy:'on_finalized'});
+      if(normalized.usage_mode==='shared')normalizeRotationConfiguration(d,{...normalized.shared_config,group_id:group.id,advance_policy:'on_finalized'},{allowImported:true});
       const id=schedule?.id??Number(d.prepare('INSERT INTO rotation_group_schedules(group_id) VALUES(?)').run(group.id).lastInsertRowid);
       d.prepare('INSERT INTO rotation_group_schedule_versions(schedule_id,usage_mode,effective_date,timezone,config_json,members_json,independent_starts_json,actor_user_id) VALUES(?,?,?,?,?,?,?,?)')
         .run(id,normalized.usage_mode,normalized.effective_date,householdTimeZone(d),json(normalized.shared_config),json(group.members),json(normalized.independent_starts),actorId);

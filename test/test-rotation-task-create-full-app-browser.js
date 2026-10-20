@@ -218,3 +218,27 @@ test('real app: imported synchronized Group is labeled in mobile Task edit and k
     assert.deepEqual(page.appErrors||[],[]);
   }finally{await page.close();}
 });
+
+test('real app: converted solo recurrence shows its saved Group chip and exact turn policy', {timeout:120000}, async()=>{
+  const page=await openClient();
+  try{
+    const due=todayKey(db),key='Private solo sequence';
+    const created=(await api(page,'post','/tasks',{title:'Solo sequence',due_date:due,is_recurring:1,
+      recurrence_rule:'FREQ=DAILY',assignment_mode:'round_robin',rotation_user_ids:kids,
+      rotation_group:key,rotation_slot:0,visibility:'private'})).data;
+    db.transaction(()=>convertLegacyRotationGroups(db))();
+    await api(page,'patch',`/tasks/${created.id}/status`,{status:'done',
+      expected_revision:db.prepare('SELECT revision FROM tasks WHERE id=?').get(created.id).revision});
+    const next=db.prepare('SELECT * FROM tasks WHERE recurrence_origin_id=?').get(created.id);
+    assert.ok(next?.assignment_group_json);
+    await page.setViewport({width:390,height:780,isMobile:true,hasTouch:true});
+    await page.goto(`${origin}/tasks?view=list`);await tasksReady(page);
+    await page.evaluate(async id=>{const {openTaskById}=await import('/pages/tasks.js');await openTaskById(id)},next.id);
+    await page.waitForSelector('#detail-view-edit');await click(page,'#detail-view-edit');await page.waitForSelector('#task-form');
+    assert.match(await page.$eval('.rotation-group-choice[aria-pressed="true"]',element=>element.textContent),/Imported Rotation/);
+    assert.match(await page.$eval('[data-task-group-summary]',element=>element.textContent),/exact next person/);
+    assert.doesNotMatch(await page.$eval('#task-group-assignment',element=>element.textContent),/Private solo sequence/);
+    await page.keyboard.press('Escape');
+    assert.equal(db.prepare('SELECT assignment_group_json FROM tasks WHERE id=?').get(next.id).assignment_group_json,next.assignment_group_json);
+  }finally{await page.close();}
+});

@@ -294,11 +294,12 @@ function translatedSeriesDate(date,oldAnchor,newAnchor) {
  * validator and date context. No database registration or turn is consumed. */
 export function prepareSeriesOccurrenceWork(source,definition,window,{qualify,asOfDate,resolveGroupAssignment=null}={}) {
   const selection=seriesRotationAssignment(source,definition,{advance:true});
-  const rootGroup=definition.task.assignment_group_json&&resolveGroupAssignment
+  const rootGroupConfigured=!!definition.task.assignment_group_json&&!!resolveGroupAssignment&&!definition.binding;
+  const rootGroup=rootGroupConfigured
     ?resolveGroupAssignment({sourceTaskId:source.id,configuration:definition.task.assignment_group_json,
       skills:definition.skill_ids,window,previousUserId:definition.assigned_user_ids?.[0]??source.assigned_to,actionKey:'root'}) : null;
-  const rootAssigned=qualify(rootGroup?[rootGroup]:selection.assigned_user_ids,definition.skill_ids,window.due_date,false);
-  const primary=rootGroup??(!definition.skill_ids.length||rootAssigned.includes(selection.primary_user_id)
+  const rootAssigned=qualify(rootGroupConfigured?(rootGroup?[rootGroup]:[]):selection.assigned_user_ids,definition.skill_ids,window.due_date,false);
+  const primary=rootGroupConfigured?(rootAssigned[0]??null):(!definition.skill_ids.length||rootAssigned.includes(selection.primary_user_id)
     ?selection.primary_user_id:rootAssigned[0]??null);
   const relative=window.relative??(definition.task.due_date_offset_days!=null);
   const nextAnchor=relative?window.start_date:window.due_date;

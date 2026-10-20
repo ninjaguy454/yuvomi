@@ -4,6 +4,7 @@ import {scoringFixture} from './helpers/task-scoring-route-fixture.js';
 import {saveRotationGroup} from '../server/services/rotation.js';
 import {saveRotationGroupUsage} from '../server/services/rotation-shared.js';
 import {chooseGroupAssignee} from '../server/services/group-assignment.js';
+import {replaceSubjectPermissions} from '../server/permissions.js';
 
 const group=(d,name='Synthetic group')=>saveRotationGroup(d,{name,member_ids:[2,3]},{actorId:1});
 
@@ -40,6 +41,19 @@ test('later Group membership order changes affect the next independent turn only
   assert.equal(changed.id,g.id);
   assert.equal(chooseGroupAssignee(f.d,config,{consumerKey:'ordered',eligibleIds:[1,2,3]}),1);
   assert.equal(chooseGroupAssignee(f.d,config,{consumerKey:'ordered',eligibleIds:[1,2,3],commit:true}),1);
+});
+
+test('private Task Group use blocks a manager without Task visibility from changing shared member order',async t=>{
+  const f=await scoringFixture(t),g=group(f.d,'Private use group');
+  const created=await f.create({title:'Private Group work',visibility:'private',due_date:'2026-11-01',
+    assignment_group:{group_id:g.id,start_mode:'first'},assigned_to:[]});
+  assert.equal(created.status,201,JSON.stringify(created));
+  replaceSubjectPermissions(f.d,'user',3,{capabilities:{'rotations.manage':'allow','rotations.view':'allow',
+    'tasks.view_own':'allow','tasks.view_household':'none'}});
+  assert.throws(()=>saveRotationGroupUsage(f.d,{name:g.name,member_ids:[3,2],usage_mode:'independent'},
+    {id:g.id,actorId:3,expectedRevision:g.revision}),error=>error.status===403);
+  assert.equal(saveRotationGroupUsage(f.d,{name:g.name,member_ids:[3,2],usage_mode:'independent'},
+    {id:g.id,actorId:1,expectedRevision:g.revision}).members[0].id,3);
 });
 
 test('a Task Group choice creates a concrete assignment and an immutable decision',async t=>{

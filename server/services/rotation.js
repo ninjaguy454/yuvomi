@@ -93,9 +93,9 @@ export function saveRotationGroup(d,input,{id:groupId=null,actorId,expectedRevis
     const description=input.description===undefined?old?.description??null:String(input.description??'').trim()||null;
     if(description?.length>2000)fail('Description is limited to 2000 characters.');
     const active=flag(input.active,old?!!old.active:true);
-    if(old?.legacy_compatibility==='synchronized_slots'&&!active)fail('This imported Group must remain active while its recurring Tasks use it.',409,'legacy_cohort_active');
+    if(old?.legacy_compatibility&&!active)fail('This imported Group must remain active while its recurring Tasks use it.',409,'legacy_cohort_active');
     const memberIds=ids(input.member_ids??old?.members.filter(m=>m.id).map(m=>m.id)??[]);
-    if(old?.legacy_compatibility==='synchronized_slots'&&JSON.stringify(memberIds)!==JSON.stringify(old.members.filter(m=>m.active&&m.id).map(m=>m.id)))
+    if(old?.legacy_compatibility&&JSON.stringify(memberIds)!==JSON.stringify(old.members.filter(m=>m.active&&m.id).map(m=>m.id)))
       fail('This imported Group preserves synchronized Task positions. Its member order cannot be changed from Group management.',409,'legacy_cohort_order');
     if(!memberIds.length&&(!old||active))fail('Add at least one household member.');
     if(memberIds.length>100)fail('A Rotation Group supports at most 100 household members.');
@@ -123,9 +123,10 @@ export function saveRotationGroup(d,input,{id:groupId=null,actorId,expectedRevis
     return saved;
   });
 }
-export function normalizeRotationConfiguration(d,input={}, {allowMissingReferences=false,group:resolvedGroup}={}) {
+export function normalizeRotationConfiguration(d,input={}, {allowMissingReferences=false,allowImported=false,group:resolvedGroup}={}) {
   const group=resolvedGroup||getRotationGroup(d,id(input.group_id,'Rotation Group'));
   if(!group)fail('Choose an existing Rotation Group.');
+  if(group.legacy_compatibility&&!allowImported)fail('This imported Group is reserved for its existing recurring Tasks.');
   const strategy=input.strategy??'round_robin',advance=input.advance_policy??'on_finalized',direction=input.direction??'first_to_last';
   if(!STRATEGIES.includes(strategy))fail('Choose Round Robin, Rotating Order, or Fixed Order.');
   if(!DIRECTIONS.includes(direction))fail('Choose First to last or Last to first for the rotation direction.');
@@ -172,7 +173,8 @@ export function configureRotationTrack(d,input,{actorId=null,trusted=false,share
     if(consumerType==='rotation_group_schedule'&&!sharedSchedule)fail('Configure shared Rotation through its Group schedule.',409,'rotation_shared_owned');
     if(!/^[a-z][a-z0-9_]*$/.test(consumerType)||!/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(purpose))fail('Use a stable rotation purpose key.');
     let old=findRotationTrack(d,{consumer_type:consumerType,consumer_id:consumerId,purpose_key:purpose});
-    const config=normalizeRotationConfiguration(d,input,{allowMissingReferences:!!old});
+    const allowImported=consumerType==='rotation_group_schedule'&&sharedSchedule;
+    const config=normalizeRotationConfiguration(d,input,{allowMissingReferences:!!old,allowImported});
     const label=input.label==null?old?.label??purpose:text(input.label,'rotation label',200);
     const unchanged=old&&JSON.stringify(trackConfig(old))===JSON.stringify(config)&&old.label===label;
     const usage=consumerType==='rotation_group_schedule'?null:groupUsageVersion(d,config.group_id,dateKey);
@@ -190,7 +192,7 @@ export function configureRotationTrack(d,input,{actorId=null,trusted=false,share
     if(usage?.usage_mode==='shared')fail('This Group owns the scheduled Rotation. Consumer-specific strategy and cursor settings cannot replace it.',409,'rotation_shared_owned');
     // Existing persisted references may become unavailable. New configuration
     // still validates strictly; reads/materialization fail closed below.
-    normalizeRotationConfiguration(d,input);
+    normalizeRotationConfiguration(d,input,{allowImported});
     if(old&&!checkedRevision)revision(old,input.expected_revision);
     const group=getRotationGroup(d,config.group_id);
     if(!group.active)fail('Reactivate this Rotation Group before configuring new rotation work.',409,'rotation_group_inactive');
@@ -229,7 +231,8 @@ function safeContext(context) {
 // an intervening write or cross a request, and contain no cached authorization.
 function prepareRotationPreview(d,track,{context={},eligibleUserIds,eligibilityExplanations={}}={},resolvedGroup) {
   const group=resolvedGroup||getRotationGroup(d,id(track.group_id,'Rotation Group'));
-  const config=normalizeRotationConfiguration(d,track,{allowMissingReferences:!!track.id,group});
+  const config=normalizeRotationConfiguration(d,track,{allowMissingReferences:!!track.id,
+    allowImported:track.consumer_type==='rotation_group_schedule',group});
   const current=new Map(householdMembers(d).map(m=>[m.id,m]));
   const extra=eligibleUserIds===undefined?null:new Set(ids(eligibleUserIds));
   const dateKey=context.dateKey||context.due_date||context.start_date||todayKey(d);

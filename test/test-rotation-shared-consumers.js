@@ -308,6 +308,20 @@ test('Group conversion preview retries recheck current consumer visibility and m
  }finally{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
 });
 
+test('a view-only caller cannot preview or attach an imported Group by guessed ID',async()=>{
+ const viewer=kids[0];replaceSubjectPermissions(d,'user',viewer,{capabilities:{'rotations.manage':'none','rotations.view':'allow'}});
+ d.prepare('INSERT INTO legacy_rotation_group_mappings(source_key,group_id,roster_json,compatibility_mode) VALUES(?,?,?,?)')
+   .run('private synthetic key',group.id,JSON.stringify(kids),'synchronized_slots');
+ assert.throws(()=>normalizeVariableValue(d,{variable_key:'selected',type:'rotation_group'},group.id,{actor:viewer}),/valid Rotation Group/);
+ const app=express();app.use(express.json());app.use((req,_res,next)=>{req.authUserId=viewer;req.authRole='member';req.session={userId:viewer,role:'member'};next();});app.use(idempotencyMiddleware);app.use('/automation',rotationRouter);
+ const server=app.listen(0,'127.0.0.1');await new Promise(resolve=>server.once('listening',resolve));
+ try{
+   const response=await fetch(`http://127.0.0.1:${server.address().port}/automation/rotation-groups/${group.id}/preview`,
+     {method:'POST',headers:{'Content-Type':'application/json','Idempotency-Key':'imported-preview-guard'},body:JSON.stringify({dateKey:'2026-09-19'})});
+   assert.equal(response.status,403,await response.text());
+ }finally{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
+});
+
 test('overnight Activity previews and Workflow materialization share the canonical evening and keep expression provenance',()=>{
  const occurrence=S.resolveSharedRotation(d,group.id,{dateKey:'2026-09-19',actorId:admin});
  const activity=Number(d.prepare(`INSERT INTO activity_templates(name,title_template,description,subject_required,assignment_strategy,assignment_policy,

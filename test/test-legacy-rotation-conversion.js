@@ -6,8 +6,9 @@ process.env.DB_PATH=':memory:';
 process.env.SESSION_SECRET='legacy-rotation-conversion-fixture';
 process.env.LOG_LEVEL='error';
 const {ALL_MIGRATIONS}=await import('../server/db.js');
-const {saveRotationGroup,listRotationGroups}=await import('../server/services/rotation.js');
+const {saveRotationGroup,listRotationGroups,normalizeRotationConfiguration}=await import('../server/services/rotation.js');
 const {saveRotationGroupUsage}=await import('../server/services/rotation-shared.js');
+const {normalizeGroupAssignment}=await import('../server/services/group-assignment.js');
 
 function fixture(){
   const d=new Database(':memory:');d.pragma('foreign_keys=ON');
@@ -49,9 +50,11 @@ test('ordinary legacy cohorts map to Groups while slots, cursors and dynamic key
     const mapping=d.prepare('SELECT * FROM legacy_rotation_group_mappings').all();
     assert.equal(mapping.length,1);
     assert.equal(mapping[0].source_key,'Chores');
-    assert.equal(d.prepare('SELECT name FROM rotation_groups WHERE id=?').get(mapping[0].group_id).name,'Imported Task Rotation 10');
+    assert.equal(d.prepare('SELECT name FROM rotation_groups WHERE id=?').get(mapping[0].group_id).name,'Imported Rotation');
     assert.equal(listRotationGroups(d).length,0,'ordinary Group pickers omit imported private cohorts');
     assert.equal(listRotationGroups(d,{includeLegacy:true}).length,1);
+    assert.throws(()=>normalizeGroupAssignment(d,{group_id:mapping[0].group_id}),/reserved/);
+    assert.throws(()=>normalizeRotationConfiguration(d,{group_id:mapping[0].group_id}),/reserved/);
     assert.deepEqual(JSON.parse(mapping[0].roster_json),[2,3,4]);
     assert.deepEqual(d.prepare('SELECT user_id FROM rotation_group_members WHERE group_id=? ORDER BY sort_order').all(mapping[0].group_id).map(row=>row.user_id),[2,3,4]);
     assert.equal(d.prepare('SELECT count(*) n FROM rotation_groups').get().n,1);

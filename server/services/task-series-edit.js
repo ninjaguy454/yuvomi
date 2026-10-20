@@ -72,7 +72,12 @@ export function proposedFutureSeriesDefinition(d,actor,root,before,patch,{valida
       else if(['rotation_user_ids','skill_ids','tags','location'].includes(key))target[key]=clone(value);
       else if(key==='card_color_choice')target.task.card_color_policy=validateCardColorChoice(value);
       else if(key==='rotation_bindings')target.task.rotation_bindings_json=JSON.stringify(value);
-      else if(key==='assignment_group'){const group=normalizeGroupAssignment(d,value);target.task.assignment_group_json=group?JSON.stringify(group):null;}
+      else if(key==='assignment_group'){
+        const prior=target.task.assignment_group_json?JSON.parse(target.task.assignment_group_json):null;
+        const requested=typeof value==='string'?JSON.parse(value):value;
+        const group=normalizeGroupAssignment(d,value,{allowImported:!!prior&&Number(prior.group_id)===Number(requested?.group_id)});
+        target.task.assignment_group_json=group?JSON.stringify(group):null;
+      }
       else target.task[key]=key==='title'?value.trim():key==='points'?Number(value):value;
     }
     if(Object.hasOwn(input,'scoring_mode'))target.task.scoring_review_required=0;

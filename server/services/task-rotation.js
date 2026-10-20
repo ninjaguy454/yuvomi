@@ -306,5 +306,35 @@ registerSharedRotationUsageCollector((d,groupId,actor)=>{
         next_member_id:preview?.member_ids?.[0]??null,exception:rotationBindingPreservationReason(d,task)});
     }
   }
+  // Direct Group assignees do not have rotation_tracks. Include their current
+  // Tasks and latest future series definitions in Group change visibility.
+  const direct=new Map(d.prepare(`SELECT t.* FROM tasks t
+    WHERE json_extract(t.assignment_group_json,'$.group_id')=? AND t.archived_at IS NULL
+      AND (t.status IN ('open','in_progress') OR t.is_recurring=1) ORDER BY t.id`).all(groupId)
+    .map(task=>[task.id,task]));
+  const seenSeries=new Set();
+  for(const row of d.prepare(`SELECT o.series_id,t.* FROM task_recurrence_definitions rd
+    JOIN task_recurrence_occurrences o ON o.series_id=rd.series_id
+    JOIN tasks t ON t.id=o.task_id
+    WHERE rd.id=(SELECT MAX(id) FROM task_recurrence_definitions WHERE series_id=rd.series_id)
+      AND json_extract(json_extract(rd.definition_json,'$.task.assignment_group_json'),'$.group_id')=?
+      AND o.state='materialized' AND t.archived_at IS NULL
+    ORDER BY o.generation DESC,t.id DESC`).all(groupId)){
+    if(seenSeries.has(row.series_id))continue;
+    seenSeries.add(row.series_id);direct.set(row.id,row);
+  }
+  for(const task of direct.values()){
+    if(!taskCapabilities(d,actor,task).view){entries.push({restricted:true,key:`task-assignment:${task.id}`});continue;}
+    entries.push({consumer_type:'task_assignment',consumer_id:String(task.id),purpose_key:'assignee',
+      label:`${task.title} - assignee`,revision:task.revision,task_id:task.id});
+  }
+  for(const template of d.prepare(`SELECT id,name FROM activity_templates
+    WHERE json_extract(assignment_group_json,'$.group_id')=?
+    UNION SELECT a.id,a.name FROM activity_templates a JOIN activity_template_checklist_items i
+      ON i.activity_template_id=a.id WHERE json_extract(i.assignment_group_json,'$.group_id')=?`).all(groupId,groupId)){
+    if(!hasCapability(d,actor,'activities.view')){entries.push({restricted:true,key:`activity-template:${template.id}`});continue;}
+    entries.push({consumer_type:'activity_template',consumer_id:String(template.id),purpose_key:'assignee',
+      label:`${template.name} - Group assignee`});
+  }
   return entries;
 });

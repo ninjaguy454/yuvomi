@@ -1609,17 +1609,25 @@ function loadSubtasks(taskId, me, supervisionViews) {
 
 const rotationReadCacheKey = Symbol('taskRotationReadCache');
 const legacyGroupReadCacheKey = Symbol('legacyGroupReadCache');
+const legacyGroupByIdCacheKey = Symbol('legacyGroupByIdCache');
 export function hydrateTask(task, me, supervisionViews = new Map(), starts = null) {
   if (!task) return task;
   task = db.get().prepare(`SELECT t.*,u.display_name AS assigned_name,u.avatar_color AS assigned_color,
     u.avatar_data AS assigned_avatar,${ASSIGNED_USERS_SQL}
     FROM tasks t LEFT JOIN users u ON u.id=t.assigned_to WHERE t.id=?`).get(task.id);
-  if(task.rotation_group&&!supervisionViews.has(legacyGroupReadCacheKey))
+  const savedGroupId=task.assignment_group_json?Number(JSON.parse(task.assignment_group_json)?.group_id):null;
+  if((task.rotation_group||savedGroupId)&&!supervisionViews.has(legacyGroupReadCacheKey))
     supervisionViews.set(legacyGroupReadCacheKey,hasCapability(db.get(),me,'rotations.view')
       ?mappedLegacyRotationGroups(db.get()):new Map());
-  const legacyGroup=supervisionViews.get(legacyGroupReadCacheKey)?.get(task.rotation_group.replace(/[A-Z]/g,letter=>letter.toLowerCase()));
+  if(savedGroupId&&!supervisionViews.has(legacyGroupByIdCacheKey))
+    supervisionViews.set(legacyGroupByIdCacheKey,new Map([...supervisionViews.get(legacyGroupReadCacheKey).values()]
+      .map(group=>[Number(group.group_id),group])));
+  const legacyGroup=task.rotation_group?supervisionViews.get(legacyGroupReadCacheKey)?.get(task.rotation_group.replace(/[A-Z]/g,letter=>letter.toLowerCase())):null;
   task.legacy_rotation_group=legacyGroup?{group_id:legacyGroup.group_id,compatibility_mode:legacyGroup.compatibility_mode,
     name:legacyGroup.name,slot:Number(task.rotation_slot||0)+1}:null;
+  const savedImported=savedGroupId?supervisionViews.get(legacyGroupByIdCacheKey).get(savedGroupId):null;
+  task.legacy_assignment_group=savedImported?{group_id:savedImported.group_id,name:savedImported.name,
+    compatibility_mode:savedImported.compatibility_mode}:null;
   const offer=taskOfferState(db.get(),me,task,{starts});
   addAssignedUsers(task);
   task.subtasks=loadSubtasks(task.id,me,supervisionViews);
@@ -2857,7 +2865,8 @@ export function updateTaskDefinition(req, res) {
     const priorGroup=task.assignment_group_json?JSON.parse(task.assignment_group_json):null;
     const incomingGroupId=(typeof incomingGroup==='string'?JSON.parse(incomingGroup):incomingGroup)?.group_id;
     const assignmentGroup=desiredActivityBinding&&bindingChanged?null:desiredActivityBinding?priorGroup:normalizeGroupAssignment(db.get(),incomingGroup,
-      {allowInactive:!!priorGroup&&Number(incomingGroupId)===Number(priorGroup.group_id)});
+      {allowInactive:!!priorGroup&&Number(incomingGroupId)===Number(priorGroup.group_id),
+        allowImported:!!priorGroup&&Number(incomingGroupId)===Number(priorGroup.group_id)});
     const groupConfigurationChanged=JSON.stringify(assignmentGroup)!==(task.assignment_group_json||'null');
     if(groupConfigurationChanged){if(assignmentGroup)assertCapability(db.get(),req,'rotations.view');
       const groupPermissions=taskCapabilities(db.get(),req,task);
@@ -3630,8 +3639,11 @@ function spawnRecurrenceFollowupSingle(task, {expirationAnchor=false}={}) {
     registerRecurrenceOccurrence(db.get(),Number(newTask.lastInsertRowid),{predecessorId:task.id});
     db.get().prepare('UPDATE tasks SET rotation_bindings_json=? WHERE id=?').run(task.rotation_bindings_json||'[]',newTask.lastInsertRowid);
     setAssignments(db.get(), newTask.lastInsertRowid, followupAssignments);
-    if(definition.task.assignment_group_json&&!definition.binding)
-      recordGroupAssignment(db.get(),Number(newTask.lastInsertRowid),definition.task.assignment_group_json,nextAssignedTo);
+    if(definition.task.assignment_group_json&&!definition.binding){
+      if(nextAssignedTo)recordGroupAssignment(db.get(),Number(newTask.lastInsertRowid),definition.task.assignment_group_json,nextAssignedTo);
+      else db.get().prepare('UPDATE tasks SET assignment_group_json=? WHERE id=?')
+        .run(definition.task.assignment_group_json,Number(newTask.lastInsertRowid));
+    }
     persistCapturedTaskAssignees(db.get(),newTask.lastInsertRowid,definition.assignee_policy,followupAssignments,{rotating:task.assignment_mode==='round_robin'});
     setRotationMembers(db.get(), newTask.lastInsertRowid, task.assignment_mode === 'round_robin' ? rotationUserIds : []);
     setTags(db.get(), newTask.lastInsertRowid, existingTags);

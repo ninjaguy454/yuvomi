@@ -5,18 +5,23 @@ import {previewSharedRotation} from './rotation-shared.js';
 import {todayKey} from '../utils/timezone.js';
 
 const fail=message=>{throw Object.assign(new Error(message),{status:400});};
-export function normalizeGroupAssignment(d,value,{allowInactive=false}={}) {
+export function normalizeGroupAssignment(d,value,{allowInactive=false,allowImported=false}={}) {
   if(value==null||value==='')return null;
   if(typeof value==='string')value=JSON.parse(value);
   if(!value||typeof value!=='object'||Array.isArray(value))fail('Choose a Rotation Group.');
   const groupId=Number(value.group_id);
   if(!Number.isSafeInteger(groupId)||groupId<1)fail('Choose a Rotation Group.');
-  const group=d.prepare('SELECT id,active FROM rotation_groups WHERE id=? AND household_key=?').get(groupId,'household');
+  const group=d.prepare(`SELECT g.id,g.active,m.compatibility_mode FROM rotation_groups g
+    LEFT JOIN legacy_rotation_group_mappings m ON m.group_id=g.id
+    WHERE g.id=? AND g.household_key=?`).get(groupId,'household');
   if(!group||(!allowInactive&&!group.active))fail('Choose an active Rotation Group.');
+  if(group.compatibility_mode&&!allowImported)fail('This imported Group is reserved for its existing recurring Tasks.');
   const startMode=value.start_mode??'first',direction=value.direction??'first_to_last';
   if(!['first','random'].includes(startMode))fail('Choose first or random for the starting member.');
   if(!['first_to_last','last_to_first'].includes(direction))fail('Choose a valid rotation direction.');
-  return {group_id:groupId,start_mode:startMode,direction};
+  const legacyExact=group.compatibility_mode==='converted_independent';
+  if(value.legacy_exact_next&&!legacyExact)fail('This Group does not use the imported Task turn policy.');
+  return {group_id:groupId,start_mode:startMode,direction,...(legacyExact?{legacy_exact_next:true}:{})};
 }
 
 export function groupAssignmentMembers(d,configuration) {
@@ -28,7 +33,7 @@ export function groupAssignmentMembers(d,configuration) {
 /** The caller supplies the same qualified/present candidates used for an
  * ordinary Activity. A preview never advances the cursor. */
 export function chooseGroupAssignee(d,configuration,{consumerKey,eligibleIds,commit=false,dateKey=todayKey(d)}={}) {
-  const config=normalizeGroupAssignment(d,configuration,{allowInactive:!commit});
+  const config=normalizeGroupAssignment(d,configuration,{allowInactive:!commit,allowImported:true});
   if(!config)return null;
   const order=groupAssignmentMembers(d,config);
   if(!order.length)fail('This Rotation Group has no current household members.');
@@ -59,7 +64,7 @@ export function chooseGroupAssignee(d,configuration,{consumerKey,eligibleIds,com
 }
 
 export function recordGroupAssignment(d,taskId,configuration,userId) {
-  const config=normalizeGroupAssignment(d,configuration,{allowInactive:true});
+  const config=normalizeGroupAssignment(d,configuration,{allowInactive:true,allowImported:true});
   if(!config||!userId)return;
   const old=d.prepare('SELECT group_id,selected_user_id,configuration_json FROM task_group_assignment_decisions WHERE task_id=? AND superseded_at IS NULL').get(taskId);
   const encoded=JSON.stringify(config);

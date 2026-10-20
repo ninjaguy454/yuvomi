@@ -55,6 +55,8 @@ router.get('/rotation-groups/:id',handle('view',(d,req,res)=>{
 router.put('/rotation-groups/:id',handle('manage',(d,req,res)=>res.json({data:saveRotationGroupUsage(d,req.body,{id:req.params.id,actorId:actorId(req),expectedRevision:req.body.expected_revision})})));
 router.post('/rotation-groups/:id/usage-preview',handle('manage',(d,req,res)=>res.json({data:previewRotationGroupUsage(d,req.params.id,req.body,{actorId:actorId(req)})})));
 router.post('/rotation-groups/:id/preview',handle('view',(d,req,res)=>{
+  const group=found(getRotationGroup(d,req.params.id));
+  if(group.legacy_compatibility)assertCapability(d,req,'rotations.manage');
   const dateKey=req.body.dateKey??req.body.context?.dateKey;
   const shared=sharedGroupConfiguration(d,Number(req.params.id),dateKey);
   res.json({data:shared?previewSharedRotation(d,Number(req.params.id),{dateKey}):previewRotation(d,{...req.body,group_id:Number(req.params.id)},{context:authorizedPreviewContext(d,req,req.body.context)})});

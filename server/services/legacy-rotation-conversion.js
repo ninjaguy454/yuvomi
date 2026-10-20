@@ -17,6 +17,10 @@ function soloFuturePlan(d,cohort,roster){
   if(occurrences.length!==cohort.tasks.length||new Set(occurrences.map(row=>row.series_id)).size!==1
     ||occurrences.some(row=>row.state!=='materialized'))return null;
   const frontier=occurrences[0];
+  const actualFrontier=d.prepare(`SELECT task_id FROM task_recurrence_occurrences
+    WHERE series_id=? AND state='materialized' ORDER BY generation DESC,task_id DESC LIMIT 1`)
+    .get(frontier.series_id);
+  if(actualFrontier?.task_id!==frontier.task_id)return null;
   if(!['open','in_progress'].includes(frontier.status)
     ||frontier.assigned_to!==roster[Number(frontier.rotation_index||0)%roster.length]
     ||occurrences.filter(row=>row.generation===frontier.generation).length!==1)return null;
@@ -87,7 +91,7 @@ export function convertLegacyRotationGroups(d){
     const solo=soloFuturePlan(d,cohort,roster);
     // A legacy key may contain a private Task title. The new Group catalogue
     // must not disclose it to users who cannot view that Task.
-    const neutral=`Imported Task Rotation ${cohort.tasks[0].id}`;
+    const neutral='Imported Rotation';
     let name=neutral,suffix=1;
     while(occupied.get('household',name)){
       const tail=` (imported ${suffix++})`;
@@ -100,7 +104,7 @@ export function convertLegacyRotationGroups(d){
     d.prepare('INSERT INTO legacy_rotation_group_mappings(source_key,group_id,roster_json,compatibility_mode) VALUES(?,?,?,?)')
       .run(cohort.sourceKey,groupId,JSON.stringify(roster),solo?'converted_independent':'synchronized_slots');
     if(solo){
-      const config={group_id:groupId,start_mode:'first',direction:'first_to_last'};
+      const config={group_id:groupId,start_mode:'first',direction:'first_to_last',legacy_exact_next:true};
       const cursorKey=`group-assignment:series:${solo.frontier.series_id}:root:${groupId}:first:first_to_last`;
       d.prepare('INSERT INTO assignment_rotation_state(rotation_key,cursor_user_id,occurrence_count) VALUES(?,?,?)')
         .run(cursorKey,solo.frontier.assigned_to,Math.max(1,Number(solo.frontier.generation)+1));

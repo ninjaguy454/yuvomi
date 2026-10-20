@@ -112,7 +112,7 @@ export function normalizeVariableValue(d, variable, value, {actor} = {}) {
     const id = ['string', 'number'].includes(typeof value) ? Number(value) : NaN;
     if(actor!==undefined)assertCapability(d,actor,variable.type==='rotation_group'?'rotations.view':'rotations.history');
     const row = Number.isSafeInteger(id) && id > 0 ? (variable.type === 'rotation_group' ? getRotationGroup(d, id) : actor===undefined?getRotationOccurrence(d, id):readRotationOccurrence(d,actor,id)) : null;
-    if (!row || (variable.type === 'rotation_group' && !row.active)) throw new Error(`Variable ${key} must select a valid ${variable.type === 'rotation_group' ? 'Rotation Group' : 'Rotation Occurrence'}.`);
+    if (!row || (variable.type === 'rotation_group' && (!row.active||row.legacy_compatibility))) throw new Error(`Variable ${key} must select a valid ${variable.type === 'rotation_group' ? 'Rotation Group' : 'Rotation Occurrence'}.`);
     // Snapshot objects are never accepted from editable input. Historic members
     // intentionally retain their recorded identity/name if their profile changes.
     if (variable.type === 'rotation_group') return { id: Number(row.id), name: row.name, description: row.description ?? null };

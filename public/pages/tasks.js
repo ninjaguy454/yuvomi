@@ -1060,6 +1060,7 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
   const rotationGroup = task?.rotation_group || '';
   const savedAssignmentGroup=typeof task?.assignment_group_json==='string'?JSON.parse(task.assignment_group_json):task?.assignment_group_json;
   const legacyMappedGroup=task?.legacy_rotation_group;
+  const importedSavedGroup=task?.legacy_assignment_group;
   const missingSavedGroup=savedAssignmentGroup&&!state.rotationGroups.some(group=>Number(group.id)===Number(savedAssignmentGroup.group_id));
   const rotationPosition = Number(task?.rotation_slot ?? 0) + 1;
   const visibility  = task?.visibility || 'all';
@@ -1274,11 +1275,11 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
       </div>
       ${state.rotationGroups.length||canCapability('rotations.manage')||savedAssignmentGroup||legacyMappedGroup?`<div id="task-group-assignment" class="form-group"><strong>Rotation Groups</strong>
         <p class="task-field-hint">Choose a Group for this Activity's assignee. Group members and order are shared; this Activity keeps its own starting choice.</p>
-        ${legacyMappedGroup?`<details class="task-field-hint"><summary><span class="rotation-group-choice__avatar" aria-hidden="true"><i data-lucide="users-round"></i></span> ${esc(legacyMappedGroup.name||'Imported Group')}</summary><p>${legacyMappedGroup.compatibility_mode==='converted_independent'?'This Task keeps its recorded assignee. Future occurrences use this Group and an independent turn cursor.':'This recurring Task uses position '+Number(legacyMappedGroup.slot)+' in a synchronized Group. Its saved member order and cursor remain in effect. Group membership and schedule changes are locked to preserve the other Tasks in this cycle.'} Choosing another Group replaces this legacy rotation.</p></details>`:''}
-        <div class="rotation-group-choices" role="group" aria-label="Rotation Groups for assignment">${state.rotationGroups.filter(group=>group.active).map(group=>`<button type="button" class="rotation-group-choice" data-task-group-choice="${Number(group.id)}"><span class="rotation-group-choice__avatar" aria-hidden="true"><i data-lucide="users-round"></i></span><span class="rotation-group-choice__name">${esc(group.name)}</span></button>`).join('')}</div>
+        ${legacyMappedGroup?`<details class="task-field-hint"><summary><span class="rotation-group-choice__avatar" aria-hidden="true"><i data-lucide="users-round"></i></span> ${esc(legacyMappedGroup.name||'Imported Group')}</summary><p>${legacyMappedGroup.compatibility_mode==='converted_independent'?'This Task keeps its recorded assignee. Future occurrences use this Group and an exact next-person cursor. Member order and schedule are locked to preserve the sequence.':'This recurring Task uses position '+Number(legacyMappedGroup.slot)+' in a synchronized Group. Its saved member order and cursor remain in effect. Group membership and schedule changes are locked to preserve the other Tasks in this cycle.'} Choosing another Group replaces this legacy rotation.</p></details>`:''}
+        <div class="rotation-group-choices" role="group" aria-label="Rotation Groups for assignment">${importedSavedGroup&&missingSavedGroup?`<button type="button" class="rotation-group-choice" data-task-group-choice="${Number(importedSavedGroup.group_id)}"><span class="rotation-group-choice__avatar" aria-hidden="true"><i data-lucide="users-round"></i></span><span class="rotation-group-choice__name">${esc(importedSavedGroup.name)}</span></button>`:''}${state.rotationGroups.filter(group=>group.active).map(group=>`<button type="button" class="rotation-group-choice" data-task-group-choice="${Number(group.id)}"><span class="rotation-group-choice__avatar" aria-hidden="true"><i data-lucide="users-round"></i></span><span class="rotation-group-choice__name">${esc(group.name)}</span></button>`).join('')}</div>
         <details data-task-group-behavior><summary>Edit assigned Group behavior</summary>
           <p class="task-field-hint" data-task-group-summary>Group membership and order are shared. This Activity's starting choice and direction apply to independent Groups.</p>
-          <label class="form-label">Group<select class="input" data-task-assignment-group><option value="">No Group</option>${missingSavedGroup?`<option value="${Number(savedAssignmentGroup.group_id)}">Saved Rotation Group</option>`:''}${state.rotationGroups.map(group=>`<option value="${Number(group.id)}" ${group.active||Number(group.id)===Number(savedAssignmentGroup?.group_id)?'':'disabled'}>${esc(group.name)}${group.active?'':' (inactive)'}</option>`).join('')}</select></label>
+          <label class="form-label">Group<select class="input" data-task-assignment-group><option value="">No Group</option>${missingSavedGroup?`<option value="${Number(savedAssignmentGroup.group_id)}">${esc(importedSavedGroup?.name||'Saved Rotation Group')}</option>`:''}${state.rotationGroups.map(group=>`<option value="${Number(group.id)}" ${group.active||Number(group.id)===Number(savedAssignmentGroup?.group_id)?'':'disabled'}>${esc(group.name)}${group.active?'':' (inactive)'}</option>`).join('')}</select></label>
           <label class="form-label">Start with<select class="input" data-task-assignment-group-start><option value="first">First member</option><option value="random">Random member, chosen once</option></select></label>
           <label class="form-label">Rotation direction<select class="input" data-task-assignment-group-direction><option value="first_to_last">First to last</option><option value="last_to_first">Last to first</option></select></label>
           ${canCapability('rotations.manage')?'<button type="button" class="btn btn--secondary btn--sm" data-task-manage-group>Manage Group members and order</button>':''}
@@ -1866,6 +1867,15 @@ function taskActivityAssignmentPolicy(activity, task, templateId) {
   return activity;
 }
 
+function selectedTaskGroupConfiguration(form,task=null){
+  const groupId=Number(form.querySelector('[data-task-assignment-group]')?.value)||null;
+  if(!groupId)return null;
+  const prior=typeof task?.assignment_group_json==='string'?JSON.parse(task.assignment_group_json):task?.assignment_group_json;
+  return {group_id:groupId,start_mode:form.querySelector('[data-task-assignment-group-start]').value,
+    direction:form.querySelector('[data-task-assignment-group-direction]').value,
+    ...(prior?.legacy_exact_next&&Number(prior.group_id)===groupId?{legacy_exact_next:true}:{})};
+}
+
 function wireAssignmentMode(panel, task) {
   const activity = panel.querySelector('#task-activity-template');
   const subject = panel.querySelector('#task-activity-subject');
@@ -1878,10 +1888,13 @@ function wireAssignmentMode(panel, task) {
   if(groupSelect){groupSelect.value=String(storedGroup?.group_id||'');groupPanel.querySelector('[data-task-assignment-group-start]').value=storedGroup?.start_mode||'first';
     groupPanel.querySelector('[data-task-assignment-group-direction]').value=storedGroup?.direction||'first_to_last';}
   const updateGroup=()=>{groupPanel?.querySelectorAll('[data-task-group-choice]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.taskGroupChoice===groupSelect.value)));
-    const selected=state.rotationGroups.find(group=>String(group.id)===groupSelect?.value);
+    const selected=state.rotationGroups.find(group=>String(group.id)===groupSelect?.value)
+      ||(Number(groupSelect?.value)===Number(task?.legacy_assignment_group?.group_id)?{...task.legacy_assignment_group,legacy_exact_next:true}:null);
     const chosen=assignmentGroupBehavior(selected,{dateKey:parseDateInput(panel.querySelector('#task-due-date')?.value)||selected?.household_today}),shared=chosen?.usage_mode==='shared';
-    if(groupPanel)groupPanel.querySelector('[data-task-group-summary]').textContent=assignmentGroupSummary(chosen);
-    for(const field of ['start','direction']){const control=groupPanel?.querySelector(`[data-task-assignment-group-${field}]`);if(control){control.disabled=shared;control.closest('label').hidden=shared;}}
+    if(groupPanel)groupPanel.querySelector('[data-task-group-summary]').textContent=chosen?.legacy_exact_next
+      ?'This imported Group preserves the exact next person from the legacy series. If that person lacks a required Skill, the occurrence stays unassigned. Choose another Group to change this policy.'
+      :assignmentGroupSummary(chosen);
+    for(const field of ['start','direction']){const control=groupPanel?.querySelector(`[data-task-assignment-group-${field}]`);if(control){control.disabled=shared||!!chosen?.legacy_exact_next;control.closest('label').hidden=shared||!!chosen?.legacy_exact_next;}}
     const manage=groupPanel?.querySelector('[data-task-manage-group]');if(manage)manage.disabled=!chosen;
     if(groupSelect?.value)groupPanel.querySelector('[data-task-group-behavior]').open=true;};
   for(const eventName of ['input','change'])panel.querySelector('#task-due-date')?.addEventListener(eventName,updateGroup);
@@ -2140,10 +2153,7 @@ async function saveTaskAsTemplate(form) {
     ...getRRuleValues(form, 'task'),
     tags: normalizeTagList([...modalTags, ...form.querySelector('#task-tag-input').value.split(',')]),
     location: readTaskLocation(form), assigned_users: getSelectedUserIds(form, 'task_assigned'),
-    assignment_group:Number(form.querySelector('[data-task-assignment-group]')?.value)?{
-      group_id:Number(form.querySelector('[data-task-assignment-group]').value),
-      start_mode:form.querySelector('[data-task-assignment-group-start]').value,
-      direction:form.querySelector('[data-task-assignment-group-direction]').value}:null,
+    assignment_group:selectedTaskGroupConfiguration(form,controls.originalTask),
     skill_ids: controls.skills.getValue(), subtasks: controls.subtasks.getValue().filter((step) => step.title.trim()),
     rotation_bindings: controls.rotations.getValue(),
   }, source);
@@ -2852,9 +2862,7 @@ function readTaskEditState(form, controls) {
     tags: normalizeTagList([...modalTags, ...value('task-tag-input').split(',')]),
     subtasks: controls.subtasks?.getValue() || [], skill_ids: controls.skills.getValue(),
     assigned_to: getSelectedUserIds(form, 'task_assigned'), assignment_mode: value('task-assignment-mode'),
-    assignment_group:Number(form.querySelector('[data-task-assignment-group]')?.value)?{
-      group_id:Number(form.querySelector('[data-task-assignment-group]').value),start_mode:form.querySelector('[data-task-assignment-group-start]').value,
-      direction:form.querySelector('[data-task-assignment-group-direction]').value}:null,
+    assignment_group:selectedTaskGroupConfiguration(form,controls.originalTask),
     rotation_user_ids: getRotationUserIds(form), rotation_group: value('task-rotation-group'), rotation_slot: Number(value('task-rotation-position') || 1) - 1,
     rotation_bindings: controls.rotations.getValue(),
     activity_template_id: value('task-activity-template'), activity_subject_user_id: value('task-activity-subject-user'),
@@ -3014,8 +3022,7 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
     start_date:      startDate || null,
     due_date:        dueDate || null,
     assigned_to:     (!managedActivity || overrideAssignment) && assignmentMode === 'fixed' ? getSelectedUserIds(form, 'task_assigned') : [],
-    assignment_group:selectedGroupId?{group_id:selectedGroupId,start_mode:form.querySelector('[data-task-assignment-group-start]').value,
-      direction:form.querySelector('[data-task-assignment-group-direction]').value}:null,
+    assignment_group:selectedGroupId?selectedTaskGroupConfiguration(form,originalTask):null,
     activity_template_id: managedActivity ? activityTemplateId : null,
     activity_subject_user_id: managedActivity ? activitySubjectUserId : null,
     ...(managedActivity && variableValues ? { activity_inputs: variableValues.inputs() } : {}),

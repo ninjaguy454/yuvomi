@@ -362,7 +362,7 @@ function normalizeRule(database, raw, index, current = null) {
     const groupId = integer(value, { field: 'Rotation Group' });
     if (groupId) {
       const group = getRotationGroup(database, groupId);
-      if (!group || !group.active) throw mealPlanError('Choose an active Rotation Group.', 400, 'ROTATION_GROUP_UNAVAILABLE');
+      if (!group || !group.active || group.legacy_compatibility) throw mealPlanError('Choose an active Rotation Group.', 400, 'ROTATION_GROUP_UNAVAILABLE');
       if(rotationGroupUsage(database,groupId).usage_mode==='shared'
         &&(role==='chooser'?policy:role==='cook'?cookStrategy:supervisorStrategy)!=='round_robin')
         throw mealPlanError('Choose the Rotation Group assignment option to use this shared Group; a fixed or disabled role cannot override its selection.',400,'ROTATION_SHARED_CONFLICT');

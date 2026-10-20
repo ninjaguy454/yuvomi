@@ -44,6 +44,11 @@ export function taskDraftToActivity(draft, template = null) {
   const location = draft.location || {};
   const { start_date: _startDate, due_date: _dueDate, ...reusableTemplate } = template || {};
   const scoringMode = draft.scoring_mode || draft.scoring?.mode || template?.scoring_mode;
+  const decodeGroup=value=>typeof value==='string'?JSON.parse(value):value??null;
+  const assignmentGroup=decodeGroup(Object.hasOwn(draft,'assignment_group')?draft.assignment_group:template?.assignment_group_json);
+  const assignmentStrategy=assignmentGroup?'group_rotation':template?.assignment_strategy==='group_rotation'
+    ?draft.assigned_users?.length===1?'fixed':'open_claimable'
+    :template?.assignment_strategy||(draft.assigned_users?.length===1?'fixed':'open_claimable');
   return {
     ...reusableTemplate, id: undefined, name: draft.title, title_template: draft.title,
     description: draft.description || '', priority: draft.priority || 'none', category: draft.category,
@@ -56,11 +61,15 @@ export function taskDraftToActivity(draft, template = null) {
     recurrence_from_completion: draft.recurrence_from_completion ? 1 : 0,
     rotation_bindings: structuredClone(draft.rotation_bindings || []),
     checklist: (draft.subtasks || []).map((step) => ({ title_template: step.title, skill_ids: [...(step.skill_ids || [])], is_optional: step.is_optional ? 1 : 0,
+      ...(Object.hasOwn(step,'assignment_group')||Object.hasOwn(step,'assignment_group_json')
+        ?{assignment_group:decodeGroup(Object.hasOwn(step,'assignment_group')?step.assignment_group:step.assignment_group_json)}:{}),
       ...(step.points != null ? { points: Number(step.points) } : {}) })),
     location_mode: location.kind === 'saved_place' ? 'fixed' : 'none',
     place_id: location.kind === 'saved_place' ? location.place_id : null,
-    assignment_strategy: template?.assignment_strategy || (draft.assigned_users?.length === 1 ? 'fixed' : 'open_claimable'),
-    fixed_user_id: template?.fixed_user_id || (draft.assigned_users?.length === 1 ? draft.assigned_users[0] : null),
+    assignment_strategy: assignmentStrategy, assignment_group_json:assignmentGroup,
+    fixed_user_id: assignmentGroup?null:template?.assignment_strategy==='group_rotation'
+      ?draft.assigned_users?.length===1?draft.assigned_users[0]:null
+      :template?.fixed_user_id || (draft.assigned_users?.length === 1 ? draft.assigned_users[0] : null),
     subject_required: template?.subject_required ? 1 : 0,
   };
 }

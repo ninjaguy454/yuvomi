@@ -34,8 +34,13 @@ function scheduleText(config={}) {
 }
 function sharedFields(group) {
   const config=sharedConfig(group);
+  const eligibility=config.eligibility||{},savedRules=[];
+  if(eligibility.skill_ids?.length)savedRules.push(`${eligibility.skill_ids.length} required skill${eligibility.skill_ids.length===1?'':'s'}`);
+  if(eligibility.presence_policy&&eligibility.presence_policy!=='ignore')savedRules.push(`presence: ${eligibility.presence_policy.replaceAll('_',' ')}`);
+  if(eligibility.place_id)savedRules.push('a required Place');
   return `<section class="rotation-section rotation-shared-editor" data-rotation-shared-fields ${isShared(group)?'':'hidden'} aria-label="Shared rotation schedule">
     <div class="rotation-section__heading"><h3>Shared rotation schedule</h3><p class="form-hint">Set the turns once. Every activity using this Group follows this schedule.</p></div>
+    ${savedRules.length?`<p class="form-hint" role="note">Saved Group eligibility still applies: ${esc(savedRules.join(', '))}. Each Activity also applies its own presence and skills.</p>`:''}
     <div class="modal-grid modal-grid--2">
       <label class="form-label">Rotation method<select class="form-input" name="shared_strategy">${['round_robin','rotating_order','fixed_order'].map(value=>`<option value="${value}" ${config.strategy===value?'selected':''}>${names[value]}</option>`).join('')}</select></label>
       <label class="form-label">Start with<select class="form-input" name="shared_start_mode"><option value="first" ${config.start_mode==='first'?'selected':''}>First member in the group</option><option value="random" ${config.start_mode==='random'?'selected':''}>Random member (chosen once)</option><option value="explicit" ${config.start_mode==='explicit'?'selected':''}>Specific member</option></select></label>

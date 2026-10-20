@@ -5,7 +5,7 @@ import { canCapability, isPermAdmin } from '/permissions.js';
 import { api } from '/api.js';
 import { renderGooglePlacesSettings } from '/components/google-places-settings.js';
 import { openModal, openChildModal, closeModal, confirmOverModal } from '/components/modal.js';
-import { renderSkillPicker, bindSkillPicker, renderSubtaskEditor, bindSubtaskEditor } from '/components/task-requirements.js';
+import { renderSkillPicker, bindSkillPicker, renderSubtaskEditor, bindSubtaskEditor, assignmentGroupSummary, assignmentGroupBehavior } from '/components/task-requirements.js';
 import { PRIORITIES, normalizeTagList, catLabel } from '/utils/task-fields.js';
 import { t, formatTime, formatTimeInput, parseTimeInput, formatDateInput, parseDateInput, isDateInputValid } from '/i18n.js';
 import { renderRRuleFields, bindRRuleEvents, getRRuleValues } from '/rrule-ui.js';
@@ -1599,7 +1599,7 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
           chip.innerHTML=`<span class="rotation-group-choice__avatar" aria-hidden="true"><i data-lucide="users-round"></i></span><span class="rotation-group-choice__name">${h(group.name)}</span>`;
           chip.addEventListener('click',()=>{select.value=String(group.id);panel.querySelector('#automation-assignment-strategy').value='group_rotation';
             panel.querySelector('#automation-assignment-group').hidden=false;panel.querySelectorAll('[data-assignment-group-choice]').forEach(item=>item.setAttribute('aria-pressed',String(item===chip)));
-            panel.querySelector('[name="assignment_group_start"]').focus();});
+            (assignmentGroupBehavior(group,{template:true}).usage_mode==='shared'?select:panel.querySelector('[name="assignment_group_start"]')).focus();});
           choices.append(chip);window.lucide?.createIcons({el:chip});
         }
       });
@@ -1644,13 +1644,9 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
       panel.querySelector('[name="assignment_group_direction"]').value=groupConfig?.direction||'first_to_last';
       const groupSelect=panel.querySelector('[name="assignment_group_id"]');
       const updateGroupChoices=()=>{panel.querySelectorAll('[data-assignment-group-choice]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.assignmentGroupChoice===groupSelect.value)));
-        const chosen=context.rotationGroups.find(group=>String(group.id)===groupSelect.value),shared=chosen?.usage_mode==='shared';
-        const names=chosen?.members?.filter(member=>member.active).map(member=>member.display_name).join(' → ');
-        panel.querySelector('[data-assignment-group-summary]').textContent=shared
-          ?`${names||chosen.name} · The shared Group schedule controls order, direction, start and timing. This template's presence and rotation-purpose settings remain separate.`
-          :`${names||'Group members and order are shared.'} · This template chooses its starting member and direction. Presence settings below apply to this template.`;
-        panel.querySelector('[name="assignment_group_start"]').disabled=shared;
-        panel.querySelector('[name="assignment_group_direction"]').disabled=shared;
+        const chosen=assignmentGroupBehavior(context.rotationGroups.find(group=>String(group.id)===groupSelect.value),{template:true}),shared=chosen?.usage_mode==='shared';
+        panel.querySelector('[data-assignment-group-summary]').textContent=assignmentGroupSummary(chosen,{scope:'template'});
+        for(const field of ['start','direction']){const control=panel.querySelector(`[name="assignment_group_${field}"]`);control.disabled=shared;control.closest('label').hidden=shared;}
         const manage=panel.querySelector('[data-assignment-manage-group]');if(manage)manage.disabled=!chosen;
       };
       panel.querySelectorAll('[data-assignment-group-choice]').forEach(button=>button.addEventListener('click',()=>{groupSelect.value=button.dataset.assignmentGroupChoice;strategySelect.value='group_rotation';refreshAssignment();updateGroupChoices();groupSelect.focus();}));
@@ -1710,7 +1706,11 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
           ...timing.values,
           tags: normalizeTagList(String(data.get('tags') || '').split(',')),
           assignment_strategy: data.get('assignment_strategy'),
-          assignment_group:data.get('assignment_strategy')==='group_rotation'?{group_id:Number(data.get('assignment_group_id')),start_mode:data.get('assignment_group_start'),direction:data.get('assignment_group_direction')}:null,
+          assignment_group:data.get('assignment_strategy')==='group_rotation'?{
+            group_id:Number(data.get('assignment_group_id')),
+            start_mode:panel.querySelector('[name="assignment_group_start"]').value,
+            direction:panel.querySelector('[name="assignment_group_direction"]').value,
+          }:null,
           subject_required: data.has('subject_required'),
           fixed_user_id: data.get('fixed_user_id') || null,
           allow_assignment_override: data.has('allow_assignment_override'),

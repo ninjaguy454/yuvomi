@@ -58,6 +58,22 @@ test('template conversion retains existing strategy; multiple manual assignees d
   assert.equal(result.rotation_group, 'Kitchen'); assert.equal(result.subject_required, 1);
 });
 
+test('Save as Template carries current root and subtask Group choices instead of a source Template choice',()=>{
+  const root={group_id:32,start_mode:'random',direction:'last_to_first'};
+  const subtask={group_id:31,start_mode:'first',direction:'first_to_last'};
+  const saved=taskDraftToActivity({title:'Current Task',assignment_group:root,assigned_users:[],
+    subtasks:[{title:'Current action',assignment_group:subtask}]},
+    {assignment_strategy:'group_rotation',assignment_group_json:JSON.stringify({group_id:99,start_mode:'first',direction:'first_to_last'})});
+  assert.equal(saved.assignment_strategy,'group_rotation');
+  assert.deepEqual(saved.assignment_group_json,root);
+  assert.equal(saved.fixed_user_id,null);
+  assert.deepEqual(saved.checklist[0].assignment_group,subtask);
+  const removed=taskDraftToActivity({title:'Unassigned now',assignment_group:null,assigned_users:[],subtasks:[]},
+    {assignment_strategy:'group_rotation',assignment_group_json:JSON.stringify(root)});
+  assert.equal(removed.assignment_strategy,'open_claimable');
+  assert.equal(removed.assignment_group_json,null);
+});
+
 test('morning template round trip keeps reusable times, anchored weekdays, fixed assignee and fresh optional state', () => {
   const activity = taskDraftToActivity({ title: 'Get Ready for the Day', assigned_users: [7], points: 2,
     start_date: '2026-09-21', due_date: '2026-09-21',

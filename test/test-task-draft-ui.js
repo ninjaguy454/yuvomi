@@ -10,6 +10,14 @@ import puppeteer from 'puppeteer';
 // form, native events, datepicker and modal/history integration without using
 // any production or shared QA household.
 const users = [{ id: 1, display_name: 'Alex', role: 'admin' }, { id: 2, display_name: 'Eleanor', role: 'admin' }];
+const rotationGroups=[{id:31,name:'Kids rotation',active:1,members:users},
+  {id:32,name:'Shared household',active:1,usage_mode:'shared',members:users,
+    shared_config:{strategy:'rotating_order',start_mode:'random',direction:'last_to_first',active_time:'17:00',finalize_time:'04:00',finalize_day_offset:1,
+      eligibility:{skill_ids:[3],presence_policy:'must_be_home'}}},
+  {id:33,name:'Future shared household',active:1,usage_mode:'shared',household_today:'2026-10-20',members:users,
+    shared_config:{strategy:'rotating_order',start_mode:'first',direction:'first_to_last'},
+    usage_versions:[{usage_mode:'independent',effective_date:'2026-01-01',shared_config:null},
+      {usage_mode:'shared',effective_date:'2026-11-01',shared_config:{strategy:'rotating_order',start_mode:'first',direction:'last_to_first'}}]}];
 const places = [{ id: 4, name: 'Home', type: 'home', active: 1 }, { id: 5, name: 'Workshop', type: 'room', active: 1 }];
 const skills = [{ id: 3, name: 'Knife safety' }];
 const templates = [
@@ -28,6 +36,8 @@ const templates = [
     assignment_strategy: 'subject_skill', subject_required: 1, input_schema: [], checklist: [] },
   { id: 16, name: 'Weekly homework', title_template: 'Weekly Homework', points: 5, assignment_strategy: 'fixed', fixed_user_id: 2,
     due_date_offset_days: 4, start_time: '15:30', due_time: '07:30', recurrence_rule: 'FREQ=WEEKLY;BYDAY=MO', expiration_policy: 'keep_overdue', checklist: [] },
+  { id: 17, name: 'Saved shared group', title_template: 'Shared group work', category: 'misc', points: 0,
+    assignment_strategy: 'group_rotation', assignment_group_json: JSON.stringify({group_id:32,start_mode:'random',direction:'last_to_first'}), checklist: [] },
 ];
 const workflow = { id: 21, name: 'Evening reset', description: 'Two connected Tasks', subject_required: 0, input_schema: [], steps: [] };
 const preferenceValues = new Map(), requests = [];
@@ -67,8 +77,7 @@ app.use('/api/v1', (req, res) => {
     return res.json({ data: { tasks_template_switch_warning: true, ...preferenceValues.get(userId) } });
   }
   if (req.path === '/tasks/meta/options') return res.json({ users, categories: [{ key: 'misc', label: 'General' }], tags: [], default_points: 3 });
-if (req.path === '/automation/activity-options') return res.json({ data: { activities: templates, skills,
-    rotation_groups:[{id:31,name:'Kids rotation',active:1,members:users}] } });
+if (req.path === '/automation/activity-options') return res.json({ data: { activities: templates, skills,rotation_groups:rotationGroups } });
   if (req.path === '/automation/rotation-groups') return res.json({ data: [{id:31,name:'Kids',members:users}] });
   if (req.path === '/planning/places') return res.json({ data: places });
   if (req.path === '/planning/place-search/status') return res.json({ data: { configured: false } });
@@ -76,7 +85,7 @@ if (req.path === '/automation/activity-options') return res.json({ data: { activ
   if (req.path === '/automation/admin/workflow-templates') return res.json({ data: [workflow], activities: templates, variables: [], members: users, places, categories: [] });
   if (req.path === '/automation/admin/activity-templates') {
     if (req.method === 'POST') { const saved = { id: 50, ...req.body }; templates.splice(templates.findIndex(item => item.id === 50) < 0 ? templates.length : templates.findIndex(item => item.id === 50), 1, saved); return res.json({ data: saved }); }
-    return res.json({ data: templates, skills, members: users, variables: [], places, categories: [] });
+    return res.json({ data: templates, skills, members: users, variables: [], places, categories: [],rotation_groups:rotationGroups });
   }
   if (req.path === '/automation/admin/skills' && req.method === 'POST') {
     const skill = { id: 100 + skills.length, ...req.body };
@@ -168,6 +177,98 @@ for(const width of [1366,390])test(`Group chips and subtask picker save first/ra
     const body=requests.find(row=>row.path==='/tasks'&&row.method==='POST').body;
     assert.deepEqual(body.assignment_group,{group_id:31,start_mode:'first',direction:'first_to_last'});
     assert.deepEqual(body.subtasks[0].assignment_group,{group_id:31,start_mode:'random',direction:'last_to_first'});
+  }finally{await page.dispose();}
+});
+
+test('shared Group task info shows the Group-owned rotation and locks Activity overrides',async()=>{
+  const page=await mounted({width:390});
+  try{
+    await page.click('[data-task-group-choice="32"]');
+    const summary=await page.$eval('[data-task-group-summary]',node=>node.textContent);
+    assert.match(summary,/Rotating Order.*Random member.*Last to first/);
+    assert.match(summary,/Group management/);
+    assert.match(summary,/Saved Group eligibility.*1 Group skill.*must be home/);
+    assert.equal(await page.$eval('[data-task-assignment-group-start]',node=>node.disabled&&node.closest('label').hidden),true);
+    assert.equal(await page.$eval('[data-task-assignment-group-direction]',node=>node.disabled&&node.closest('label').hidden),true);
+    await page.click('[data-task-group-choice="31"]');
+    assert.equal(await page.$eval('[data-task-assignment-group-direction]',node=>!node.disabled&&!node.closest('label').hidden),true);
+  }finally{await page.dispose();}
+});
+
+test('a future shared mode locks Task controls only on dates when that mode applies',async()=>{
+  const page=await mounted({width:390});
+  try{
+    await set(page,'#task-title','Scheduled Group source');
+    await page.click('[data-task-group-choice="33"]');
+    assert.equal(await page.$eval('[data-task-assignment-group-start]',node=>node.disabled),false);
+    await page.click('[data-task-subtask-add]');await page.select('[data-task-subtask-group]','33');
+    assert.equal(await page.$eval('[data-task-subtask-group-start]',node=>node.disabled),false);
+    await set(page,'#task-due-date','2026-11-02');
+    assert.equal(await page.$eval('[data-task-assignment-group-start]',node=>node.disabled&&node.closest('label').hidden),true);
+    assert.equal(await page.$eval('[data-task-subtask-group-start]',node=>node.disabled&&node.closest('label').hidden),true);
+    assert.match(await page.$eval('[data-task-group-summary]',node=>node.textContent),/Last to first/);
+    await set(page,'#task-due-date','2026-10-25');
+    assert.equal(await page.$eval('[data-task-assignment-group-start]',node=>!node.disabled&&!node.closest('label').hidden),true);
+    assert.equal(await page.$eval('[data-task-subtask-group-start]',node=>!node.disabled&&!node.closest('label').hidden),true);
+    await page.click('[data-save-as-template]');await page.waitForSelector('#automation-activity-form');
+    await page.select('[name="assignment_group_id"]','33');
+    assert.match(await page.$eval('[data-assignment-group-summary]',node=>node.textContent),/changes between independent and shared rotations/);
+    assert.equal(await page.$eval('[name="assignment_group_start"]',node=>!node.disabled),true);
+  }finally{await page.dispose();}
+});
+
+test('shared Group settings are locked in subtask and Activity Template editors',async()=>{
+  const page=await mounted({width:390});
+  try{
+    await set(page,'#task-title','Shared household activity');
+    await page.click('[data-task-subtask-add]');
+    await page.select('[data-task-subtask-group]','32');
+    assert.match(await page.$eval('[data-task-subtask-group-summary]',node=>node.textContent),/Rotating Order.*Random member.*Last to first/);
+    assert.equal(await page.$eval('[data-task-subtask-group-start]',node=>node.disabled&&node.closest('label').hidden),true);
+    assert.equal(await page.$eval('[data-task-subtask-group-direction]',node=>node.disabled&&node.closest('label').hidden),true);
+    await page.click('[data-save-as-template]');await page.waitForSelector('#automation-activity-form');
+    await page.select('#automation-assignment-strategy','group_rotation');
+    await page.select('#automation-assignment-group [name="assignment_group_id"]','32');
+    assert.match(await page.$eval('[data-assignment-group-summary]',node=>node.textContent),/Rotating Order.*Random member.*Last to first/);
+    assert.equal(await page.$eval('[name="assignment_group_start"]',node=>node.disabled&&node.closest('label').hidden),true);
+    assert.equal(await page.$eval('[name="assignment_group_direction"]',node=>node.disabled&&node.closest('label').hidden),true);
+  }finally{await page.dispose();}
+});
+
+test('saving an unrelated Template edit preserves its stored shared Group configuration',async()=>{
+  requests.length=0;
+  const page=await mounted({width:390,newTask:false});
+  try{
+    await page.evaluate(async()=>{const root=document.createElement('div');document.body.append(root);
+      const {renderAutomationManager}=await import('/components/activity-automation.js');
+      await renderAutomationManager(root,{tab:'activities'});});
+    await page.click('[data-edit-activity="17"]');await page.waitForSelector('#automation-activity-form');
+    await set(page,'#automation-activity-form [name="description"]','Updated instructions');
+    await page.click('#shared-modal-overlay [type="submit"]');
+    await page.waitForFunction(()=>!document.querySelector('#automation-activity-form'));
+    const body=requests.find(row=>row.path==='/automation/admin/activity-templates/17'&&row.method==='PUT')?.body;
+    assert.deepEqual(body?.assignment_group,{group_id:32,start_mode:'random',direction:'last_to_first'});
+  }finally{await page.dispose();}
+});
+
+test('Save as Template copies current root and subtask Groups without losing the Task draft',async()=>{
+  requests.length=0;createReceipts.clear();
+  const page=await mounted({width:390});
+  try{
+    await set(page,'#task-title','Group source draft');
+    await page.click('[data-task-group-choice="32"]');
+    await page.click('[data-task-subtask-add]');await set(page,'[data-task-subtask-title]','Take bins out');
+    await page.select('[data-task-subtask-group]','31');
+    await page.select('[data-task-subtask-group-start]','random');
+    await page.click('[data-save-as-template]');await page.waitForSelector('#automation-activity-form');
+    assert.equal(await value(page,'[name="assignment_group_id"]'),'32');
+    assert.equal(await value(page,'#automation-activity-form [data-task-subtask-group]'),'31');
+    await page.click('#shared-modal-overlay [type="submit"]');
+    await page.waitForFunction(()=>!document.querySelector('#automation-activity-form'));
+    const saved=requests.find(row=>row.path==='/automation/admin/activity-templates'&&row.method==='POST')?.body;
+    assert.deepEqual(saved?.assignment_group,{group_id:32,start_mode:'first',direction:'first_to_last'});
+    assert.deepEqual(saved?.checklist?.[0]?.assignment_group,{group_id:31,start_mode:'random',direction:'first_to_last'});
+    assert.equal(await value(page,'#task-title'),'Group source draft');
   }finally{await page.dispose();}
 });
 

@@ -4,6 +4,33 @@ import { bindSubtaskReorder } from '../utils/subtask-reorder.js';
 import { bindSubtaskPeople } from './task-subtask-people.js';
 import { api } from '/api.js';
 
+export function assignmentGroupBehavior(group,{dateKey=null,template=false}={}) {
+  if(!group||!Array.isArray(group.usage_versions))return group;
+  const versions=group.usage_versions;
+  const today=group.household_today,active=today?versions.filter(row=>row.effective_date<=today).at(-1):versions.at(-1);
+  if(template&&new Set([active?.usage_mode||'independent',...versions.filter(row=>!today||row.effective_date>today).map(row=>row.usage_mode)]).size>1)
+    return {...group,usage_mode:'mixed',shared_config:null};
+  const key=dateKey||today;
+  const version=key?versions.filter(row=>row.effective_date<=key).at(-1):versions.at(-1);
+  return {...group,usage_mode:version?.usage_mode||'independent',shared_config:version?.shared_config||null};
+}
+
+export function assignmentGroupSummary(group,{scope='Activity'}={}) {
+  const members=group?.members?.filter(member=>member.active==null||Boolean(member.active)).map(member=>member.display_name).filter(Boolean).join(', ');
+  if(group?.usage_mode==='mixed')return `${members||group.name} · This Group changes between independent and shared rotations by Activity date. Set a start and direction for independent dates; shared dates use the Group schedule. Presence and skills on this ${scope} also apply.`;
+  if(group?.usage_mode!=='shared')return `${members||'Group members and order are shared.'} · This ${scope} chooses its starting member and direction. Presence and skills follow this ${scope}.`;
+  const config=group.shared_config||{};
+  const method={round_robin:'Round Robin',rotating_order:'Rotating Order',fixed_order:'Fixed Order'}[config.strategy]||'Shared rotation';
+  const start=config.start_mode==='random'?'Random member':config.start_mode==='explicit'
+    ?group.members?.find(member=>Number(member.id)===Number(config.starting_member_id))?.display_name||'Saved starting member':'First member';
+  const direction=config.strategy==='rotating_order'?(config.direction==='last_to_first'?'Last to first':'First to last'):null;
+  const eligibility=config.eligibility||{},restrictions=[];
+  if(eligibility.skill_ids?.length)restrictions.push(`${eligibility.skill_ids.length} Group skill${eligibility.skill_ids.length===1?'':'s'}`);
+  if(eligibility.presence_policy&&eligibility.presence_policy!=='ignore')restrictions.push(`Group presence: ${eligibility.presence_policy.replaceAll('_',' ')}`);
+  if(eligibility.place_id)restrictions.push('a Group Place');
+  return `${members||group.name} · ${[method,start,direction].filter(Boolean).join(' · ')}. These settings are locked here; edit the shared schedule in Group management. This ${scope} also applies its own presence and skills.${restrictions.length?` Saved Group eligibility also applies (${restrictions.join(', ')}).`:''}`;
+}
+
 function skillIds(values = []) {
   return [...new Set((Array.isArray(values) ? values : [])
     .map((value) => Number(typeof value === 'object' ? value?.id : value))
@@ -161,7 +188,7 @@ export function renderSubtaskEditor({ subtasks = [], skills = [], template = fal
   </div>`;
 }
 
-export function bindSubtaskEditor(root, { skills = [], template = false, onChange = null, onCreateSkill = null,canCreateGroup=false, users = [],groups=[], assignmentsEnabled = false, canAssign = true, canChangePoints = true } = {}) {
+export function bindSubtaskEditor(root, { skills = [], template = false, dateKey = null, onChange = null, onCreateSkill = null,canCreateGroup=false, users = [],groups=[], assignmentsEnabled = false, canAssign = true, canChangePoints = true } = {}) {
   const editor = componentRoot(root, '[data-task-subtask-editor]');
   if (!editor) throw new Error('Subtask editor is not mounted.');
   const rows = editor.querySelector('[data-task-subtask-rows]');
@@ -219,10 +246,12 @@ export function bindSubtaskEditor(root, { skills = [], template = false, onChang
       const assignee=row.querySelector('[data-task-subtask-assignee]');
       const closedAssignment = preserveAssignmentHistory && (!!originals.get(row)?.archived_at || ['done','expired','skipped'].includes(originals.get(row)?.status));
       if(assignee){assignee.closest('[data-task-subtask-assignment]').hidden=!assignmentsEnabled;assignee.disabled=rowReadOnly||closedAssignment||!canAssign||permissions?.change_assignment===false;}
-      const selectedGroup=groups.find(group=>String(group.id)===row.querySelector('[data-task-subtask-group]')?.value);
+      const selectedGroup=assignmentGroupBehavior(groups.find(group=>String(group.id)===row.querySelector('[data-task-subtask-group]')?.value),
+        {dateKey:typeof dateKey==='function'?dateKey():dateKey,template});
       const shared=selectedGroup?.usage_mode==='shared';
       row.querySelectorAll('[data-task-subtask-group], [data-task-subtask-group-start], [data-task-subtask-group-direction]').forEach(control=>control.disabled=rowReadOnly||closedAssignment||!canAssign||permissions?.change_assignment===false||(shared&&!control.matches('[data-task-subtask-group]')));
-      const summary=row.querySelector('[data-task-subtask-group-summary]');if(summary)summary.textContent=`${selectedGroup?.members?.filter(member=>member.active).map(member=>member.display_name).join(' → ')||'Group members and order are shared.'} ${shared?'The shared Group schedule controls direction, start and timing.':'This subtask chooses its starting member and direction.'} Presence follows this Activity's window and required skills.`;
+      const summary=row.querySelector('[data-task-subtask-group-summary]');if(summary)summary.textContent=assignmentGroupSummary(selectedGroup,{scope:'subtask'});
+      for(const field of ['start','direction']){const label=row.querySelector(`[data-task-subtask-group-${field}]`)?.closest('label');if(label)label.hidden=shared;}
       const manage=row.querySelector('[data-task-subtask-manage-group]');if(manage)manage.disabled=!selectedGroup;
       const menu = row.querySelector('.task-subtask-editor__actions');
       menu.querySelector('summary').setAttribute('aria-label', `Subtask ${index + 1} actions`);
@@ -312,6 +341,7 @@ export function bindSubtaskEditor(root, { skills = [], template = false, onChang
   editor.addEventListener('keydown', keydown);
   return {
     getValue,
+    refresh,
     addSkill,
     addGroup(group){if(!group||groups.some(item=>Number(item.id)===Number(group.id)))return;
       groups.push(group);

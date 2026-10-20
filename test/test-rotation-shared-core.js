@@ -132,6 +132,9 @@ test('confirmed reverse conversion requires every independent starting member an
     const confirm=S.previewRotationGroupUsage(d,group.id,proposal,{actorId:1,now});
     const saved=S.saveRotationGroupUsage(d,{...proposal,confirmation_token:confirm.confirmation_token},{id:group.id,actorId:1,expectedRevision:group.revision,now});
     assert.ok(saved.revision>group.revision);assert.equal(S.sharedGroupConfiguration(d,group.id,'2026-09-20'),null);
+    assert.deepEqual(saved.usage_versions.map(version=>[version.effective_date,version.usage_mode]),
+      [['2026-09-19','shared'],['2026-09-20','independent']]);
+    assert.equal(saved.household_today,'2026-09-19');
     assert.equal(S.reconcileSharedRotationPeriods(d,{now:at('2026-09-20T21:00:00-04:00')}).failed,0);
     const independent=R.configureRotationTrack(d,{consumer_type:'test',consumer_id:'new_child',purpose_key:'order',group_id:group.id,strategy:'round_robin'},{actorId:1,dateKey:'2026-09-20'});
     const first=R.resolveRotation(d,independent.id,'one',{context:{dateKey:'2026-09-20'}});assert.deepEqual(first.member_ids,[3]);

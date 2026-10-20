@@ -40,7 +40,7 @@ import { renderUserRotationOrder, getRotationUserIds } from '/components/user-ro
 import { openTaskWorkflows, openActivityTemplateEditor, openSkillEditor, wireVariableMentions } from '/components/activity-automation.js';
 import {openTemplatePeopleLauncher} from '/components/template-people-launcher.js';
 import { bindActivityVariableInputs } from '/components/variable-expression-editor.js';
-import { renderSkillPicker, bindSkillPicker, renderSubtaskEditor, bindSubtaskEditor } from '/components/task-requirements.js';
+import { renderSkillPicker, bindSkillPicker, renderSubtaskEditor, bindSubtaskEditor, assignmentGroupSummary, assignmentGroupBehavior } from '/components/task-requirements.js';
 import { createManualTaskDraft, taskDraftSnapshot, taskDraftToActivity } from '/utils/task-draft.js';
 import { renderRotationBindings, bindRotationBindings } from '/components/rotation-bindings.js';
 import { resolveActivityDueDate } from '/utils/activity-schedule.js';
@@ -1876,16 +1876,16 @@ function wireAssignmentMode(panel, task) {
   if(groupSelect){groupSelect.value=String(storedGroup?.group_id||'');groupPanel.querySelector('[data-task-assignment-group-start]').value=storedGroup?.start_mode||'first';
     groupPanel.querySelector('[data-task-assignment-group-direction]').value=storedGroup?.direction||'first_to_last';}
   const updateGroup=()=>{groupPanel?.querySelectorAll('[data-task-group-choice]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.taskGroupChoice===groupSelect.value)));
-    const chosen=state.rotationGroups.find(group=>String(group.id)===groupSelect?.value),shared=chosen?.usage_mode==='shared';
-    const names=chosen?.members?.filter(member=>member.active).map(member=>member.display_name).join(' → ');
-    if(groupPanel)groupPanel.querySelector('[data-task-group-summary]').textContent=shared
-      ?`${names||chosen.name} · Shared schedule controls order, direction, start and timing for this Group. Activity presence and purpose settings remain below.`
-      :`${names||'Group members and order are shared.'} · This Activity chooses its starting member and direction. Availability follows its skills and Activity window.`;
-    for(const field of ['start','direction']){const control=groupPanel?.querySelector(`[data-task-assignment-group-${field}]`);if(control)control.disabled=shared;}
+    const selected=state.rotationGroups.find(group=>String(group.id)===groupSelect?.value);
+    const chosen=assignmentGroupBehavior(selected,{dateKey:parseDateInput(panel.querySelector('#task-due-date')?.value)||selected?.household_today}),shared=chosen?.usage_mode==='shared';
+    if(groupPanel)groupPanel.querySelector('[data-task-group-summary]').textContent=assignmentGroupSummary(chosen);
+    for(const field of ['start','direction']){const control=groupPanel?.querySelector(`[data-task-assignment-group-${field}]`);if(control){control.disabled=shared;control.closest('label').hidden=shared;}}
     const manage=groupPanel?.querySelector('[data-task-manage-group]');if(manage)manage.disabled=!chosen;
     if(groupSelect?.value)groupPanel.querySelector('[data-task-group-behavior]').open=true;};
+  for(const eventName of ['input','change'])panel.querySelector('#task-due-date')?.addEventListener(eventName,updateGroup);
   groupPanel?.querySelectorAll('[data-task-group-choice]').forEach(button=>button.addEventListener('click',()=>{if(button.dataset.taskGroupChoice===groupSelect.value){groupPanel.querySelector('[data-task-group-behavior]').open=true;return;}
-    groupSelect.value=button.dataset.taskGroupChoice;mode.value='fixed';panel.querySelectorAll('[data-ms-input="task_assigned"]').forEach(input=>{input.checked=false;});updateGroup();update();groupPanel.querySelector('[data-task-assignment-group-start]').focus();}));
+    groupSelect.value=button.dataset.taskGroupChoice;mode.value='fixed';panel.querySelectorAll('[data-ms-input="task_assigned"]').forEach(input=>{input.checked=false;});updateGroup();update();
+    (groupPanel.querySelector('[data-task-assignment-group-start]').disabled?groupSelect:groupPanel.querySelector('[data-task-assignment-group-start]')).focus();}));
   groupPanel?.querySelector('[data-task-create-group]')?.addEventListener('click',async()=>{
     try{const {openNewRotationGroup}=await import('/components/rotation-groups.js');const group=await openNewRotationGroup();
       if(!group||!groupPanel.isConnected)return;
@@ -1894,7 +1894,8 @@ function wireAssignmentMode(panel, task) {
       const option=new Option(group.name,String(group.id));groupSelect.add(option);
       const chip=document.createElement('button');chip.type='button';chip.className='rotation-group-choice';chip.dataset.taskGroupChoice=String(group.id);
       chip.innerHTML=`<span class="rotation-group-choice__avatar" aria-hidden="true"><i data-lucide="users-round"></i></span><span class="rotation-group-choice__name">${esc(group.name)}</span>`;
-      groupPanel.querySelector('.rotation-group-choices').append(chip);chip.addEventListener('click',()=>{groupSelect.value=String(group.id);mode.value='fixed';updateGroup();update();groupPanel.querySelector('[data-task-assignment-group-start]').focus();});
+      groupPanel.querySelector('.rotation-group-choices').append(chip);chip.addEventListener('click',()=>{groupSelect.value=String(group.id);mode.value='fixed';updateGroup();update();
+        (groupPanel.querySelector('[data-task-assignment-group-start]').disabled?groupSelect:groupPanel.querySelector('[data-task-assignment-group-start]')).focus();});
       window.lucide?.createIcons({el:chip});chip.click();
     }catch(error){window.yuvomi?.showToast(error.message,'danger');}
   });
@@ -2137,6 +2138,10 @@ async function saveTaskAsTemplate(form) {
     ...getRRuleValues(form, 'task'),
     tags: normalizeTagList([...modalTags, ...form.querySelector('#task-tag-input').value.split(',')]),
     location: readTaskLocation(form), assigned_users: getSelectedUserIds(form, 'task_assigned'),
+    assignment_group:Number(form.querySelector('[data-task-assignment-group]')?.value)?{
+      group_id:Number(form.querySelector('[data-task-assignment-group]').value),
+      start_mode:form.querySelector('[data-task-assignment-group-start]').value,
+      direction:form.querySelector('[data-task-assignment-group-direction]').value}:null,
     skill_ids: controls.skills.getValue(), subtasks: controls.subtasks.getValue().filter((step) => step.title.trim()),
     rotation_bindings: controls.rotations.getValue(),
   }, source);
@@ -2380,6 +2385,7 @@ function wireTaskForm(panel, {
   };
   const skills = bindSkillPicker(panel.querySelector('#task-root-skills'), { onCreateSkill: canCapability('skills.manage') ? createSkill : null });
   const subtasks = form.querySelector('[data-task-subtask-editor]') ? bindSubtaskEditor(form, { skills: state.skills, users:state.users,groups:state.rotationGroups,canCreateGroup:canCapability('rotations.manage'),
+    dateKey:()=>parseDateInput(form.querySelector('#task-due-date')?.value)||state.rotationGroups[0]?.household_today||todayKey(),
     onChange: () => {
       const controls = taskFormControls.get(form);
       if (!form.isConnected || !controls || controls.rebasing || controls.scoringLoading) return;
@@ -2389,6 +2395,7 @@ function wireTaskForm(panel, {
     },
     canChangePoints: task ? canTask(task, 'change_points') : canCapability('tasks.change_points'),
     canAssign:task?canTask(task,'change_assignment'):canCapability('tasks.change_assignment'), onCreateSkill: canCapability('skills.manage') ? createSkill : null }) : null;
+  for(const eventName of ['input','change'])form.querySelector('#task-due-date')?.addEventListener(eventName,()=>subtasks?.refresh());
   const rotations = bindRotationBindings(form, {skills:state.skills,places:state.places,readOnly:!canCapability('rotations.configure') || !!task && !canTask(task,'edit')});
   // A template draft has canonical action provenance, so its Rotation text can
   // be resolved atomically when the server materializes those actions.

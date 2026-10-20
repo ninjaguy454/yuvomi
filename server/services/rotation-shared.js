@@ -300,6 +300,9 @@ export function previewRotationGroupUsage(d,groupId,input,{actorId,now=new Date(
 }
 export function rotationGroupUsage(d,groupId,{now=new Date()}={}) {
   const schedule=scheduleRow(d,groupId),version=versionRow(d,schedule),config=configOf(version);
+  const usage_versions=schedule?d.prepare(`SELECT usage_mode,effective_date,config_json FROM rotation_group_schedule_versions
+    WHERE schedule_id=? ORDER BY effective_date,id`).all(schedule.id).map(row=>({usage_mode:row.usage_mode,
+      effective_date:row.effective_date,shared_config:row.usage_mode==='shared'?JSON.parse(row.config_json):null})):[];
   const currentPeriod=schedule?d.prepare('SELECT period_date FROM rotation_group_periods WHERE schedule_id=? AND starts_at<=? AND ends_at>? ORDER BY starts_at DESC LIMIT 1')
     .get(schedule.id,new Date(now).toISOString(),new Date(now).toISOString()):null;
   const currentDate=currentPeriod?.period_date||todayKey(d,now);
@@ -310,6 +313,7 @@ export function rotationGroupUsage(d,groupId,{now=new Date()}={}) {
     for(let date=first,n=0;n<8&&!next;n++,date=shiftDateKey(date,1))next=previewSharedRotation(d,groupId,{dateKey:date,now});
   }
   return {usage_mode:version?.usage_mode??'independent',shared_config:version?.usage_mode==='shared'?config:null,
+    household_today:todayKey(d,now),usage_versions,
     usage_effective_date:version?.effective_date??null,shared:version?.usage_mode==='shared'?{
       track_id:schedule.track_id,schedule:config,current,next}:null};
 }

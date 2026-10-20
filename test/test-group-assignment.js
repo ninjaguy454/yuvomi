@@ -61,6 +61,22 @@ test('a Task Group choice creates a concrete assignment and an immutable decisio
   assert.equal(f.d.prepare('SELECT count(*) n FROM task_group_assignment_decisions WHERE task_id=? AND superseded_at IS NULL').get(id).n,1);
 });
 
+test('editing one independent Group assignment leaves another Activity and its cursor untouched',async t=>{
+  const f=await scoringFixture(t),g=group(f.d);
+  const config={group_id:g.id,start_mode:'first',direction:'first_to_last'};
+  const a=await f.create({title:'First activity',due_date:'2026-11-01',assignment_group:config,assigned_to:[]});
+  const b=await f.create({title:'Second activity',due_date:'2026-11-01',assignment_group:config,assigned_to:[]});
+  assert.equal(a.status,201,JSON.stringify(a));assert.equal(b.status,201,JSON.stringify(b));
+  const before=f.row(b.data.id),decisions=f.d.prepare('SELECT * FROM task_group_assignment_decisions WHERE task_id=?').all(b.data.id);
+  const cursor=f.d.prepare("SELECT * FROM assignment_rotation_state WHERE rotation_key LIKE ?").all(`group-assignment:task:${b.data.id}:%`);
+  const changed=await f.edit(a.data.id,{assignment_group:{...config,direction:'last_to_first'},assigned_to:[]});
+  assert.equal(changed.status,200,JSON.stringify(changed));
+  assert.equal(f.row(b.data.id).assigned_to,before.assigned_to);
+  assert.equal(f.row(b.data.id).assignment_group_json,before.assignment_group_json);
+  assert.deepEqual(f.d.prepare('SELECT * FROM task_group_assignment_decisions WHERE task_id=?').all(b.data.id),decisions);
+  assert.deepEqual(f.d.prepare("SELECT * FROM assignment_rotation_state WHERE rotation_key LIKE ?").all(`group-assignment:task:${b.data.id}:%`),cursor);
+});
+
 test('template root and checklist Group defaults materialize separately and preserve reusable definitions',async t=>{
   const f=await scoringFixture(t),g=group(f.d);
   const config=JSON.stringify({group_id:g.id,start_mode:'first',direction:'first_to_last'});

@@ -47,6 +47,7 @@ test('ordinary session mutations continue after other API calls exhaust the unch
   assert.equal((await call('/api/v1/tasks','GET',true)).status,200);
   assert.equal((await call('/api/v1/tasks/42','GET',true)).status,429,'a separate session guard bounds expensive ordinary operations');
   assert.equal((await call('/api/v1/tasks/42/status','PATCH',false)).status,429);
+  assert.equal((await call('/api/v1/tasks/changes','GET',true)).status,429,'the long-lived change stream retains the shared IP guard');
   assert.equal((await call('/api/v1/auth/login','POST',true)).status,429);
 });
 

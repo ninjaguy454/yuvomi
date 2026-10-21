@@ -17,8 +17,8 @@
 
 const APP_RELEASE   = '2.54.0-kitchen.5';
 
-// Release explicit activity closure with preserved progress and points.
-const CACHE_VERSION = `${APP_RELEASE}-vidamia.93`;
+// Archive and bounded Task windows require a new shell/page cache generation.
+const CACHE_VERSION = `${APP_RELEASE}-vidamia.94`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;
@@ -167,6 +167,7 @@ const APP_SHELL = [
   '/styles/reminders.css',
   '/styles/dashboard.css',
   '/styles/tasks.css',
+  '/styles/task-archive.css',
   '/styles/task-requirements.css',
   '/styles/shopping.css',
   '/styles/meals.css',
@@ -213,6 +214,8 @@ const APP_SHELL = [
   '/components/task-requirements.js',
   '/components/task-subtask-people.js',
   '/utils/task-draft.js',
+  '/utils/task-list-delta.js',
+  '/utils/task-status-feedback.js',
   '/utils/branding.js',
   '/components/month-year-picker.js',
   '/styles/month-year-picker.css',
@@ -355,6 +358,7 @@ const APP_LOCALES = [
 const PAGE_MODULES = [
   '/pages/dashboard.js',
   '/pages/tasks.js',
+  '/pages/task-archive.js',
   '/pages/shopping.js',
   '/pages/meals.js',
   '/pages/meal-cycle.js',

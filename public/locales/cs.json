@@ -70,6 +70,7 @@
     "nav": {
         "dashboard": "Přehled",
         "tasks": "Úkoly",
+        "archive": "Archiv",
         "calendar": "Kalendář",
         "meals": "Jídelníček",
         "shopping": "Nákupy",

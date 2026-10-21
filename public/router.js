@@ -86,6 +86,7 @@ const ROUTES = [
   { path: '/join',     page: '/pages/join.js',     requiresAuth: false, module: null,        titleKey: 'join.title' },
   { path: '/',         page: '/pages/dashboard.js', requiresAuth: true, module: 'dashboard', titleKey: 'dashboard.title' },
   { path: '/tasks',    page: '/pages/tasks.js',     requiresAuth: true, module: 'tasks',     titleKey: 'nav.tasks' },
+  { path: '/archive',  page: '/pages/task-archive.js', requiresAuth: true, module: 'tasks', titleKey: 'nav.archive', style: '/styles/task-archive.css' },
   { path: '/shopping', page: '/pages/shopping.js',  requiresAuth: true, module: 'shopping',  titleKey: 'nav.shopping' },
   { path: '/meals',    page: '/pages/meals.js',     requiresAuth: true, module: 'meals',     titleKey: 'nav.meals' },
   { path: '/calendar', page: '/pages/calendar.js',  requiresAuth: true, module: 'calendar',  titleKey: 'nav.calendar' },
@@ -847,6 +848,13 @@ async function navigate(path, userOrPushState = true, pushState = true) {
       navigate('/');
       return;
     }
+    // The bounded Archive query is not available to paired-device principals.
+    if (route.path === '/archive' && isDevicePrincipal()) {
+      currentPath = null;
+      isNavigating = false;
+      navigate(deviceLandingPath());
+      return;
+    }
 
     // Auth-Guard
     if (route.requiresAuth && !currentUser) {
@@ -910,6 +918,12 @@ async function navigate(path, userOrPushState = true, pushState = true) {
       currentPath = null;
       isNavigating = false;
       navigate('/');
+      return;
+    }
+    if (route.path === '/archive' && isDevicePrincipal()) {
+      currentPath = null;
+      isNavigating = false;
+      navigate(deviceLandingPath());
       return;
     }
 
@@ -3477,6 +3491,7 @@ function navItems({ catalog = false } = {}) {
     // Plan
     { path: '/calendar',  label: t('nav.calendar'),  module: 'calendar',  section: NAV_SECTION.plan },
     { path: '/tasks',     label: t('nav.tasks'),     module: 'tasks',     section: NAV_SECTION.plan },
+    { path: '/archive',   label: t('nav.archive'),   module: 'tasks', navId: 'task-archive', icon: 'archive', section: NAV_SECTION.plan },
     { path: '/notes',     label: t('nav.notes'),     module: 'notes',     section: NAV_SECTION.plan },
     // Haushalt — Kitchen-Gruppe zuerst, dann die übrigen Haushalts-Module
     { path: '/meals',     label: t('nav.meals'),     module: 'meals',    section: NAV_SECTION.household, kitchenGroup: true },
@@ -3540,6 +3555,7 @@ function navItems({ catalog = false } = {}) {
     !item.adminOnly || currentUser?.role === 'admin'
   ) && !_disabledModules.has(item.module)
     && !_hiddenModules.has(item.module)
+    && !(item.path === '/archive' && isDevicePrincipal())
     && canAccessNavModule(item.module);
   const sortable = [
     ...baseItems.filter((item) =>

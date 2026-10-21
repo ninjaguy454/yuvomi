@@ -276,7 +276,7 @@ function taskBuckets(tasks, mode, { includeEmptyAssignees = false, mergeActiveSt
   if (mode === 'category') return groupBy(tasks, 'category');
   if (mode === 'due') return groupBy(tasks, 'due');
   if (mode === 'status') {
-    const order = mergeActiveStatuses ? KANBAN_SECTIONS() : [...STATUSES(), { value: 'archived', label: t('tasks.statusArchived') }];
+    const order = mergeActiveStatuses ? KANBAN_SECTIONS() : STATUSES();
     return order.map((status) => ({
       id: status.value,
       label: status.label,
@@ -1533,11 +1533,9 @@ function taskQuery() {
   // append statt set: jeder Wert ist ein eigener Parameter. Bei den Tags, damit
   // ein Tag mit Komma im Namen am Server nicht in zwei zerfällt; bei den übrigen
   // Achsen, weil sie seit #671 mehrere Werte tragen (ODER-verknüpft).
-  if (state.viewMode !== 'kanban') state.filters.status.forEach((v) => params.append('status', v));
-  // Im Kanban ist die Ablage eine Spalte — sie muss also mitkommen, obwohl der
-  // Server sie sonst ausblendet (#688).
+  if (state.viewMode !== 'kanban') state.filters.status.filter(v => v !== 'archived').forEach((v) => params.append('status', v));
+  // Board columns cover active work only. Archived work lives in /archive.
   else {
-    params.set('archived', '1');
     STATUSES().forEach(({ value }) => params.append('status', value));
   }
   state.filters.priority.forEach((v) => params.append('priority', v));
@@ -3638,16 +3636,13 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
 // Kanban-Ansicht
 // --------------------------------------------------------
 
-// Die Spalten sind der Weg einer Aufgabe. Die letzte ist keine Station dieses
-// Wegs, sondern die Ablage daneben (#688) - deshalb steht dort 'archived' und
-// nicht ein vierter Status.
+// Archived occurrences are browsed in the dedicated Archive page.
 const KANBAN_SECTIONS = () => [
   { value: 'active', label: 'Active' },
   { value: 'done', label: t('tasks.kanbanDone') },
   { value: 'expired', label: 'Expired' },
   { value: 'skipped', label: 'Skipped' },
   { value: 'closed_incomplete', label: 'Closed without completing remaining subtasks' },
-  { value: 'archived', label: t('tasks.kanbanArchived') },
 ];
 
 /** In welcher Spalte steht die Aufgabe? Die Ablage sticht den Status. */
@@ -3793,7 +3788,7 @@ function renderKanban(container) {
       const bucketKey = `${state.boardScope}:${state.groupMode}:${bucket.id}`;
       const bucketSort = state.bucketSorts.get(bucketKey);
       const byStatus = new Map([
-        ['active', []], ['done', []], ['expired', []], ['skipped', []], ['closed_incomplete', []], ['archived', []],
+        ['active', []], ['done', []], ['expired', []], ['skipped', []], ['closed_incomplete', []],
       ]);
       bucket.tasks.forEach((task) => (byStatus.get(kanbanSectionOf(task)) || byStatus.get('active')).push(task));
       return `<section class="kanban-col task-board__bucket" data-view-key="bucket:${esc(bucketKey)}" data-bucket-key="${esc(bucketKey)}">
@@ -3810,7 +3805,7 @@ function renderKanban(container) {
           </button>
         </header>
         <div class="task-board__bucket-scroll page-scrollport">
-          ${KANBAN_SECTIONS().filter(({ value }) => state.groupMode === 'status' ? value === bucket.id : !['archived', 'expired','skipped','closed_incomplete'].includes(value) || byStatus.get(value).length)
+          ${KANBAN_SECTIONS().filter(({ value }) => state.groupMode === 'status' ? value === bucket.id : !['expired','skipped','closed_incomplete'].includes(value) || byStatus.get(value).length)
             .map(({ value }) => renderBoardStatusSection(bucketKey, value, byStatus.get(value))).join('')}
         </div>
       </section>`;
@@ -4905,7 +4900,7 @@ async function toggleTagFilter(tag, container) {
 function normalizeFilterSet(f = {}) {
   const asList = (value) => (Array.isArray(value) ? value : (value ? [value] : [])).filter(Boolean).map(String);
   return {
-    status:      asList(f.status),
+    status:      asList(f.status).filter(value => value !== 'archived' && STATUSES().some(item => item.value === value)),
     priority:    asList(f.priority),
     assigned_to: asList(f.assigned_to),
     tags:        asList(Array.isArray(f.tags) ? f.tags : (f.tag ? [f.tag] : [])),
@@ -4934,7 +4929,8 @@ async function toggleValueFilter(key, value, container) {
 
 function getRecentFilters() {
   try {
-    return JSON.parse(taskViewStorage.getItem(RECENT_FILTERS_KEY) ?? '[]').map(normalizeFilterSet);
+    return JSON.parse(taskViewStorage.getItem(RECENT_FILTERS_KEY) ?? '[]').map(normalizeFilterSet)
+      .filter(f => f.status.length || f.priority.length || f.assigned_to.length || f.tags.length);
   } catch { return []; }
 }
 
@@ -6276,6 +6272,7 @@ export async function render(container, { user }) {
   const statusOperations = new AbortController();
   taskPageOperations.set(container, statusOperations);
   state.offersOnly = new URLSearchParams(window.location.search).get('offers') === '1';
+  state.filters = normalizeFilterSet(state.filters);
   if (state.offersOnly) state.filters = { status: [], priority: [], assigned_to: [], tags: [] };
   state.user = user ?? null;
   state.currentUserId = user?.id ?? null;
@@ -6601,6 +6598,7 @@ export const __test = {
   taskCalendarDate,
   formatDayMonth,
   taskQuery,
+  normalizeFilterSet,
   boardTasks,
   deviceTaskBoardScope,
   state,

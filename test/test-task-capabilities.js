@@ -123,6 +123,26 @@ test('linked Housekeeping payment cannot bypass Task completion or deletion rest
   assert.equal(d.prepare('SELECT status FROM tasks WHERE id=?').get(own.id).status,'open');
 });
 
+test('Archive and Restore enforce the current delete/archive capability and stale revision',async()=>{
+  const row=seed({title:'Archive capability',creator:learner,assigned:learner});
+  configure({'tasks.delete_archive':'none'});
+  assert.equal(taskCapabilities(d,learner,row).delete_archive,false);
+  assert.equal((await request('PATCH',`/api/v1/tasks/${row.id}/archive`,{archived:true,...savedRevision(row)})).status,403);
+  assert.equal(d.prepare('SELECT archived_at FROM tasks WHERE id=?').get(row.id).archived_at,null);
+  configure({'tasks.delete_archive':'allow'});
+  assert.equal((await request('PATCH',`/api/v1/tasks/${row.id}/archive`,{archived:true,...savedRevision(row)})).status,200);
+  assert.ok(d.prepare('SELECT archived_at FROM tasks WHERE id=?').get(row.id).archived_at);
+  configure({'tasks.delete_archive':'none'});
+  assert.equal((await request('PATCH',`/api/v1/tasks/${row.id}/archive`,{archived:false,...savedRevision(row)})).status,403);
+  configure({'tasks.delete_archive':'allow'});
+  const revision=savedRevision(row).expected_revision;
+  d.prepare("UPDATE tasks SET description='A concurrent edit' WHERE id=?").run(row.id);
+  assert.equal((await request('PATCH',`/api/v1/tasks/${row.id}/archive`,{archived:false,expected_revision:revision})).status,409);
+  assert.ok(d.prepare('SELECT archived_at FROM tasks WHERE id=?').get(row.id).archived_at);
+  assert.equal((await request('PATCH',`/api/v1/tasks/${row.id}/archive`,{archived:false,...savedRevision(row)})).status,200);
+  assert.equal(d.prepare('SELECT archived_at FROM tasks WHERE id=?').get(row.id).archived_at,null);
+});
+
 test('previously configured reminder cannot disclose a Task after own-only permissions change',async()=>{
   const hidden=seed({title:'Private household reminder',assigned:other});
   d.prepare("INSERT INTO reminders(entity_type,entity_id,remind_at,created_by) VALUES ('task',?,'2000-01-01T00:00:00Z',?)").run(hidden.id,learner);

@@ -4159,6 +4159,9 @@ router.patch('/:id/archive', (req, res) => {
     // Der Status bleibt unangetastet - eine zurückgeholte Aufgabe steht wieder
     // genau dort, wo sie beim Ablegen stand.
     const archivedAt = db.get().transaction(() => {
+      const current=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(task.id);
+      assertTaskMutation(db.get(),req,current,req.body,{operation:'archive'});
+      assertTaskRevision(db.get(),current,req.body);
       const before=captureTaskListClock(db.get()),root=trackableTaskListRoot(db.get(),task.id);
       const value = setArchived(task.id, req.body.archived !== false);
       reconcileTaskSupervision(db.get(), task.id, { actorId: req.authUserId || req.session.userId });

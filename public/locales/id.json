@@ -70,6 +70,7 @@
     "nav": {
         "dashboard": "Ringkasan",
         "tasks": "Tugas",
+        "archive": "Arsip",
         "calendar": "Kalender",
         "meals": "Makanan",
         "shopping": "Belanja",

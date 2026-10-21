@@ -49,13 +49,11 @@ export const STATUSES = () => [
   { value: 'closed_incomplete', label: 'Closed without completing remaining subtasks' },
 ];
 
-// In der Filterleiste bleibt das Archiv ein Wert neben den Status - dort ist es
-// eine Frage („was zeige ich?"), keine Eigenschaft. Der Server nimmt
-// `status=archived` genau dafür entgegen.
-export const FILTER_STATUSES = () => [...STATUSES(), { value: 'archived', label: t('tasks.statusArchived') }];
+// Archive has its own destination; it is not a status filter in active Tasks.
+export const FILTER_STATUSES = () => STATUSES();
 
 export const PRIORITY_LABELS = () => Object.fromEntries(PRIORITIES().map((p) => [p.value, p.label]));
-export const STATUS_LABELS   = () => Object.fromEntries(FILTER_STATUSES().map((s) => [s.value, s.label]));
+export const STATUS_LABELS   = () => Object.fromEntries([...STATUSES(), {value:'archived',label:t('tasks.statusArchived')}].map((s) => [s.value, s.label]));
 
 // --------------------------------------------------------
 // Ablage und Sperre

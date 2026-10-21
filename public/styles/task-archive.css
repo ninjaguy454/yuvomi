@@ -1,0 +1,9 @@
+.task-archive{width:100%;max-width:62rem;margin:0 auto;padding:var(--space-5,1.25rem)}
+.task-archive__search{display:grid;gap:.35rem;min-width:min(100%,18rem)}
+.task-archive__search input{width:100%}
+.task-archive__list{list-style:none;padding:0;margin:1rem 0;display:grid;gap:.55rem}
+.task-archive__row{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:1rem;border:1px solid var(--color-border,#d8dce1);border-radius:.75rem;background:var(--color-surface,#fff)}
+.task-archive__details{display:grid;gap:.3rem;min-width:0}
+.task-archive__title{font-weight:650;overflow-wrap:anywhere}
+.task-archive__empty{padding:1.5rem 0}
+@media(max-width:520px){.task-archive__row{align-items:flex-start;flex-direction:column}.task-archive__row button{align-self:flex-end}}

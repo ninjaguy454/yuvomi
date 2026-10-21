@@ -70,6 +70,7 @@
     "nav": {
         "dashboard": "개요",
         "tasks": "할 일",
+        "archive": "보관함",
         "calendar": "캘린더",
         "meals": "식단",
         "shopping": "장보기",

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {FILTER_STATUSES} from '../public/utils/task-fields.js';
 
 // Import the actual Tasks helpers; only unrelated browser integrations use the
 // existing loader stubs. Authorization belongs to the API, before these rows
@@ -100,9 +101,18 @@ test('Not Started and In Progress are included by the default list query and bot
   assert.deepEqual(query().getAll('status'), ['open', 'in_progress']);
   assert.deepEqual(boardIds(), [72, 73]);
   tasks.state.viewMode = 'kanban';
-  assert.deepEqual(query().getAll('status'), [], 'board columns represent status, including Completed');
-  assert.equal(query().get('archived'), '1', 'the existing board Archive column remains requested');
+  assert.ok(query().getAll('status').includes('done'), 'board includes completed active work');
+  assert.equal(query().get('archived'), null, 'archive is a separate destination');
   assert.deepEqual(boardIds(), [72, 73]);
+});
+
+test('active Task filters omit Archive and old saved archive filters are dropped', () => {
+  assert.ok(!FILTER_STATUSES().some(item => item.value === 'archived'));
+  assert.deepEqual(tasks.normalizeFilterSet({status:['archived','done']}).status,['done']);
+  assert.deepEqual(tasks.normalizeFilterSet({status:'archived'}).status,[]);
+  tasks.state.filters.status=['archived'];
+  assert.equal(query().get('status'),null);
+  assert.equal(query().get('archived'),null);
 });
 
 test('explicit assignee, priority and tag filters remain API query constraints in list and board', () => {

@@ -70,6 +70,7 @@
     "nav": {
         "dashboard": "Επισκόπηση",
         "tasks": "Εργασίες",
+        "archive": "Αρχείο",
         "calendar": "Ημερολόγιο",
         "meals": "Γεύματα",
         "shopping": "Αγορές",

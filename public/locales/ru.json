@@ -70,6 +70,7 @@
     "nav": {
         "dashboard": "Обзор",
         "tasks": "Задачи",
+        "archive": "Архив",
         "calendar": "Календарь",
         "meals": "Питание",
         "shopping": "Покупки",

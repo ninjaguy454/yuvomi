@@ -187,6 +187,19 @@ test('restoring an old occurrence gives it 30 days before automatic rearchive', 
   assert.deepEqual(service.reconcileTaskAutoArchive(f.d,{now:new Date('2026-12-01T12:00:00Z')}).archivedIds,[id]);
 });
 
+test('an Archive page with a stale Task revision cannot restore it',async t=>{
+  const f=await scoringFixture(t);
+  const id=await root(f,'Stale archive restore');done(f,id,OLD);
+  service.reconcileTaskAutoArchive(f.d,{now:NOW});
+  const before=f.row(id);
+  const stale=await f.call('PATCH',`/tasks/${id}/archive`,{archived:false,expected_revision:before.revision+1});
+  assert.equal(stale.status,409,JSON.stringify(stale));
+  assert.equal(f.row(id).archived_at,before.archived_at);
+  const fresh=await f.call('PATCH',`/tasks/${id}/archive`,{archived:false,expected_revision:before.revision});
+  assert.equal(fresh.status,200,JSON.stringify(fresh));
+  assert.equal(f.row(id).archived_at,null);
+});
+
 test('automatic archive removes a card through an authorized list delta and retains archive search', async t => {
   const f = await scoringFixture(t);
   const id = await root(f,'Search archive needle');done(f,id,OLD);

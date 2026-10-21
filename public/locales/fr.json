@@ -70,6 +70,7 @@
     "nav": {
         "dashboard": "Accueil",
         "tasks": "Tâches",
+        "archive": "Archives",
         "calendar": "Calendrier",
         "meals": "Repas",
         "shopping": "Courses",

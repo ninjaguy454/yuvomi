@@ -70,6 +70,7 @@
     "nav": {
         "dashboard": "概览",
         "tasks": "任务",
+        "archive": "归档",
         "calendar": "日历",
         "meals": "饮食",
         "shopping": "购物",

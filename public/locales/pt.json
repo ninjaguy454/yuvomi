@@ -70,6 +70,7 @@
     "nav": {
         "dashboard": "Painel",
         "tasks": "Tarefas",
+        "archive": "Arquivo",
         "calendar": "Calendário",
         "meals": "Refeições",
         "shopping": "Compras",

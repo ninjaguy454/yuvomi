@@ -70,6 +70,7 @@
     "nav": {
         "dashboard": "Panoramica",
         "tasks": "Compiti",
+        "archive": "Archivio",
         "calendar": "Calendario",
         "meals": "Pasti",
         "shopping": "Spesa",

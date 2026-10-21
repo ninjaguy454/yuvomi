@@ -472,6 +472,8 @@
         "bulkMarkOpen": "مفتوح",
         "bulkSelect": "تحديد متعدد",
         "bulkSelectedCount": "المحدد: {{count}}",
+        "windowLoadedStatus": "تم تحميل {{loaded}} من {{total}} مهمة.",
+        "bulkSelectionReset": "تغيّر تحديد المهام مع هذا العرض. راجعه قبل تنفيذ إجراء جماعي.",
         "bulkStatusChanged": "تم تغيير الحالة.",
         "selectTask": "تحديد المهمة",
         "pointsLabel": "النقاط",

@@ -472,6 +472,8 @@
         "bulkSelect": "Mehrfachauswahl",
         "selectTask": "Aufgabe auswählen",
         "bulkSelectedCount": "{{count}} ausgewählt",
+        "windowLoadedStatus": "{{loaded}} von {{total}} Aufgaben geladen.",
+        "bulkSelectionReset": "Die Aufgabenauswahl hat sich mit dieser Ansicht geändert. Vor einer Sammelaktion prüfen.",
         "bulkMarkDone": "Erledigt",
         "bulkMarkOpen": "Offen",
         "bulkArchive": "Archivieren",

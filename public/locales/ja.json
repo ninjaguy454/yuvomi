@@ -472,6 +472,8 @@
         "bulkMarkOpen": "未着手",
         "bulkSelect": "複数選択",
         "bulkSelectedCount": "{{count}} 件選択中",
+        "windowLoadedStatus": "{{total}} 件中 {{loaded}} 件のタスクを読み込みました。",
+        "bulkSelectionReset": "この表示でタスクの選択が変わりました。一括操作の前に確認してください。",
         "bulkStatusChanged": "ステータスを変更しました。",
         "selectTask": "タスクを選択",
         "pointsLabel": "ポイント",

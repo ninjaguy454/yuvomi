@@ -472,6 +472,8 @@
         "bulkMarkOpen": "Открыто",
         "bulkSelect": "Множественный выбор",
         "bulkSelectedCount": "Выбрано: {{count}}",
+        "windowLoadedStatus": "Загружено задач: {{loaded}} из {{total}}.",
+        "bulkSelectionReset": "Выбор задач изменился вместе с этим видом. Проверьте его перед массовым действием.",
         "bulkStatusChanged": "Статус изменён.",
         "selectTask": "Выбрать задачу",
         "pointsLabel": "Баллы",

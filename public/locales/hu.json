@@ -418,6 +418,8 @@
         "bulkSelect": "Tömeges kijelölés",
         "selectTask": "Feladat kijelölése",
         "bulkSelectedCount": "{{count}} kijelölve",
+        "windowLoadedStatus": "{{loaded}} / {{total}} feladat betöltve.",
+        "bulkSelectionReset": "A feladatok kijelölése megváltozott ebben a nézetben. Tömeges művelet előtt ellenőrizze.",
         "bulkMarkDone": "Befejezettként jelölés",
         "bulkMarkOpen": "Nyitottként jelölés",
         "bulkArchive": "Archiválás",

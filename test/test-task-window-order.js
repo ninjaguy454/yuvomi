@@ -84,6 +84,17 @@ test('due buckets match current calendar-day groups including closed occurrences
   assert.deepEqual(actual.map(g=>({id:g.id,ids:g.ids})),JSON.parse(JSON.stringify(expected)));
 });
 
+test('equal localized group labels have stable IDs across page boundaries',()=>{
+  const rows=[{id:3,title:'Third',category:'b'}, {id:1,title:'First',category:'a'}];
+  const view={groupMode:'category',sort:{field:'title',direction:'asc'},
+    categories:[],categoryLabel:()=> 'Same',limit:1};
+  const first=sliceTaskWindow(orderTaskWindow(rows,view),view);
+  const reordered=sliceTaskWindow(orderTaskWindow([...rows].reverse(),view),view);
+  assert.deepEqual(first.groups.map(row=>row.id),['a','b']);
+  assert.deepEqual(reordered.groups.map(row=>row.id),['a','b']);
+  assert.deepEqual(first.ids,reordered.ids);
+});
+
 test('recomputed authorized window admits off-page entrant and refills removal boundary', () => {
   const rows = [
     { id:1,title:'A',priority:'low',due_date:'2026-11-01' },

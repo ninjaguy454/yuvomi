@@ -51,7 +51,8 @@ import {
 import { occurrenceFeed, occurrenceHistory, syncTaskCompletion } from '../services/task-completions.js';
 import { normalizeCategoryFilter, taskCategoryWhere, taskStartProjection, taskScopeWhere } from '../services/task-scope.js';
 import { taskUnskippedWhere } from '../services/task-window.js';
-import { taskListWhere } from '../services/task-list-query.js';
+import { taskListWhere, readOrderedTaskWindow } from '../services/task-list-query.js';
+import { taskWindowQueryKey } from '../services/task-window-order.js';
 import { normalizeRotationBindings, parseRotationBindings, rotationBindingsEqual, assertRotationBindingsChange, bindTaskRotations, taskRotationContexts } from '../services/task-rotation.js';
 import { householdMembers } from '../services/activity-eligibility.js';
 import {normalizeGroupAssignment,recordGroupAssignment} from '../services/group-assignment.js';
@@ -70,7 +71,7 @@ import { mentionedUserIds } from '../../public/utils/mentions.js';
 import { toggleChecklistLine } from '../../public/utils/markdown-checklist.js';
 import { notifyTaskAssignments } from '../services/notification-events.js';
 import { enqueueNotification } from '../services/notification-inbox.js';
-import { todayKey } from '../utils/timezone.js';
+import { todayKey, utcToWall } from '../utils/timezone.js';
 import { requireAdmin } from '../middleware/require-admin.js';
 import {
   attachTaskLocations,
@@ -2190,6 +2191,81 @@ function taskListAuthority(d,actor){
   // cursor to the current effective grants, including role changes.
   return createHash('sha256').update(JSON.stringify(actorPermissions(d,actor))).digest('base64url');
 }
+// The page is an authorized snapshot. A continuation is tied to its exact
+// query, offset, permission set and Task clock; any intervening change starts
+// again at page one so an off-window entry cannot be skipped.
+router.get('/window',(req,res)=>{
+  try{
+    const me=req.authUserId||req.session.userId;
+    if(req.devicePrincipal)return res.status(409).json({reset_required:true,reason:'unsupported_principal'});
+    if(typeof req.query.view!=='string'||req.query.view.length>8192)
+      return res.status(400).json({error:'Invalid Task window view.'});
+    let raw;
+    try{raw=JSON.parse(req.query.view);}catch{return res.status(400).json({error:'Invalid Task window view.'});}
+    if(!raw||Array.isArray(raw)||typeof raw!=='object')
+      return res.status(400).json({error:'Invalid Task window view.'});
+    const view={groupMode:raw.groupMode||'category',sort:raw.sort||{field:'default',direction:'asc'},
+      offset:raw.offset??0,limit:raw.limit??30,locale:raw.locale||'en',
+      timeZone:raw.timeZone||null,categories:raw.categories||[],
+      statusOrder:raw.statusOrder||[],collapsed:raw.collapsed||[],
+      labels:raw.labels||{},bucketSorts:new Map(Object.entries(raw.bucketSorts||{})),
+      categoryLabels:raw.categoryLabels||{}};
+    if(!Number.isSafeInteger(view.offset)||view.offset<0||view.offset>1000000
+      ||!Number.isSafeInteger(view.limit)||view.limit<1||view.limit>100
+      ||!Array.isArray(view.categories)||view.categories.length>200
+      ||!Array.isArray(view.collapsed)||view.collapsed.length>200
+      ||!Array.isArray(view.statusOrder)||view.statusOrder.length>30
+      ||typeof view.locale!=='string'||view.locale.length>40
+      ||typeof view.categoryLabels!=='object'||Array.isArray(view.categoryLabels))
+      return res.status(400).json({error:'Invalid Task window view.'});
+    view.categoryLabel=key=>String(view.categoryLabels[key]||key||'');
+    const filters=Object.fromEntries(Object.entries(req.query)
+      .filter(([key])=>!['view','page_cursor'].includes(key)));
+    if(Object.keys(filters).some(key=>!['status','priority','assigned_to','category','tag',
+      'archived','include_future','search'].includes(key)))
+      return res.status(409).json({error:'Task window projection is not ready for this filter.',reason:'unsupported_view'});
+    const payload=withTaskReadSnapshot(db.get(),me,()=>{
+      const d=db.get(),authority=taskListAuthority(d,me),now=new Date();
+      view.today=view.timeZone?utcToWall(now.toISOString(),view.timeZone)?.date:todayKey(d,now);
+      if(!view.today)throw new RangeError('Invalid viewer time zone');
+      view.now=now;
+      if(view.offset>0){
+        const key=taskWindowQueryKey(filters,view);
+        const change=readTaskListDelta(d,{cursor:req.query.page_cursor,actor:me,query:key,authority,now:Number(now)});
+        if(change.reset_required)return change;
+        if(change.changed_ids.length)return {reset_required:true,reason:'window_changed'};
+      }
+      const page=readOrderedTaskWindow(d,me,filters,view);
+      if(page.reset_required)return page;
+      if(page.ids.length){
+        const restricted=taskListWhere(d,me,filters,{changedIds:page.ids});
+        const allowed=new Set(d.prepare(`SELECT t.id FROM tasks t ${restricted.where}`)
+          .all(...restricted.values).map(row=>row.id));
+        if(page.ids.some(id=>!allowed.has(id)))return {reset_required:true,reason:'visibility_changed'};
+      }
+      const starts=taskStartProjection(d,{tasks:page.ids.map(id=>({id})),bounded:true});
+      const views=new Map();
+      const data=withTaskReadProjection(d,me,()=>attachDocumentCounts(page.ids
+        .map(id=>hydrateTask({id},me,views,starts)),me))
+        .map(row=>filters.include_future?row:starts.project(row));
+      const nextView={...view,offset:page.next_offset};
+      const nextBoundary=[page.visibility.next_start_at,page.next_order_at]
+        .filter(value=>value!=null).reduce((min,value)=>min==null?value:Math.min(min,value),null);
+      const nextCursor=page.next_offset==null?null:taskListCursor(d,{actor:me,authority,
+        query:taskWindowQueryKey(filters,nextView),ids:page.ids,
+        nextStartAt:nextBoundary,clock:page.clock});
+      return {data,groups:page.groups.map(({id,total,loaded})=>({id,total,loaded})),
+        total:page.total,next_offset:page.next_offset,next_cursor:nextCursor,
+        visibility:{...page.visibility,next_start_at:nextBoundary},query_key:page.scope_key,version:page.clock};
+    });
+    return res.set('Cache-Control','private, no-store').json(payload);
+  }catch(error){
+    if(error instanceof RangeError||error instanceof TypeError)
+      return res.status(409).json({error:error.message,reason:'unsupported_view'});
+    log.error('GET /window error:',error);
+    return res.status(500).json({error:'Internal server error.',code:500});
+  }
+});
 router.get('/', (req, res) => {
   try {
     const me = req.authUserId || req.session.userId;

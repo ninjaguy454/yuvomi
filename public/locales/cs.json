@@ -418,6 +418,8 @@
         "bulkSelect": "Hromadný výběr",
         "selectTask": "Vybrat úkol",
         "bulkSelectedCount": "{{count}} vybráno",
+        "windowLoadedStatus": "Načteno {{loaded}} z {{total}} úkolů.",
+        "bulkSelectionReset": "Výběr úkolů se v tomto zobrazení změnil. Před hromadnou akcí jej zkontrolujte.",
         "bulkMarkDone": "Označit jako hotové",
         "bulkMarkOpen": "Označit jako otevřené",
         "bulkArchive": "Archivovat",

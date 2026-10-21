@@ -472,6 +472,8 @@
         "bulkSelect": "Maramihang pagpili",
         "selectTask": "Piliin ang gawain",
         "bulkSelectedCount": "{{count}} ang (mga) napili",
+        "windowLoadedStatus": "Na-load ang {{loaded}} sa {{total}} gawain.",
+        "bulkSelectionReset": "Nagbago ang napiling gawain sa view na ito. Suriin bago gumawa ng maramihang aksyon.",
         "bulkMarkDone": "Markahang tapos",
         "bulkMarkOpen": "Markahang bukas",
         "bulkArchive": "Itago",

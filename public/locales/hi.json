@@ -472,6 +472,8 @@
         "bulkMarkOpen": "खुला",
         "bulkSelect": "बहु-चयन",
         "bulkSelectedCount": "{{count}} चयनित",
+        "windowLoadedStatus": "{{total}} में से {{loaded}} कार्य लोड किए गए।",
+        "bulkSelectionReset": "इस दृश्य में कार्यों का चयन बदल गया है। सामूहिक कार्रवाई से पहले जाँचें।",
         "bulkStatusChanged": "स्थिति बदली गई।",
         "selectTask": "कार्य चुनें",
         "pointsLabel": "अंक",

@@ -472,6 +472,8 @@
         "bulkMarkOpen": "Açık",
         "bulkSelect": "Çoklu seçim",
         "bulkSelectedCount": "{{count}} seçili",
+        "windowLoadedStatus": "{{total}} görevden {{loaded}} tanesi yüklendi.",
+        "bulkSelectionReset": "Görev seçimi bu görünümle değişti. Toplu işlemden önce kontrol edin.",
         "bulkStatusChanged": "Durum değiştirildi.",
         "selectTask": "Görevi seç",
         "pointsLabel": "Puan",

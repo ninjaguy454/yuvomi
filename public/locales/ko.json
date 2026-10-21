@@ -472,6 +472,8 @@
         "bulkSelect": "여러 개 선택",
         "selectTask": "할 일 선택",
         "bulkSelectedCount": "{{count}}개 선택됨",
+        "windowLoadedStatus": "작업 {{total}}개 중 {{loaded}}개를 불러왔습니다.",
+        "bulkSelectionReset": "이 보기에서 작업 선택이 변경되었습니다. 일괄 작업 전에 확인하세요.",
         "bulkMarkDone": "완료",
         "bulkMarkOpen": "미완료",
         "bulkArchive": "보관",

@@ -61,7 +61,7 @@ import {
   todayKey, parseLocalDateKey, addLocalDays, toLocalDateKey,
   startOfLocalWeekKey, weekStartIndex, weekdayOrder, isWeekendKey,
 } from '/utils/date.js';
-import { zonedDateKey } from '/utils/timezone.js';
+import { zonedDateKey, displayTimeZone } from '/utils/timezone.js';
 import { isWallModeEnabled } from '/utils/wall-mode.js';
 import { historyDayLabel } from '/utils/day-label.js';
 import {
@@ -821,8 +821,8 @@ function sortTasks(a, b, now) {
   return (PRIO_ORDER[a.priority] ?? 4) - (PRIO_ORDER[b.priority] ?? 4);
 }
 
-function renderTaskGroups(tasks, groupMode) {
-  if (!tasks.length) {
+function renderTaskGroups(tasks, groupMode, windowPage=null) {
+  if (!tasks.length && !windowPage?.groups.some(group=>group.total>0)) {
     // Leere Suche ≠ leeres Modul: bei aktiver Suche wäre „Noch keine Aufgaben"
     // schlicht falsch und der Anlegen-CTA die falsche Antwort (Notizen-Muster).
     const isFiltered = state.searchQuery.trim().length > 0;
@@ -845,8 +845,12 @@ function renderTaskGroups(tasks, groupMode) {
       });
   }
 
-  const groups = taskBuckets(tasks, groupMode);
-  return groups.map(({ id, label, tasks: groupTasks }) => {
+  const loaded=taskBuckets(tasks,groupMode);
+  const groups=windowPage?windowPage.groups.map(info=>({
+    id:info.id,label:loaded.find(group=>group.id===info.id)?.label||taskWindowGroupLabel(info.id),
+    tasks:loaded.find(group=>group.id===info.id)?.tasks||[],total:info.total,
+  })):loaded;
+  return groups.map(({ id, label, tasks: groupTasks,total }) => {
     const sorted = sortedTasks(groupTasks, `list:${groupMode}:${id}`);
     const collapsed = isGroupCollapsed(groupMode, id);
     return `
@@ -873,7 +877,7 @@ function renderTaskGroups(tasks, groupMode) {
              class="list-group__chevron${collapsed ? ' list-group__chevron--collapsed' : ''}"></i>
           <span>${esc(label)}</span>
         </button>
-        <span class="list-group__count">${groupTasks.length}</span>
+        <span class="list-group__count">${total??groupTasks.length}</span>
       </h2>
       ${collapsed ? '' : `<div class="list-rows">
         ${sorted.map((t) => renderSwipeRow(t, renderTaskCard(t, {
@@ -1030,7 +1034,8 @@ function wireTagBadgeFilter(container) {
     const toggle = e.target.closest('[data-group-toggle]');
     if (!toggle || !container.contains(toggle)) return;
     toggleGroup(state.groupMode, toggle.dataset.groupToggle);
-    renderTaskList(container);
+    if(state.taskWindow)loadTasks(container).catch(()=>renderTaskList(container));
+    else renderTaskList(container);
   });
 }
 
@@ -1362,6 +1367,8 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
 
 let state = {
   tasks:           [],
+  taskWindow:      null,
+  fullViewLoading: false,
   // Das Fehlerobjekt des letzten Ladeversuchs, oder null. Nicht `true`:
   // `mountLoadError` liest daraus den Statuscode.
   loadError:       null,
@@ -1539,9 +1546,80 @@ function taskQuery() {
   return params.toString() ? `?${params}` : '';
 }
 
+const TASK_WINDOW_SIZE=30;
+function taskWindowSupported(){
+  if(state.viewMode!=='list'||state.offersOnly||!['none','category','due'].includes(state.groupMode))return false;
+  const fields=[state.sheetSort?.field||'default',
+    ...[...state.bucketSorts].filter(([key])=>key.startsWith(`list:${state.groupMode}:`))
+      .map(([,sort])=>sort.field)];
+  return fields.every(field=>['default','title','due','category','assignees'].includes(field));
+}
+function taskWindowView(offset=0,limit=TASK_WINDOW_SIZE){
+  const zone=displayTimeZone()||Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC';
+  const categories=state.categories.map(({key})=>({key}));
+  const categoryLabels=state.groupMode==='category'||state.sheetSort?.field==='category'
+    ||[...state.bucketSorts].some(([key,sort])=>key.startsWith(`list:${state.groupMode}:`)&&sort.field==='category');
+  return {groupMode:state.groupMode,sort:state.sheetSort,offset,limit,
+    locale:getLocale(),timeZone:zone,categories,
+    categoryLabels:categoryLabels?Object.fromEntries(categories.map(({key})=>[key,catLabel(key)])):{},
+    collapsed:[...state.collapsedGroups].filter(key=>key.startsWith(`${state.groupMode}:`))
+      .map(key=>key.slice(state.groupMode.length+1)),
+    bucketSorts:Object.fromEntries([...state.bucketSorts].filter(([key])=>key.startsWith(`list:${state.groupMode}:`))),
+  };
+}
+function taskWindowKey(){
+  const {offset,limit,...view}=taskWindowView();
+  return JSON.stringify([taskQuery(),state.searchQuery.trim(),view]);
+}
+function taskWindowUrl(view,cursor=null,filters=taskQuery(),search=state.searchQuery.trim()){
+  const params=new URLSearchParams(filters.slice(1));
+  params.set('view',JSON.stringify(view));
+  if(search)params.set('search',search);
+  if(cursor)params.set('page_cursor',cursor);
+  return `/tasks/window?${params}`;
+}
+async function fetchTaskWindowSnapshot(target=TASK_WINDOW_SIZE){
+  const key=taskWindowKey(),base=taskWindowView(),filters=taskQuery(),search=state.searchQuery.trim();
+  for(let attempt=0;attempt<2;attempt++){
+    const rows=[];let offset=0,cursor=null,first=null,last=null,reset=false;
+    do{
+      // Keep the first paint small; refill already loaded rows in bounded
+      // batches. The signed continuation binds offset and scope, not size.
+      const view={...base,offset,limit:offset?Math.min(100,Math.max(TASK_WINDOW_SIZE,target-rows.length)):TASK_WINDOW_SIZE};
+      const response=await api.get(taskWindowUrl(view,cursor,filters,search),{requireFresh:true});
+      if(response.reset_required){reset=true;break;}
+      if(!Array.isArray(response.data)||!Array.isArray(response.groups)||!Number.isSafeInteger(response.total))
+        throw Object.assign(new Error('Task window is unavailable.'),{status:409});
+      if(!first)first=response;
+      rows.push(...response.data);
+      last=response;offset=response.next_offset;cursor=response.next_cursor;
+    }while(offset!=null&&rows.length<target&&cursor);
+    if(reset)continue;
+    return {data:rows,visibility:first.visibility,window:{key,groups:first.groups,total:first.total,
+      next_offset:last.next_offset,next_cursor:last.next_cursor,version:last.version}};
+  }
+  throw new Error('The Task list changed while loading. Please retry.');
+}
+function taskWindowGroupLabel(id){
+  if(state.groupMode==='none')return t('tasks.groupAll');
+  if(state.groupMode==='category')return catLabel(id);
+  const keys={overdue:'tasks.groupOverdue',today:'tasks.groupToday',thisWeek:'tasks.groupThisWeek',
+    nextWeek:'tasks.groupNextWeek',later:'tasks.groupLater',noDate:'tasks.groupNoDate'};
+  return keys[id]?t(keys[id]):id==='closed_incomplete'?'Closed without completing remaining subtasks'
+    :id==='skipped'?'Skipped':id==='expired'?'Expired':id;
+}
+function refreshTaskWindowView(container){
+  if(state.taskWindow||taskWindowSupported()){
+    void loadTasks(container).catch(error=>{state.loadError=error;renderTaskList(container);});
+    return true;
+  }
+  return false;
+}
+
 const taskPageLoaders = new WeakMap();
 const taskPageDeltaStates = new WeakMap();
 const taskPageOperations = new WeakMap();
+let taskWindowRequestRevision=0;
 const taskStatusContext = (container, options = {}) => ({ ...options, signal: taskPageOperations.get(container)?.signal });
 const taskStartRefreshers = new WeakMap();
 function updateTaskStartRefresh(container, visibility) {
@@ -1726,38 +1804,72 @@ function taskViewportScope() {
 
 function reconcileTaskListMarkup(listEl, html) {
   const visibleIds = new Set(filteredTasks().map(task => Number(task.id)));
-  state.selectedTaskIds = new Set([...state.selectedTaskIds].filter(id => visibleIds.has(Number(id))));
+  const retainedIds=new Set([...state.selectedTaskIds].filter(id => visibleIds.has(Number(id))));
+  if(retainedIds.size<state.selectedTaskIds.size)
+    window.yuvomi.showToast(t('tasks.bulkSelectionReset'),'info');
+  state.selectedTaskIds=retainedIds;
   const retained = reconcileTaskMarkup(listEl, html, taskViewportScope());
   taskCardSubtasks.get(listEl)?.repaint();
   return retained;
 }
+function clearTaskReadAccess(container,error){
+  taskPageDeltaStates.delete(container);
+  state.taskWindow=null;
+  ++taskWindowRequestRevision;
+  state.selectedTaskIds.clear();
+  state.bulkSelectMode=false;
+  state.fullViewLoading=false;
+  state.loadError=error;
+  state.assignmentRequests=[];
+  updateTaskStartRefresh(container,null);
+  taskCardSubtasks.get(container.querySelector('#task-list'))?.reconcile([]);
+  state.tasks=[];
+  renderTaskList(container);
+  applyTaskPagePermissions(container);
+}
 async function loadTasks(container,{full=false}={}) {
   if (!container || !container.isConnected || taskPageOperations.get(container)?.signal.aborted) return;
+  ++taskWindowRequestRevision;
   if(full)taskPageDeltaStates.delete(container);
   persistAssignedToMe();
+  if(state.bulkSelectMode&&state.taskWindow&&state.taskWindow.key!==taskWindowKey()){
+    state.bulkSelectMode=false;
+    state.selectedTaskIds.clear();
+    updateBulkActionsBar(container);
+    window.yuvomi.showToast(t('tasks.bulkSelectionReset'),'info');
+  }
   let loader = taskPageLoaders.get(container);
   if (!loader) {
     loader = latestTaskLoader(async()=>{
-      const key=taskQuery(),previous=taskPageDeltaStates.get(container);
-      const base=`/tasks${key}`,delta=previous?.key===key&&previous.cursor;
-      const url=delta?`${base}${key?'&':'?'}delta=${encodeURIComponent(previous.cursor)}`:base;
+      const paged=taskWindowSupported(),key=paged?taskWindowKey():taskQuery();
+      if(paged){
+        const target=state.taskWindow?.key===key?Math.max(TASK_WINDOW_SIZE,state.tasks.length):TASK_WINDOW_SIZE;
+        try{return {data:await fetchTaskWindowSnapshot(target),key,paged:true};}
+        catch(error){if(![400,404,409].includes(error.status))throw error;}
+      }
+      const previous=taskPageDeltaStates.get(container);
+      const fullKey=taskQuery();
+      const base=`/tasks${fullKey}`,delta=!state.taskWindow&&previous?.key===fullKey&&previous.cursor;
+      const url=delta?`${base}${fullKey?'&':'?'}delta=${encodeURIComponent(previous.cursor)}`:base;
       // The assignment-request dialog always fetches its own current inbox
       // before showing actions. Repeating that read on every card refresh
       // spends quota without updating anything visible in the list.
       const initial=await api.get(url,{requireFresh:true});
       const data=initial.reset_required?await api.get(base,{requireFresh:true}):initial;
-      return {data,key};
-    }, ({data,key}) => {
+      return {data,key:fullKey,paged:false};
+    }, ({data,key,paged}) => {
       if (!container.isConnected) return;
-      if(key!==taskQuery())return;
+      if(key!==(paged?taskWindowKey():taskQuery()) || paged!==taskWindowSupported()&&paged)return;
       state.loadError = null;
+      state.fullViewLoading=false;
       updateTaskConnectionNotice(container, false);
       const old=taskPageDeltaStates.get(container);
       const visibility=data.delta?mergeTaskStartVisibility(old?.visibility,data.visibility):data.visibility;
       updateTaskStartRefresh(container,visibility);
       const rows=data.delta?mergeTaskListDelta(state.tasks,data):data.data??[];
       state.tasks = taskCardSubtasks.get(container.querySelector('#task-list'))?.reconcile(rows) ?? rows;
-      if(data.delta_cursor)taskPageDeltaStates.set(container,{key,cursor:data.delta_cursor,visibility});
+      state.taskWindow=paged?data.window:null;
+      if(!paged&&data.delta_cursor)taskPageDeltaStates.set(container,{key,cursor:data.delta_cursor,visibility});
       else taskPageDeltaStates.delete(container);
       applyTaskPagePermissions(container);
       renderTaskList(container);
@@ -1766,16 +1878,56 @@ async function loadTasks(container,{full=false}={}) {
   }
   try { return await loader.load(); }
   catch (error) {
+    state.fullViewLoading=false;
     if (error.transient || !Number.isInteger(error.status) || error.status >= 500 || error.status === 429) updateTaskConnectionNotice(container, true);
     if (error.status === 403 && container.isConnected) {
-      taskPageDeltaStates.delete(container);
-      updateTaskStartRefresh(container, null);
-      taskCardSubtasks.get(container.querySelector('#task-list'))?.reconcile([]);
-      state.tasks = []; state.assignmentRequests = [];
-      renderTaskList(container);
-      applyTaskPagePermissions(container);
+      clearTaskReadAccess(container,error);
     }
     throw error;
+  }
+}
+
+async function loadMoreTaskWindow(container){
+  const current=state.taskWindow;
+  if(!current?.next_cursor||current.loading||current.key!==taskWindowKey())return;
+  const revision=taskWindowRequestRevision,offset=current.next_offset,cursor=current.next_cursor;
+  current.loading=true;
+  const button=container.querySelector('#task-window-more');
+  const wasFocused=button===document.activeElement;
+  if(button)button.disabled=true;
+  try{
+    const response=await api.get(taskWindowUrl(taskWindowView(offset),cursor),{requireFresh:true});
+    if(current!==state.taskWindow||revision!==taskWindowRequestRevision||!taskWindowSupported()||current.key!==taskWindowKey())return;
+    if(response.reset_required){await loadTasks(container,{full:true});return;}
+    const known=new Set(state.tasks.map(row=>Number(row.id)));
+    if(response.data.some(row=>known.has(Number(row.id)))){
+      await loadTasks(container,{full:true});return;
+    }
+    const rows=[...state.tasks,...response.data];
+    state.tasks=taskCardSubtasks.get(container.querySelector('#task-list'))?.reconcile(rows)??rows;
+    current.next_offset=response.next_offset;
+    current.next_cursor=response.next_cursor;
+    current.groups=response.groups;
+    current.total=response.total;
+    current.version=response.version;
+    updateTaskStartRefresh(container,response.visibility);
+    renderTaskList(container);
+    const announcement=container.querySelector('#task-window-status');
+    if(announcement){
+      announcement.textContent=t('tasks.windowLoadedStatus',{loaded:state.tasks.length,total:current.total});
+      if(wasFocused&&!current.next_cursor)announcement.focus({preventScroll:true});
+    }
+  }catch(error){
+    if(current!==state.taskWindow||revision!==taskWindowRequestRevision||!taskWindowSupported()||current.key!==taskWindowKey())return;
+    if(error.status===403){
+      clearTaskReadAccess(container,error);
+      return;
+    }
+    if([400,404,409].includes(error.status)){await loadTasks(container,{full:true});return;}
+    if(current===state.taskWindow)window.yuvomi.showToast(error.message??t('common.errorGeneric'),'danger');
+  }finally{
+    current.loading=false;
+    const more=container.querySelector('#task-window-more');if(more)more.disabled=false;
   }
 }
 
@@ -4423,6 +4575,11 @@ function renderTaskList(container) {
     loadHistory(container);
     return;
   }
+  if(state.fullViewLoading){
+    const listEl=container.querySelector('#task-list');
+    if(listEl)listEl.innerHTML=`<p role="status">${esc(t('common.loading'))}</p>`;
+    return;
+  }
   // VOR der Kanban-Weiche: nach einem Ladefehler ist `state.tasks` ebenfalls
   // leer, und beide Ansichten haengen an demselben `#task-list`. Nur die
   // Reihenfolge trennt hier „nichts angelegt" von „nicht geladen".
@@ -4453,7 +4610,10 @@ function renderTaskList(container) {
   state.calendarEventsAbort?.abort();
   const listEl = container.querySelector('#task-list');
   if (!listEl) return;
-  const retained = reconcileTaskListMarkup(listEl, renderTaskGroups(filteredTasks(), state.groupMode));
+  const paged=state.viewMode==='list'&&state.taskWindow?.key===taskWindowKey()?state.taskWindow:null;
+  const more=paged?.next_cursor?`<div class="task-window-more"><button type="button" class="btn btn--secondary" id="task-window-more">${esc(t('tasks.historyLoadMore'))}</button></div>`:'';
+  const status=paged?'<p id="task-window-status" class="sr-only" role="status" aria-live="polite" tabindex="-1"></p>':'';
+  const retained = reconcileTaskListMarkup(listEl, renderTaskGroups(filteredTasks(), state.groupMode,paged)+more+status);
   if (window.lucide) window.lucide.createIcons({ el: listEl });
   wireResponsiveTaskTags(listEl);
   if (!retained) stagger(listEl.querySelectorAll('.swipe-row, .kanban-card'));
@@ -4461,6 +4621,8 @@ function renderTaskList(container) {
   updateBulkActionsBar(container);
   wireSwipeGestures(container);
   maybeShowSwipeHint(container);
+  const moreButton=listEl.querySelector('#task-window-more');
+  if(moreButton)moreButton.onclick=()=>loadMoreTaskWindow(container);
   const emptyCreate = listEl.querySelector('#empty-cta-tasks');
   if (emptyCreate) emptyCreate.onclick = () => {
     document.querySelector('.page-fab')?.click();
@@ -5034,6 +5196,14 @@ function activateTaskView(container, value) {
 
   container.querySelectorAll('.task-control-popover').forEach((panel) => closeTaskPopover(container, panel));
   state.viewMode = nextMode;
+  taskPageLoaders.get(container)?.invalidate();
+  ++taskWindowRequestRevision;
+  if(state.taskWindow&&nextMode!=='list'){
+    state.tasks=[];
+    state.taskWindow=null;
+    state.fullViewLoading=true;
+    renderTaskList(container);
+  }
   state.boardScope = deviceTaskBoardScope();
   taskViewStorage.setItem('yuvomi-tasks-view', state.viewMode);
   syncActiveGroupMode();
@@ -5053,7 +5223,7 @@ function activateTaskView(container, value) {
       loadHistory(container).finally(restore);
       return;
     }
-    loadTasks(container).catch(() => renderTaskList(container)).finally(() => {
+    loadTasks(container).catch(error => {state.loadError=error;renderTaskList(container);}).finally(() => {
       updateBulkActionsBar(container);
       restore();
     });
@@ -5172,13 +5342,13 @@ function applyTaskSortChoice(container, patch) {
     state.bucketSorts.set(bucketKey, { ...current, ...patch, locked: !!state.bucketSorts.get(bucketKey)?.locked });
     persistTaskLayoutState();
     closeTaskPopover(container, panel);
-    renderTaskList(container);
+    if(!refreshTaskWindowView(container))renderTaskList(container);
     return;
   }
   state.sheetSort = { ...state.sheetSort, ...patch };
   removeUnlockedBucketSorts();
   persistTaskLayoutState();
-  renderTaskList(container);
+  if(!refreshTaskWindowView(container))renderTaskList(container);
   renderTaskSortPanel(container);
   positionTaskPopover(panel, container.querySelector('#task-sort-btn'));
 }
@@ -5207,7 +5377,7 @@ function wireGroupToggle(container) {
       state.groupModes[activeLayoutKey()] = state.groupMode;
       persistTaskLayoutState();
       renderTaskGroupPanel(container);
-      renderTaskList(container);
+      if(!refreshTaskWindowView(container))renderTaskList(container);
       positionTaskPopover(container.querySelector('#task-group-panel'), container.querySelector('#group-mode-toggle'));
       return;
     }
@@ -5241,7 +5411,7 @@ function wireGroupToggle(container) {
       else state.bucketSorts.set(bucketKey, { ...activeBucketSort(bucketKey), locked: true });
       persistTaskLayoutState();
       closeTaskPopover(container, panel);
-      renderTaskList(container);
+      if(!refreshTaskWindowView(container))renderTaskList(container);
     }
   });
 }
@@ -6007,7 +6177,7 @@ function wireTaskSearch(container) {
       if (!container.isConnected) return;
       state.searchQuery = value;
       syncQueryIndicator();
-      renderTaskList(container);
+      if(!refreshTaskWindowView(container))renderTaskList(container);
     },
   });
   if (!search) return;
@@ -6206,8 +6376,8 @@ export async function render(container, { user }) {
 
   // Daten laden (Filter-State aus vorheriger Session berücksichtigen)
   try {
-    const [tasksData, metaData, preferencesData, activityData, placesData, placeStatusData] = await Promise.all([
-      api.get(`/tasks${taskQuery()}`),
+    const [initialTasksData, metaData, preferencesData, activityData, placesData, placeStatusData] = await Promise.all([
+      taskWindowSupported()?Promise.resolve(null):api.get(`/tasks${taskQuery()}`),
       api.get('/tasks/meta/options'),
       // Reine Anzeigepräferenz: ein Fehler hier darf die Aufgabenliste nicht
       // mit in den Ladefehler ziehen, deshalb eigener Fallback.
@@ -6218,14 +6388,19 @@ export async function render(container, { user }) {
       api.get('/planning/places?active=false').catch(() => ({ data: [] })),
       api.get('/planning/place-search/status').catch(() => ({ data: { configured: false } })),
     ]);
+    state.categories = metaData.categories ?? [];
+    const tasksData=initialTasksData||await fetchTaskWindowSnapshot().catch(async error=>{
+      if([400,404,409].includes(error.status))return api.get(`/tasks${taskQuery()}`);
+      throw error;
+    });
     state.loadError = null;
     state.tasks = tasksData.data ?? [];
+    state.taskWindow=tasksData.window||null;
     if(tasksData.delta_cursor)taskPageDeltaStates.set(container,
       {key:taskQuery(),cursor:tasksData.delta_cursor,visibility:tasksData.visibility});
     else taskPageDeltaStates.delete(container);
     updateTaskStartRefresh(container, tasksData.visibility);
     state.users = metaData.users ?? [];
-    state.categories = metaData.categories ?? [];
     state.allTags = metaData.tags ?? [];
     state.defaultPoints = Number(metaData.default_points) || 0;
     state.activityTemplates = activityData.data?.activities ?? [];
@@ -6248,6 +6423,7 @@ export async function render(container, { user }) {
     // (Critique P0); `renderTaskList` prueft das Feld jetzt VOR dem Leer-Zweig.
     state.loadError = err;
     state.tasks = [];
+    state.taskWindow = null;
     state.users = [];
     state.categories = [];
     state.allTags = [];

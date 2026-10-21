@@ -418,6 +418,8 @@
         "bulkSelect": "Bulk select",
         "selectTask": "Select task",
         "bulkSelectedCount": "{{count}} selected",
+        "windowLoadedStatus": "{{loaded}} of {{total}} Tasks loaded.",
+        "bulkSelectionReset": "Task selection changed with this view. Review it before a bulk action.",
         "bulkMarkDone": "Mark done",
         "bulkMarkOpen": "Mark open",
         "bulkArchive": "Archive",

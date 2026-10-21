@@ -472,6 +472,8 @@
         "bulkMarkOpen": "Позначити відкритим",
         "bulkSelect": "Масовий вибір",
         "bulkSelectedCount": "Вибрано {{count}}",
+        "windowLoadedStatus": "Завантажено {{loaded}} із {{total}} завдань.",
+        "bulkSelectionReset": "Вибір завдань змінився разом із цим поданням. Перевірте його перед масовою дією.",
         "bulkStatusChanged": "Статус змінено.",
         "selectTask": "Виберіть завдання",
         "pointsLabel": "Бали",

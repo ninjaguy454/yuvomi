@@ -26,15 +26,17 @@ test('Task card paints after confirmation, preserves pending across reads, and r
     const taskId=Number(fixture.d.prepare("INSERT INTO tasks(title,created_by,assigned_to,points) VALUES('Synthetic feedback task',1,1,0)").run().lastInsertRowid);
     fixture.d.prepare('INSERT INTO task_assignments(task_id,user_id) VALUES(?,1)').run(taskId);
   }})();
-  let held=null,release=null,signal=null,rejectNext=false,failNextList=false,writes=0;
+  let held=null,release=null,signal=null,rejectNext=false,failNextList=false,denyNextWindow=false,writes=0,windowReads=0;
   const writeDurations=[];
   const app=express();app.use(express.json());
   app.use('/api/v1',async(req,res)=>{
+    if(req.method==='GET'&&req.path==='/tasks/window')windowReads++;
     if(req.path==='/automation/activity-options')return res.json({data:{activities:[],rotation_groups:[],skills:[]}});
     if(req.path==='/planning/place-search/status')return res.json({data:{configured:false}});
     if(req.path==='/planning/places'||req.path==='/automation/obligations')return res.json({data:[]});
     if(req.path==='/preferences')return res.json({data:{}});
-    if(req.path==='/tasks'&&req.method==='GET'&&failNextList){failNextList=false;return res.status(503).json({error:'Temporary list failure.'});}
+    if(req.path==='/tasks/window'&&denyNextWindow){denyNextWindow=false;return res.status(403).json({error:'Permission changed.'});}
+    if(['/tasks','/tasks/window'].includes(req.path)&&req.method==='GET'&&failNextList){failNextList=false;return res.status(503).json({error:'Temporary list failure.'});}
     if(/^\/tasks\/\d+\/status$/.test(req.path)&&req.method==='PATCH'){
       writes++;
       if(rejectNext){rejectNext=false;return res.status(409).json({error:'Changed on another device.'});}
@@ -68,6 +70,60 @@ test('Task card paints after confirmation, preserves pending across reads, and r
   const button=`[data-action="toggle-status"][data-id="${id}"]`;
   const button2=`[data-action="toggle-status"][data-id="${secondId}"]`;
   await page.waitForSelector(button);
+  if(fixtureSize>30){
+    const first=await page.evaluate(async()=>{
+      const {__test}=await import('/pages/tasks.js');
+      return {loaded:__test.state.tasks.length,total:__test.state.taskWindow?.total};
+    });
+    assert.deepEqual(first,{loaded:30,total:fixtureSize});
+    await page.click('#task-window-more');
+    await page.waitForFunction(async()=>{
+      const {__test}=await import('/pages/tasks.js');return __test.state.tasks.length===60;
+    });
+    if(fixtureSize<=60)assert.equal(await page.$('#task-window-more'),null);
+    await page.click('#tasks-search-toggle');
+    await page.$eval('#tasks-search',input=>{input.value='Synthetic feedback task';input.dispatchEvent(new Event('input',{bubbles:true}));});
+    await page.waitForFunction(async count=>{
+      const {__test}=await import('/pages/tasks.js');
+      return __test.state.taskWindow?.total===count&&__test.state.tasks.length===30;
+    },{},fixtureSize-4);
+    await page.$eval('#tasks-search',input=>{input.value='';input.dispatchEvent(new Event('input',{bubbles:true}));});
+    await page.waitForFunction(async count=>{
+      const {__test}=await import('/pages/tasks.js');return __test.state.taskWindow?.total===count;
+    },{},fixtureSize);
+    if(fixtureSize>=90){
+      await page.$eval('#task-window-more',node=>node.click());
+      await page.waitForFunction(async()=>{const {__test}=await import('/pages/tasks.js');return __test.state.tasks.length===60;});
+      await page.evaluate(async()=>{const {__test}=await import('/pages/tasks.js');await __test.loadTasks(document.querySelector('#fixture'));});
+      assert.equal(await page.evaluate(async()=>{const {__test}=await import('/pages/tasks.js');return __test.state.tasks.length;}),60);
+      await page.$eval('#task-window-more',node=>{node.focus();node.click();});
+      await page.waitForFunction(async()=>{const {__test}=await import('/pages/tasks.js');return __test.state.tasks.length===90;});
+      if(fixtureSize===90){
+        assert.equal(await page.evaluate(()=>document.activeElement?.id),'task-window-status','keyboard focus moves to end-of-results status');
+      }
+      if(fixtureSize>90){
+        await page.evaluate(async()=>{const {__test}=await import('/pages/tasks.js');
+          __test.state.bulkSelectMode=true;__test.state.selectedTaskIds.add(__test.state.tasks[70].id);
+          __test.renderTaskList(document.querySelector('#fixture'));
+        });
+        await page.click('#tasks-search-toggle');
+        await page.$eval('#tasks-search',input=>{input.value='Synthetic feedback task';input.dispatchEvent(new Event('input',{bubbles:true}));});
+        await page.waitForFunction(async()=>{const {__test}=await import('/pages/tasks.js');return !__test.state.bulkSelectMode;});
+        assert.equal(await page.evaluate(()=>window.toasts.some(message=>message.includes('Task selection changed'))),true);
+        await page.$eval('#tasks-search',input=>{input.value='';input.dispatchEvent(new Event('input',{bubbles:true}));});
+        await page.waitForFunction(async count=>{const {__test}=await import('/pages/tasks.js');return __test.state.taskWindow?.total===count;},{},fixtureSize);
+      }
+    }
+    if(process.env.VIDAMIA_STATUS_FEEDBACK_LOAD_ALL==='1'){
+      for(let pageIndex=0;pageIndex<Math.ceil(fixtureSize/30);pageIndex++){
+        if(!await page.$('#task-window-more'))break;
+        const before=await page.evaluate(async()=>{const {__test}=await import('/pages/tasks.js');return __test.state.tasks.length;});
+        await page.click('#task-window-more');
+        await page.waitForFunction(async previous=>{const {__test}=await import('/pages/tasks.js');return __test.state.tasks.length>previous;},{},before);
+      }
+      assert.equal(await page.evaluate(async()=>{const {__test}=await import('/pages/tasks.js');return __test.state.tasks.length;}),fixtureSize);
+    }
+  }
   const heldPromise=new Promise(resolve=>{signal=resolve;});
   await page.$eval(button,node=>{window.statusInputAt=performance.now();node.click();requestAnimationFrame(()=>requestAnimationFrame(()=>{window.statusPaintAt=performance.now();}));});
   await heldPromise;
@@ -116,7 +172,21 @@ test('Task card paints after confirmation, preserves pending across reads, and r
   await page.$eval(button4,node=>node.click());
   await page.waitForFunction(id=>{const button=document.querySelector(`[data-action="toggle-status"][data-id="${id}"]`);return button?.classList.contains('task-status-btn--done')&&button.getAttribute('aria-busy')==='false';},{timeout:5000},fourthId);
   assert.equal(writes,5,'refresh after acknowledged write does not write again');
-  const paintSamples=[paintMs],saveSamples=[];
+  if(process.env.VIDAMIA_STATUS_FEEDBACK_LOAD_ALL==='1'){
+    await page.evaluate(async()=>{const {__test}=await import('/pages/tasks.js');
+      __test.state.filters={status:['open','in_progress','done'],priority:[],assigned_to:[],tags:[]};
+      await __test.loadTasks(document.querySelector('#fixture'),{full:true});
+    });
+    for(let pageIndex=0;pageIndex<Math.ceil(fixtureSize/30);pageIndex++){
+      if(!await page.$('#task-window-more'))break;
+      const before=await page.evaluate(async()=>{const {__test}=await import('/pages/tasks.js');return __test.state.tasks.length;});
+      await page.$eval('#task-window-more',node=>node.click());
+      try{await page.waitForFunction(async previous=>{const {__test}=await import('/pages/tasks.js');return __test.state.tasks.length>previous;},{timeout:3000},before);}
+      catch(error){console.log('LOAD_ALL_DIAGNOSTIC',await page.evaluate(async()=>{const {__test}=await import('/pages/tasks.js');return {length:__test.state.tasks.length,total:__test.state.taskWindow?.total,next:__test.state.taskWindow?.next_offset,key:__test.state.taskWindow?.key,loadError:__test.state.loadError?.message,toasts:window.toasts.slice(-3)};}));throw error;}
+    }
+    assert.equal(await page.evaluate(async()=>{const {__test}=await import('/pages/tasks.js');return __test.state.tasks.length;}),fixtureSize);
+  }
+  const paintSamples=[paintMs],saveSamples=[],readsBefore=windowReads;
   for(let sample=0;sample<19;sample++){
     const prior=await page.$eval(button4,node=>node.dataset.status);
     await page.$eval(button4,node=>{window.statusPaintAt=0;window.statusInputAt=performance.now();node.click();requestAnimationFrame(()=>requestAnimationFrame(()=>{window.statusPaintAt=performance.now();}));});
@@ -126,6 +196,21 @@ test('Task card paints after confirmation, preserves pending across reads, and r
     saveSamples.push(await page.evaluate(()=>performance.now()-window.statusInputAt));
   }
   const summary=values=>{const sorted=[...values].sort((a,b)=>a-b),at=q=>Math.round(sorted[Math.ceil(q*sorted.length)-1]*10)/10;return {n:sorted.length,p50:at(.5),p95:at(.95),p99:at(.99),max:at(1)};};
-  console.log('TASK_STATUS_FEEDBACK_SAMPLES',JSON.stringify({fixture_tasks:fixtureSize,viewport:'390x844',paint_frame_ms:summary(paintSamples),confirmed_stable_ms:summary(saveSamples),server_write_ms:summary(writeDurations)}));
+  console.log('TASK_STATUS_FEEDBACK_SAMPLES',JSON.stringify({fixture_tasks:fixtureSize,loaded_all:process.env.VIDAMIA_STATUS_FEEDBACK_LOAD_ALL==='1',viewport:'390x844',paint_frame_ms:summary(paintSamples),confirmed_stable_ms:summary(saveSamples),server_write_ms:summary(writeDurations),window_reads_for_19_statuses:windowReads-readsBefore}));
+  if(fixtureSize>30){
+    failNextList=true;
+    await page.click('#task-view-btn');
+    await page.click('[data-task-view="kanban"]');
+    await page.waitForFunction(async()=>{const {__test}=await import('/pages/tasks.js');return __test.state.loadError?.status===503;});
+    assert.deepEqual(await page.evaluate(async()=>{const {__test}=await import('/pages/tasks.js');return {cards:document.querySelectorAll('article[data-task-id]').length,rows:__test.state.tasks.length,window:__test.state.taskWindow};}),
+      {cards:0,rows:0,window:null},'a failed full-view read cannot present a partial List page as Kanban');
+    await page.click('#task-view-btn');
+    await page.click('[data-task-view="list"]');
+    await page.waitForFunction(async()=>{const {__test}=await import('/pages/tasks.js');return __test.state.taskWindow?.total>30&&__test.state.tasks.length===30;});
+    denyNextWindow=true;
+    await page.evaluate(async()=>{const {__test}=await import('/pages/tasks.js');try{await __test.loadTasks(document.querySelector('#fixture'));}catch{}});
+    assert.equal(await page.evaluate(async()=>{const {__test}=await import('/pages/tasks.js');return __test.state.tasks.length;}),0);
+    assert.equal(await page.$('#task-window-more'),null,'permission loss removes old continuation');
+  }
   assert.deepEqual(errors,[]);
 });

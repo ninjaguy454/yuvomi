@@ -472,6 +472,8 @@
         "bulkMarkOpen": "待处理",
         "bulkSelect": "多选",
         "bulkSelectedCount": "已选 {{count}}",
+        "windowLoadedStatus": "已加载 {{total}} 项任务中的 {{loaded}} 项。",
+        "bulkSelectionReset": "任务选择随此视图发生了变化。批量操作前请检查。",
         "bulkStatusChanged": "状态已更改。",
         "selectTask": "选择任务",
         "pointsLabel": "积分",

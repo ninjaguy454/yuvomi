@@ -472,6 +472,8 @@
         "bulkSelect": "Wybór wielokrotny",
         "selectTask": "Wybierz zadanie",
         "bulkSelectedCount": "{{count}} zaznaczonych",
+        "windowLoadedStatus": "Wczytano {{loaded}} z {{total}} zadań.",
+        "bulkSelectionReset": "Wybór zadań zmienił się wraz z tym widokiem. Sprawdź go przed działaniem zbiorczym.",
         "bulkMarkDone": "Zrobione",
         "bulkMarkOpen": "Otwarte",
         "bulkArchive": "Archiwizuj",

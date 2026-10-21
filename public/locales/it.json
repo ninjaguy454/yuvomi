@@ -472,6 +472,8 @@
         "bulkMarkOpen": "Segna come aperte",
         "bulkSelect": "Selezione multipla",
         "bulkSelectedCount": "{{count}} selezionate",
+        "windowLoadedStatus": "{{loaded}} attività caricate su {{total}}.",
+        "bulkSelectionReset": "La selezione delle attività è cambiata con questa vista. Controllala prima di un’azione in blocco.",
         "bulkStatusChanged": "Stato modificato.",
         "selectTask": "Seleziona attività",
         "pointsLabel": "Punti",

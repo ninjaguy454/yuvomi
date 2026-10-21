@@ -75,10 +75,11 @@ export function orderTaskWindow(rows, {
     throw new RangeError('Status group order is incomplete');
   const ids = [...groups.keys()].sort((a, b) => {
     if (groupMode === 'category') return (categoryOrder.get(a) ?? Number.MAX_SAFE_INTEGER) - (categoryOrder.get(b) ?? Number.MAX_SAFE_INTEGER)
-      || categoryLabel(a).localeCompare(categoryLabel(b), locale);
+      || categoryLabel(a).localeCompare(categoryLabel(b), locale) || String(a).localeCompare(String(b));
     if (groupMode === 'due') return dueOrder.indexOf(a) - dueOrder.indexOf(b);
     if (groupMode === 'status') return statusOrder.indexOf(a) - statusOrder.indexOf(b);
-    if (groupMode === 'location') return String(groupLabels.get(a)).localeCompare(String(groupLabels.get(b)), locale, { sensitivity:'base' });
+    if (groupMode === 'location') return String(groupLabels.get(a)).localeCompare(String(groupLabels.get(b)), locale, { sensitivity:'base' })
+      || String(a).localeCompare(String(b));
     return 0;
   });
   const collator = new Intl.Collator(locale, { numeric: true, sensitivity: 'base' });
@@ -142,9 +143,13 @@ export function taskWindowQueryKey(filters = {}, view = {}, { includeOffset = tr
   const buckets=[...(view.bucketSorts||new Map())].sort(([a],[b])=>a.localeCompare(b));
   const value={filters:entries,groupMode:view.groupMode||'category',sort:view.sort||null,
     bucketSorts:buckets,categories:(view.categories||[]).map(row=>[row.key,row.name,row.label_key]),
+    categoryLabels:Object.entries(view.categoryLabels||{}).sort(([a],[b])=>a.localeCompare(b)),
+    labels:Object.entries(view.labels||{}).sort(([a],[b])=>a.localeCompare(b)),
     locale:view.locale||'en',timeZone:view.timeZone||null,today:view.today||null,
     statusOrder:view.statusOrder||[],collapsed:[...(view.collapsed||[])].sort(),
-    ...(includeOffset?{offset:view.offset||0}:{}),limit:view.limit||30};
+    // The signed offset fixes where the next page begins. A caller may use a
+    // larger bounded page for a refresh without changing membership/order.
+    ...(includeOffset?{offset:view.offset||0}:{})};
   return createHash('sha256').update(JSON.stringify(value)).digest('base64url');
 }
 

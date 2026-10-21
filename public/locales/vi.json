@@ -418,6 +418,8 @@
         "bulkSelect": "Chọn nhiều",
         "selectTask": "Chọn nhiệm vụ",
         "bulkSelectedCount": "Đã chọn {{count}}",
+        "windowLoadedStatus": "Đã tải {{loaded}} trong số {{total}} công việc.",
+        "bulkSelectionReset": "Lựa chọn công việc đã thay đổi theo chế độ xem này. Hãy kiểm tra trước khi thao tác hàng loạt.",
         "bulkMarkDone": "Đánh dấu hoàn thành",
         "bulkMarkOpen": "Đánh dấu đang mở",
         "bulkArchive": "Lưu trữ",

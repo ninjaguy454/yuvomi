@@ -4,7 +4,7 @@ import { taskVisibilityWhere } from './task-access.js';
 import { normalizeTags, tagKey } from '../utils/task-tags.js';
 import { orderTaskWindow, sliceTaskWindow, taskWindowQueryKey } from './task-window-order.js';
 import { attachTaskLocations } from './task-locations.js';
-import { todayKey } from '../utils/timezone.js';
+import { todayKey, householdTimeZone, storedToInstantMs, shiftDateKey, utcToWall } from '../utils/timezone.js';
 import { captureTaskListClock } from './task-list-delta.js';
 
 const asList = value => value === undefined ? [] : [value].flat().filter(item => item !== '');
@@ -202,8 +202,10 @@ export function readOrderedTaskWindow(d,actor,query={},view={}) {
   const requiresDue=mode==='due'||fields.some(value=>value==='due'||value==='default');
   if (requiresDue && !view.timeZone)
     throw new TypeError('Viewer time zone is required for a Task window');
-  const now=new Date();
-  const day=todayKey(d,now),scopeKey=taskWindowQueryKey(query,{...view,today:day},{includeOffset:false});
+  const now=view.now instanceof Date?view.now:new Date();
+  const day=view.timeZone?utcToWall(now.toISOString(),view.timeZone)?.date:todayKey(d,now);
+  if(!day)throw new RangeError('Invalid viewer time zone');
+  const scopeKey=taskWindowQueryKey(query,{...view,today:day},{includeOffset:false});
   if (view.expectedScopeKey!==undefined && view.expectedScopeKey!==scopeKey)
     return {reset_required:true,reason:'query_changed'};
   const clock=captureTaskListClock(d);
@@ -211,8 +213,27 @@ export function readOrderedTaskWindow(d,actor,query={},view={}) {
     return {reset_required:true,reason:'window_changed'};
   const {rows,visibility}=readTaskListDescriptors(d,actor,query,{location:mode==='location'||fields.includes('location'),
     participants:fields.includes('assignees'),tripDue:requiresDue,now});
+  if(mode==='status')for(let at=0;at<rows.length;at+=400){
+    const ids=rows.slice(at,at+400).map(row=>row.id);
+    // hydrateTask projects a helper parent's display status from its source
+    // window. Raw status would put that card in the wrong status bucket.
+    if(d.prepare(`SELECT 1 FROM task_activity_support_tasks WHERE task_id IN (${ids.map(()=>'?').join(',')}) LIMIT 1`).get(...ids))
+      throw new RangeError('Linked helper status needs the full projection');
+  }
+  const zone=view.timeZone;
+  const nextDay=storedToInstantMs(`${shiftDateKey(day,1)}T00:00:00`,view.timeZone||householdTimeZone(d));
+  let nextOrderAt=nextDay>Number(now)?nextDay:null;
+  if(fields.includes('default'))for(const row of rows){
+    const date=row.trip_group?row.display_due_date:row.due_date;
+    const time=row.trip_group?row.display_due_time:row.due_time;
+    if(!date)continue;
+    const due=storedToInstantMs(`${date}T${time||'23:59:59'}`,zone);
+    // defaultCompare flips to overdue strictly after the instant.
+    if(due!=null&&due>=Number(now))nextOrderAt=Math.min(nextOrderAt??Infinity,due+1);
+  }
   const groups=orderTaskWindow(rows,{...view,now,today:day});
   return {...sliceTaskWindow(groups,view),visibility,clock,
+    next_order_at:nextOrderAt,
     query_key:taskWindowQueryKey(query,{...view,today:day}),
     scope_key:scopeKey};
 }

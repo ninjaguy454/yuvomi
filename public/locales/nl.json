@@ -418,6 +418,8 @@
         "bulkSelect": "Meerdere selecteren",
         "selectTask": "Taak selecteren",
         "bulkSelectedCount": "{{count}} geselecteerd",
+        "windowLoadedStatus": "{{loaded}} van {{total}} taken geladen.",
+        "bulkSelectionReset": "De taakselectie is met deze weergave veranderd. Controleer deze vóór een bulkactie.",
         "bulkMarkDone": "Als klaar markeren",
         "bulkMarkOpen": "Als open markeren",
         "bulkArchive": "Archiveren",

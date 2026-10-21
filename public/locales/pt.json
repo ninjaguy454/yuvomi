@@ -472,6 +472,8 @@
         "bulkMarkOpen": "Aberto",
         "bulkSelect": "Seleção múltipla",
         "bulkSelectedCount": "{{count}} selecionadas",
+        "windowLoadedStatus": "{{loaded}} de {{total}} tarefas carregadas.",
+        "bulkSelectionReset": "A seleção de tarefas mudou com esta vista. Confira antes de uma ação em massa.",
         "bulkStatusChanged": "Estado alterado.",
         "selectTask": "Selecionar tarefa",
         "pointsLabel": "Pontos",

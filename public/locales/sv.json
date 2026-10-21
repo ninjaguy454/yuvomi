@@ -472,6 +472,8 @@
         "bulkMarkOpen": "Markera öppen",
         "bulkSelect": "Välj flera",
         "bulkSelectedCount": "{{count}} har valts",
+        "windowLoadedStatus": "{{loaded}} av {{total}} uppgifter inlästa.",
+        "bulkSelectionReset": "Uppgiftsvalet ändrades med den här vyn. Granska det innan du gör en massåtgärd.",
         "bulkStatusChanged": "Status ändrad.",
         "selectTask": "Välj uppgift",
         "pointsLabel": "Poäng",

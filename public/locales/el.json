@@ -472,6 +472,8 @@
         "bulkMarkOpen": "Ανοιχτό",
         "bulkSelect": "Πολλαπλή επιλογή",
         "bulkSelectedCount": "{{count}} επιλεγμένες",
+        "windowLoadedStatus": "Φορτώθηκαν {{loaded}} από {{total}} εργασίες.",
+        "bulkSelectionReset": "Η επιλογή εργασιών άλλαξε με αυτή την προβολή. Ελέγξτε την πριν από μαζική ενέργεια.",
         "bulkStatusChanged": "Η κατάσταση άλλαξε.",
         "selectTask": "Επιλογή εργασίας",
         "pointsLabel": "Πόντοι",

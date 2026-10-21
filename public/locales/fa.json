@@ -472,6 +472,8 @@
         "bulkSelect": "انتخاب چندگانه",
         "selectTask": "انتخاب کار",
         "bulkSelectedCount": "{{count}} انتخاب‌شده",
+        "windowLoadedStatus": "{{loaded}} از {{total}} وظیفه بارگذاری شد.",
+        "bulkSelectionReset": "انتخاب وظایف با این نما تغییر کرد. پیش از اقدام گروهی آن را بررسی کنید.",
         "bulkMarkDone": "انجام‌شده",
         "bulkMarkOpen": "باز",
         "bulkArchive": "بایگانی",

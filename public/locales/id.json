@@ -472,6 +472,8 @@
         "bulkSelect": "Pilih beberapa",
         "selectTask": "Pilih tugas",
         "bulkSelectedCount": "{{count}} dipilih",
+        "windowLoadedStatus": "{{loaded}} dari {{total}} tugas dimuat.",
+        "bulkSelectionReset": "Pilihan tugas berubah dengan tampilan ini. Periksa sebelum tindakan massal.",
         "bulkMarkDone": "Selesai",
         "bulkMarkOpen": "Terbuka",
         "bulkArchive": "Arsipkan",

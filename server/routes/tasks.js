@@ -51,6 +51,7 @@ import {
 import { occurrenceFeed, occurrenceHistory, syncTaskCompletion } from '../services/task-completions.js';
 import { normalizeCategoryFilter, taskCategoryWhere, taskStartProjection, taskScopeWhere } from '../services/task-scope.js';
 import { taskUnskippedWhere } from '../services/task-window.js';
+import { taskListWhere } from '../services/task-list-query.js';
 import { normalizeRotationBindings, parseRotationBindings, rotationBindingsEqual, assertRotationBindingsChange, bindTaskRotations, taskRotationContexts } from '../services/task-rotation.js';
 import { householdMembers } from '../services/activity-eligibility.js';
 import {normalizeGroupAssignment,recordGroupAssignment} from '../services/group-assignment.js';
@@ -2256,106 +2257,12 @@ router.get('/', (req, res) => {
                   ORDER BY s.created_at ASC) s) AS subtasks
       FROM tasks t
       LEFT JOIN users u ON t.assigned_to = u.id
-      WHERE ${taskScopeWhere('t', { includeFuture: true, includeSupervision:true })}
     `;
-    const params = [];
-
-    // Scheduled visibility is applied below using household-local instants and
-    // source/ancestor windows. Keep future candidates for authorized wakeup metadata.
-
-    // Status, Priorität und Person nehmen mehrere Werte entgegen und verknüpfen
-    // sie ODER (#671). Anders als bei den Tags unten ist das keine Geschmacks-
-    // frage: eine Aufgabe trägt genau EINE Priorität, ein UND über zwei Werte
-    // wäre also garantiert leer. Gemeldet wurde genau das - "medium und high
-    // zugleich" ging nicht, weil jede Reihe nur einen Wert zuließ.
-    // Zwischen den Gruppen bleibt es UND: jede Reihe engt weiter ein.
-    // Ein einzelner Wert kommt weiterhin als String an (API-Token, Bookmarks).
-    const asList = (v) => (v === undefined ? [] : [v].flat().filter((x) => x !== ''));
-
-    // Archiv (#688): eine eigene Achse, kein Status. Ohne Zutun bleibt es
-    // ausgeblendet - eine abgelegte Aufgabe soll sich wie gelöscht anfühlen und
-    // nicht mit ihrem Status („offen") durch jede Liste wandern.
-    //   ?archived=1     - zusätzlich zeigen (Kanban: die Ablage ist dort eine Spalte)
-    //   ?archived=only  - nur das Archiv
-    //   ?status=archived - für Bestandsclients und den Filterchip: das Archiv ist
-    //                      dort ein Wert neben den Status. Es bleibt deshalb auch
-    //                      ODER-verknüpft wie jeder andere Wert dieser Achse -
-    //                      „offen und archiviert" muss beides zeigen, nicht den
-    //                      Schnitt aus beidem.
-    const rawStatuses  = asList(status);
-    const statuses     = rawStatuses.filter((s) => s !== ARCHIVE_STATUS);
-    const statusArchiv = rawStatuses.includes(ARCHIVE_STATUS);
-    const archiveQuery = archived === 'only' ? 'only'
-      : (archived === '1' || archived === 'true' ? 'include' : null);
-
-    if (statuses.length && statusArchiv) {
-      sql += ` AND (t.status IN (${statuses.map(() => '?').join(', ')}) OR t.archived_at IS NOT NULL)`;
-      params.push(...statuses);
-    } else {
-      if (statuses.length) {
-        sql += ` AND t.status IN (${statuses.map(() => '?').join(', ')})`;
-        params.push(...statuses);
-      }
-      if (statusArchiv || archiveQuery === 'only') sql += ' AND t.archived_at IS NOT NULL';
-      else if (!archiveQuery)                      sql += ' AND t.archived_at IS NULL';
-    }
-
-    if(!rawStatuses.length && !archiveQuery)sql += " AND t.status NOT IN ('expired','skipped')";
-    if(!archiveQuery&&!rawStatuses.some(status=>['done','expired','skipped','closed_incomplete'].includes(status)))sql+=` AND ${taskUnskippedWhere(db.get())}`;
-
-    const priorities = asList(priority);
-    if (priorities.length) {
-      sql += ` AND t.priority IN (${priorities.map(() => '?').join(', ')})`;
-      params.push(...priorities);
-    }
-
-    const assignees = asList(assigned_to).map(Number).filter(Number.isInteger);
-    if (assignees.length) {
-      sql += ` AND EXISTS (SELECT 1 FROM task_assignments ta WHERE ta.task_id = t.id
-                             AND ta.user_id IN (${assignees.map(() => '?').join(', ')}))`;
-      params.push(...assignees);
-    }
-    // MEHRERE KATEGORIEN, ODER-verknüpft - dieselbe Regel wie bei Status,
-    // Priorität und Person (#671), und seit #814 dasselbe Fragment wie in der
-    // Übersicht. Vorher band `?category=a&category=b` das Array von Express in
-    // einen einzigen Platzhalter: der zweite Wert war nicht etwa unwirksam,
-    // die Abfrage kam gar nicht mehr durch.
-    const categories = normalizeCategoryFilter(category);
-    const categoryFragment = taskCategoryWhere('t', categories);
-    if (categoryFragment) { sql += ` AND ${categoryFragment}`; params.push(...categories); }
-    // Tag-Filter ohne Rücksicht auf Groß-/Kleinschreibung: die Werte kommen von
-    // fremden Servern, dort ist „Garten" und „garten" dasselbe Etikett.
-    //
-    // Mehrere Tags verbinden sich mit UND, nicht mit ODER: jeder weitere Filter
-    // in dieser Leiste engt ein (Status UND Priorität UND Person), und ein Tag,
-    // der die Liste plötzlich wachsen ließe, wäre in derselben Reihe ein Bruch.
-    // Jedes `tag`-Vorkommen ist genau EIN Tag, nie eine kommaseparierte Liste.
-    // Der frühere CSV-Komfort war ein Fehler: Express liefert bei einem einzigen
-    // `?tag=` einen String statt eines Arrays, und "Haus, Hof" - ein Tag, den
-    // CATEGORIES ausdrücklich erlaubt - zerfiel dabei in zwei, sodass die Suche
-    // nach ihm garantiert leer ausging.
-    const tagFilters = normalizeTags(tag === undefined ? [] : [tag].flat());
-    for (const value of tagFilters) {
-      sql += ' AND EXISTS (SELECT 1 FROM task_tags tt WHERE tt.task_id = t.id AND tt.tag_key = ?)';
-      params.push(tagKey(value));
-    }
-
-    // Restrict the authoritative projection before child and capability
-    // hydration. Missing or newly private roots become ID-only removals only
-    // when the signed cursor proves they belonged to this visible window.
-    if(change){sql+=` AND t.id IN (${change.changed_ids.map(()=>'?').join(',')})`;
-      params.push(...change.changed_ids);}
-
-    // Sichtbarkeit (#474): eigene + für alle sichtbare + zugewiesene-sichtbare.
-    sql += ` AND ${taskVisibilityWhere(db.get(), me, 't')}`;
-    params.push(me, me);
-
-    // Die drei Unteraufgaben-Subqueries oben tragen dieselbe Bedingung und damit
-    // je zwei Platzhalter. Sie stehen in der SELECT-Klausel, also VOR jedem
-    // anderen Platzhalter dieser Anfrage - deshalb unshift und nicht push. Die
-    // SELECT-Klausel bindet sonst nichts; wer dort einen Platzhalter ergänzt,
-    // muss diese Reihenfolge mitziehen.
-    params.unshift(me, me, me, me, me, me);
+    // The same authorized predicate feeds full cards and window candidates.
+    // Child SELECT placeholders precede the WHERE placeholders.
+    const predicate=taskListWhere(d,me,req.query,{changedIds:change?.changed_ids??null});
+    sql+=predicate.where;
+    const params=[me,me,me,me,me,me,...predicate.values];
 
     sql += `
       ORDER BY

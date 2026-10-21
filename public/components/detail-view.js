@@ -328,9 +328,9 @@ async function switchToForm(panel, opts, state) {
   // „Bearbeiten" das Formular ein zweites Mal auf und verwürfe die Eingaben des
   // ersten Aufbaus.
   state.mode = 'switching';
-  if (opts.edit?.ready) {
+  if (!state.formPane && opts.edit?.ready) {
     try {
-      await opts.edit.ready;
+      await (typeof opts.edit.ready === 'function' ? opts.edit.ready() : opts.edit.ready);
     } catch {
       // Die Sperre darf den Wechsel nicht verhindern - scheitert das Nachladen,
       // versorgt sich das Formular aus dem, was der Aufrufer sonst hat.

@@ -1685,6 +1685,10 @@ const legacyGroupReadCacheKey = Symbol('legacyGroupReadCache');
 const legacyGroupByIdCacheKey = Symbol('legacyGroupByIdCache');
 export function hydrateTask(task, me, supervisionViews = new Map(), starts = null) {
   if (!task) return task;
+  // The list query knows whether any structural child exists, including
+  // archived or privately hidden children. Only a definite zero can skip the
+  // detail child projection; other callers continue to read it normally.
+  const noChildren = task.has_any_children === 0;
   task = db.get().prepare(`SELECT t.*,u.display_name AS assigned_name,u.avatar_color AS assigned_color,
     u.avatar_data AS assigned_avatar,${ASSIGNED_USERS_SQL}
     FROM tasks t LEFT JOIN users u ON u.id=t.assigned_to WHERE t.id=?`).get(task.id);
@@ -1705,7 +1709,7 @@ export function hydrateTask(task, me, supervisionViews = new Map(), starts = nul
   }
   const offer=taskOfferState(db.get(),me,task,{starts});
   addAssignedUsers(task);
-  task.subtasks=loadSubtasks(task.id,me,supervisionViews);
+  task.subtasks=noChildren?[]:loadSubtasks(task.id,me,supervisionViews);
   for(const child of task.subtasks)Object.assign(child,assigneePolicyProjection(db.get(),child.id));
   if(task.parent_task_id)task.parent_revision=db.get().prepare('SELECT revision FROM tasks WHERE id=?').get(task.parent_task_id)?.revision;
   attachTags([task]);attachTaskCapabilities(db.get(),me,[task]);attachTaskSupervision(db.get(),[task],me,supervisionViews);
@@ -2196,6 +2200,7 @@ router.get('/', (req, res) => {
         u.avatar_color AS assigned_color,
         u.avatar_data AS assigned_avatar,
         ${ASSIGNED_USERS_SQL},
+        EXISTS(SELECT 1 FROM tasks child WHERE child.parent_task_id=t.id) AS has_any_children,
         -- Unteraufgaben tragen eine EIGENE Sichtbarkeit, und diese Liste hing nie
         -- an ihr: unter einer geteilten Elternaufgabe lief eine private
         -- Unteraufgabe samt Titel mit, und Zähler wie Fortschrittsbalken zählten

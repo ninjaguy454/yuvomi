@@ -34,6 +34,28 @@ test('Task list preserves scoring and database state with bounded SQL preparatio
  assert.ok(compilations<4500,`50 Tasks compiled ${compilations} statements; repeated scoring reads must reuse preparation`);
 });
 
+test('list hydration skips child projection only for roots with no children at all',async t=>{
+ const f=await scoringFixture(t),roots=[];
+ f.d.transaction(()=>{
+  for(let i=0;i<20;i++)roots.push(Number(f.d.prepare("INSERT INTO tasks(title,created_by,assigned_to) VALUES('Leaf',1,2)").run().lastInsertRowid));
+  const parent=roots[0];
+  f.d.prepare("INSERT INTO tasks(title,created_by,parent_task_id,archived_at) VALUES('Archived step',1,?,datetime('now'))").run(parent);
+ })();
+ const prepare=f.d.prepare.bind(f.d);let childLoads=0;
+ f.d.prepare=sql=>{
+  const statement=prepare(sql);
+  if(sql.includes('WHERE t.parent_task_id = ?')&&sql.includes('assigned_avatar')){
+   const all=statement.all.bind(statement);statement.all=(...args)=>{childLoads++;return all(...args);};
+  }
+  return statement;
+ };
+ let response;try{response=await f.call('GET','/tasks');}finally{f.d.prepare=prepare;}
+ assert.equal(response.status,200);
+ assert.equal(response.data.length,20);
+ assert.equal(response.data.find(task=>task.id===roots[0])?.subtasks.length,1,'archived child still follows the existing detail projection');
+ assert.equal(childLoads,1,'the other 19 roots have no child projection to load');
+});
+
 test('scoring reads observe point and visibility changes across snapshots and owned writes',async t=>{
  const f=await scoringFixture(t),created=await f.create({scoring_mode:'subtasks',assigned_to:[2],subtasks:[{title:'Synthetic step',points:3}]}),root=created.data.id,child=created.data.subtasks[0].id;
  const read=()=>taskScoringSummary(f.d,root,{viewerId:2,authorizedTaskIds:[root,child]});

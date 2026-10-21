@@ -1920,6 +1920,7 @@ export function openTaskDetail({
     edit: canEdit && edit ? {
       label: t('common.edit'),
       title: t('tasks.editTask'),
+      ready: edit.ready,
       mount: (panel, pane) => edit.mount(panel, pane),
     } : undefined,
   });

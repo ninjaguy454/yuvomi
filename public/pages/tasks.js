@@ -3260,11 +3260,19 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
     }
 
     btnSuccess(submitBtn, originalLabel);
-    setTimeout(() => closeModal({ force: true }), 700);
     // Erst die Tag-Liste, dann neu zeichnen: ein gerade vergebener Tag soll
     // sofort in Filterleiste und Vorschlägen stehen (#586).
     await refreshTags();
-    await onChanged();
+    try { await onChanged(); }
+    catch (refreshError) {
+      console.warn('[Tasks] saved Task refresh failed:',refreshError);
+      window.yuvomi?.showToast?.('Task saved, but the list could not refresh. Reopen Tasks to see the latest state.', 'warning');
+    }
+    // The refresh can outlive this editor. Close only the form that initiated
+    // the save; a newer dialog may already contain a different unsaved draft.
+    if (document.querySelector('#shared-modal-overlay #task-form') === form) {
+      await closeModal({ force: true });
+    }
   } catch (err) {
     resetSubmit(err.status === 409 ? `${err.data?.error || err.message} Your draft has been kept. Close and reopen the Task to review current changes before saving again.` : err.message);
     if (!taskCreateAttempts.has(form)) controls?.subtasks?.setReadOnly(isDevicePrincipal());
@@ -5723,24 +5731,12 @@ export async function openTaskById(taskId, { user = null, container = null, onCh
   }
 
   // The shared view can mount the complete fork Task form from Calendar or
-  // Dashboard too. Hydrate the fork-only catalogues that form depends on;
-  // otherwise Activity binding and Place search silently collapse to empty
-  // controls outside /tasks even though the same Task supports them here.
-  const [activityData, placesData, placeStatusData, preferencesData] = await Promise.all([
-    api.get('/automation/activity-options').catch(() => ({ data: { activities: [] } })),
-    api.get('/planning/places?active=false').catch(() => ({ data: [] })),
-    api.get('/planning/place-search/status').catch(() => ({ data: { configured: false } })),
-    api.get('/preferences').catch(() => ({ data: {} })),
-  ]);
+  // Dashboard too. Activity/skill names are needed while inspecting. Place
+  // catalogues and form preferences are needed only if Edit is opened.
+  const activityData = await api.get('/automation/activity-options').catch(() => ({ data: { activities: [] } }));
   state.activityTemplates = activityData.data?.activities ?? state.activityTemplates;
   state.rotationGroups=activityData.data?.rotation_groups??state.rotationGroups;
   state.skills = activityData.data?.skills ?? state.skills;
-  state.places = placesData.data ?? state.places;
-  state.placeSearchStatus = placeStatusData.data ?? state.placeSearchStatus ?? { configured: false };
-  state.templateSwitchWarning = preferencesData.data?.tasks_template_switch_warning !== false;
-    state.subtasksExpandedByDefault = preferencesData.data?.tasks_subtasks_expanded === true;
-  state.defaultSyncTarget = preferencesData.data?.tasks_default_target || state.defaultSyncTarget;
-  state.calendarWeekStart = weekStartIndex(preferencesData.data?.week_start);
 
   if (user) {
     state.currentUserId = user.id ?? null;
@@ -5767,6 +5763,19 @@ export async function openTaskById(taskId, { user = null, container = null, onCh
     container,
     onChanged,
     edit: !canOfferEdit ? null : {
+      ready: async () => {
+        const [placesData, placeStatusData, preferencesData] = await Promise.all([
+          api.get('/planning/places?active=false').catch(() => ({ data: [] })),
+          api.get('/planning/place-search/status').catch(() => ({ data: { configured: false } })),
+          api.get('/preferences').catch(() => ({ data: {} })),
+        ]);
+        state.places = placesData.data ?? state.places;
+        state.placeSearchStatus = placeStatusData.data ?? state.placeSearchStatus ?? { configured: false };
+        state.templateSwitchWarning = preferencesData.data?.tasks_template_switch_warning !== false;
+        state.subtasksExpandedByDefault = preferencesData.data?.tasks_subtasks_expanded === true;
+        state.defaultSyncTarget = preferencesData.data?.tasks_default_target || state.defaultSyncTarget;
+        state.calendarWeekStart = weekStartIndex(preferencesData.data?.week_start);
+      },
       mount: (panel, pane) => {
         modalTags = normalizeTagList(task.tags);
         pane.insertAdjacentHTML('beforeend', renderModalContent({ task, users: state.users, reminder }));

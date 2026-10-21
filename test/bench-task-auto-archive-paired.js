@@ -17,9 +17,10 @@ const page='/tasks/window?view='+encodeURIComponent(JSON.stringify({groupMode:'n
 const pct=(values,p)=>{const a=[...values].sort((x,y)=>x-y);return +(a[Math.ceil(a.length*p)-1]||0).toFixed(1);};
 const summary=values=>({n:values.length,p50:pct(values,.5),p95:pct(values,.95),p99:pct(values,.99),max:pct(values,1)});
 
-test('paired interleaved 250-Task archive window', {skip:!enabled,timeout:180000}, async t=>{
+test('paired interleaved Task archive window', {skip:!enabled,timeout:180000}, async t=>{
   const f=await scoringFixture(t);
-  const count=250,old=175;
+  const count=Number(process.env.ARCHIVE_PAIRED_COUNT||250),old=Math.floor(count*.7);
+  if(!Number.isSafeInteger(count)||count<30||count>2000)throw new RangeError('Invalid synthetic archive size');
   const insert=f.d.prepare("INSERT INTO tasks(title,category,priority,status,created_by,visibility) VALUES(?,'misc','medium',?,1,'all')");
   const complete=f.d.prepare('INSERT INTO task_completions(task_id,series_id,user_id,completed_at) VALUES(?,?,1,?)');
   const child=f.d.prepare("INSERT INTO tasks(title,category,status,created_by,parent_task_id) VALUES('Step','misc','done',1,?)");
@@ -83,7 +84,7 @@ test('paired interleaved 250-Task archive window', {skip:!enabled,timeout:180000
       profiles[state]=[...totals].sort((a,b)=>b[1].ms-a[1].ms).slice(0,15)
         .map(([sql,row])=>({sql,calls:row.calls,ms:+row.ms.toFixed(1)}));
     }
-    process.stdout.write(`AUTO_ARCHIVE_PAIRED ${JSON.stringify({pre:summary(times.pre),post:summary(times.post),
+    process.stdout.write(`AUTO_ARCHIVE_PAIRED ${JSON.stringify({count,old,pre:summary(times.pre),post:summary(times.post),
       cpu_pre:summary(cpu.pre),cpu_post:summary(cpu.post),journal,plans:plans.pre.length===plans.post.length&&plans.pre.every((row,i)=>row.detail===plans.post[i].detail)?'identical':plans,
       ...(process.env.ARCHIVE_PAIRED_PROFILE==='1'?{profiles}:{})})}\n`);
   }finally{

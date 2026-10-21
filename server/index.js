@@ -10,6 +10,7 @@ import express from 'express';
 import helmet from 'helmet';
 import compression from 'compression';
 import rateLimit from 'express-rate-limit';
+import { withOrdinaryTaskSessionBypass } from './services/task-rate-bypass.js';
 import path from 'path';
 import { readFileSync } from 'node:fs';
 import { createLogger } from './logger.js';
@@ -195,6 +196,16 @@ const apiLimiter = rateLimit({
   message: { error: 'Too many requests. Please wait a moment.', code: 429 },
   skip: (req) => req.path === '/health', // Health-Check ausgenommen
 });
+// Signed ordinary Task reads and edits have a bounded session quota separate
+// from the shared IP quota. Authentication and route permissions still apply.
+const signedTaskLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 1200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: req => req.sessionID,
+  message: { error: 'Too many Task requests. Please wait a moment.', code: 429 },
+});
 
 if (process.env.NODE_ENV === 'production' && process.env.ENABLE_API_DOCS !== 'true') {
   app.get(['/docs', '/docs/'], (_req, res) => {
@@ -246,7 +257,7 @@ app.use(express.static(path.join(import.meta.dirname, '..', 'public'), {
 }));
 
 // Globaler API-Rate-Limiter auf alle /api/-Endpunkte (Definition siehe oben).
-app.use('/api/', apiLimiter);
+app.use('/api/', withOrdinaryTaskSessionBypass(apiLimiter, signedTaskLimiter));
 
 // --------------------------------------------------------
 // API-Routen

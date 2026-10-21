@@ -1571,34 +1571,55 @@ function taskWindowKey(){
   const {offset,limit,...view}=taskWindowView();
   return JSON.stringify([taskQuery(),state.searchQuery.trim(),view]);
 }
-function taskWindowUrl(view,cursor=null,filters=taskQuery(),search=state.searchQuery.trim()){
+function taskWindowUrl(view,cursor=null,filters=taskQuery(),search=state.searchQuery.trim(),extra={}){
   const params=new URLSearchParams(filters.slice(1));
   params.set('view',JSON.stringify(view));
   if(search)params.set('search',search);
   if(cursor)params.set('page_cursor',cursor);
+  for(const [key,value] of Object.entries(extra))if(value!=null)params.set(key,String(value));
   return `/tasks/window?${params}`;
 }
 async function fetchTaskWindowSnapshot(target=TASK_WINDOW_SIZE){
   const key=taskWindowKey(),base=taskWindowView(),filters=taskQuery(),search=state.searchQuery.trim();
   for(let attempt=0;attempt<2;attempt++){
-    const rows=[];let offset=0,cursor=null,first=null,last=null,reset=false;
+    const rows=[];let offset=0,cursor=null,first=null,last=null,reset=false,deltaCovered=true;
     do{
       // Keep the first paint small; refill already loaded rows in bounded
       // batches. The signed continuation binds offset and scope, not size.
       const view={...base,offset,limit:offset?Math.min(100,Math.max(TASK_WINDOW_SIZE,target-rows.length)):TASK_WINDOW_SIZE};
-      const response=await api.get(taskWindowUrl(view,cursor,filters,search),{requireFresh:true});
+      const response=await api.get(taskWindowUrl(view,cursor,filters,search,
+        {known_cursor:offset&&deltaCovered?last?.delta_cursor:null}),{requireFresh:true});
       if(response.reset_required){reset=true;break;}
       if(!Array.isArray(response.data)||!Array.isArray(response.groups)||!Number.isSafeInteger(response.total))
         throw Object.assign(new Error('Task window is unavailable.'),{status:409});
       if(!first)first=response;
+      deltaCovered=deltaCovered&&!!response.delta_cursor;
       rows.push(...response.data);
       last=response;offset=response.next_offset;cursor=response.next_cursor;
     }while(offset!=null&&rows.length<target&&cursor);
     if(reset)continue;
     return {data:rows,visibility:first.visibility,window:{key,groups:first.groups,total:first.total,
-      next_offset:last.next_offset,next_cursor:last.next_cursor,version:last.version}};
+      next_offset:last.next_offset,next_cursor:last.next_cursor,delta_cursor:deltaCovered?last.delta_cursor:null,
+      version:last.version}};
   }
   throw new Error('The Task list changed while loading. Please retry.');
+}
+async function fetchTaskWindowDelta(current){
+  if(!current?.delta_cursor||!state.tasks.length||state.tasks.length>400)return null;
+  const response=await api.get(taskWindowUrl(taskWindowView(),null,taskQuery(),state.searchQuery.trim(),
+    {window_delta:current.delta_cursor,window_count:state.tasks.length}),{requireFresh:true});
+  if(response.reset_required)return null;
+  if(response.delta!==true)throw Object.assign(new Error('Task window delta is unavailable.'),{status:409});
+  if(response.no_change)return {no_change:true};
+  if(!Array.isArray(response.ordered_ids)||!Array.isArray(response.data)||!Array.isArray(response.groups))
+    throw Object.assign(new Error('Task window delta is incomplete.'),{status:409});
+  const cards=new Map(state.tasks.map(row=>[Number(row.id),row]));
+  for(const row of response.data)cards.set(Number(row.id),row);
+  const rows=response.ordered_ids.map(id=>cards.get(Number(id)));
+  if(rows.some(row=>!row))throw Object.assign(new Error('Task window delta is incomplete.'),{status:409});
+  return {data:rows,visibility:response.visibility,window:{key:current.key,groups:response.groups,
+    total:response.total,next_offset:response.next_offset,next_cursor:response.next_cursor,
+    delta_cursor:response.delta_cursor,version:response.version}};
 }
 function taskWindowGroupLabel(id){
   if(state.groupMode==='none')return t('tasks.groupAll');
@@ -1619,6 +1640,7 @@ function refreshTaskWindowView(container){
 const taskPageLoaders = new WeakMap();
 const taskPageDeltaStates = new WeakMap();
 const taskPageOperations = new WeakMap();
+const taskWindowForceSnapshots = new WeakSet();
 let taskWindowRequestRevision=0;
 const taskStatusContext = (container, options = {}) => ({ ...options, signal: taskPageOperations.get(container)?.signal });
 const taskStartRefreshers = new WeakMap();
@@ -1827,10 +1849,11 @@ function clearTaskReadAccess(container,error){
   renderTaskList(container);
   applyTaskPagePermissions(container);
 }
-async function loadTasks(container,{full=false}={}) {
+async function loadTasks(container,{full=false,snapshot=false}={}) {
   if (!container || !container.isConnected || taskPageOperations.get(container)?.signal.aborted) return;
   ++taskWindowRequestRevision;
   if(full)taskPageDeltaStates.delete(container);
+  if(snapshot)taskWindowForceSnapshots.add(container);
   persistAssignedToMe();
   if(state.bulkSelectMode&&state.taskWindow&&state.taskWindow.key!==taskWindowKey()){
     state.bulkSelectMode=false;
@@ -1841,10 +1864,18 @@ async function loadTasks(container,{full=false}={}) {
   let loader = taskPageLoaders.get(container);
   if (!loader) {
     loader = latestTaskLoader(async()=>{
+      const windowRevision=taskWindowRequestRevision;
+      const forceSnapshot=taskWindowForceSnapshots.delete(container);
       const paged=taskWindowSupported(),key=paged?taskWindowKey():taskQuery();
       if(paged){
         const target=state.taskWindow?.key===key?Math.max(TASK_WINDOW_SIZE,state.tasks.length):TASK_WINDOW_SIZE;
-        try{return {data:await fetchTaskWindowSnapshot(target),key,paged:true};}
+        if(!forceSnapshot&&state.taskWindow?.key===key&&state.taskWindow.delta_cursor){
+          try{
+            const delta=await fetchTaskWindowDelta(state.taskWindow);
+            if(delta)return {data:delta,key,paged:true,windowRevision};
+          }catch(error){if(![400,404,409].includes(error.status))throw error;}
+        }
+        try{return {data:await fetchTaskWindowSnapshot(target),key,paged:true,windowRevision};}
         catch(error){if(![400,404,409].includes(error.status))throw error;}
       }
       const previous=taskPageDeltaStates.get(container);
@@ -1856,13 +1887,20 @@ async function loadTasks(container,{full=false}={}) {
       // spends quota without updating anything visible in the list.
       const initial=await api.get(url,{requireFresh:true});
       const data=initial.reset_required?await api.get(base,{requireFresh:true}):initial;
-      return {data,key:fullKey,paged:false};
-    }, ({data,key,paged}) => {
+      return {data,key:fullKey,paged:false,windowRevision};
+    }, ({data,key,paged,windowRevision}) => {
       if (!container.isConnected) return;
       if(key!==(paged?taskWindowKey():taskQuery()) || paged!==taskWindowSupported()&&paged)return;
+      if(paged&&windowRevision!==taskWindowRequestRevision){
+        // Load More may have extended the loaded coverage while this read was
+        // in flight. Keep those cards and catch up using the new signed window.
+        queueMicrotask(()=>{void loadTasks(container).catch(error=>{state.loadError=error;renderTaskList(container);});});
+        return;
+      }
       state.loadError = null;
       state.fullViewLoading=false;
       updateTaskConnectionNotice(container, false);
+      if(paged&&data.no_change)return;
       const old=taskPageDeltaStates.get(container);
       const visibility=data.delta?mergeTaskStartVisibility(old?.visibility,data.visibility):data.visibility;
       updateTaskStartRefresh(container,visibility);
@@ -1887,26 +1925,36 @@ async function loadTasks(container,{full=false}={}) {
   }
 }
 
-async function loadMoreTaskWindow(container){
+async function loadMoreTaskWindow(container,attempts=0){
   const current=state.taskWindow;
   if(!current?.next_cursor||current.loading||current.key!==taskWindowKey())return;
-  const revision=taskWindowRequestRevision,offset=current.next_offset,cursor=current.next_cursor;
+  const offset=current.next_offset,cursor=current.next_cursor;
+  const retryAfterRefresh=()=>{
+    if(!taskWindowSupported()||state.taskWindow?.key!==current.key||state.tasks.length>offset
+      ||!state.taskWindow.next_cursor)return;
+    if(attempts>=2){window.yuvomi.showToast(t('common.errorGeneric'),'danger');return;}
+    queueMicrotask(()=>{void loadMoreTaskWindow(container,attempts+1);});
+  };
   current.loading=true;
   const button=container.querySelector('#task-window-more');
   const wasFocused=button===document.activeElement;
   if(button)button.disabled=true;
   try{
-    const response=await api.get(taskWindowUrl(taskWindowView(offset),cursor),{requireFresh:true});
-    if(current!==state.taskWindow||revision!==taskWindowRequestRevision||!taskWindowSupported()||current.key!==taskWindowKey())return;
-    if(response.reset_required){await loadTasks(container,{full:true});return;}
+    const response=await api.get(taskWindowUrl(taskWindowView(offset),cursor,taskQuery(),state.searchQuery.trim(),
+      {known_cursor:current.delta_cursor}),{requireFresh:true});
+    if(current!==state.taskWindow){retryAfterRefresh();return;}
+    if(!taskWindowSupported()||current.key!==taskWindowKey())return;
+    if(response.reset_required){await loadTasks(container,{full:true,snapshot:true});retryAfterRefresh();return;}
     const known=new Set(state.tasks.map(row=>Number(row.id)));
     if(response.data.some(row=>known.has(Number(row.id)))){
-      await loadTasks(container,{full:true});return;
+      await loadTasks(container,{full:true,snapshot:true});return;
     }
     const rows=[...state.tasks,...response.data];
+    ++taskWindowRequestRevision;
     state.tasks=taskCardSubtasks.get(container.querySelector('#task-list'))?.reconcile(rows)??rows;
     current.next_offset=response.next_offset;
     current.next_cursor=response.next_cursor;
+    current.delta_cursor=current.delta_cursor&&response.delta_cursor?response.delta_cursor:null;
     current.groups=response.groups;
     current.total=response.total;
     current.version=response.version;
@@ -1918,16 +1966,20 @@ async function loadMoreTaskWindow(container){
       if(wasFocused&&!current.next_cursor)announcement.focus({preventScroll:true});
     }
   }catch(error){
-    if(current!==state.taskWindow||revision!==taskWindowRequestRevision||!taskWindowSupported()||current.key!==taskWindowKey())return;
+    if(current!==state.taskWindow){retryAfterRefresh();return;}
+    if(!taskWindowSupported()||current.key!==taskWindowKey())return;
     if(error.status===403){
       clearTaskReadAccess(container,error);
       return;
     }
-    if([400,404,409].includes(error.status)){await loadTasks(container,{full:true});return;}
+    if([400,404,409].includes(error.status)){await loadTasks(container,{full:true,snapshot:true});return;}
     if(current===state.taskWindow)window.yuvomi.showToast(error.message??t('common.errorGeneric'),'danger');
   }finally{
     current.loading=false;
-    const more=container.querySelector('#task-window-more');if(more)more.disabled=false;
+    // The keyed control may survive a snapshot replacement with its runtime
+    // disabled property intact. Release it unless the replacement is loading.
+    const more=container.querySelector('#task-window-more');
+    if(more)more.disabled=!!state.taskWindow?.loading;
   }
 }
 

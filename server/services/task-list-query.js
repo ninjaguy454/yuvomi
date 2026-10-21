@@ -232,7 +232,7 @@ export function readOrderedTaskWindow(d,actor,query={},view={}) {
     if(due!=null&&due>=Number(now))nextOrderAt=Math.min(nextOrderAt??Infinity,due+1);
   }
   const groups=orderTaskWindow(rows,{...view,now,today:day});
-  return {...sliceTaskWindow(groups,view),visibility,clock,
+  return {...sliceTaskWindow(groups,view,view.maxWindowLimit||100),visibility,clock,
     next_order_at:nextOrderAt,
     query_key:taskWindowQueryKey(query,{...view,today:day}),
     scope_key:scopeKey};

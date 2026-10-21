@@ -2218,9 +2218,16 @@ router.get('/window',(req,res)=>{
       ||typeof view.locale!=='string'||view.locale.length>40
       ||typeof view.categoryLabels!=='object'||Array.isArray(view.categoryLabels))
       return res.status(400).json({error:'Invalid Task window view.'});
+    const deltaCount=req.query.window_delta===undefined?null:Number(req.query.window_count);
+    if(deltaCount!==null&&(!Number.isSafeInteger(deltaCount)||deltaCount<1||deltaCount>400||view.offset!==0
+      ||typeof req.query.window_delta!=='string'||req.query.window_delta.length>6000))
+      return res.status(400).json({error:'Invalid Task window delta.'});
+    if(req.query.known_cursor!==undefined&&(view.offset===0||typeof req.query.known_cursor!=='string'
+      ||req.query.known_cursor.length>6000))
+      return res.status(400).json({error:'Invalid Task window continuation.'});
     view.categoryLabel=key=>String(view.categoryLabels[key]||key||'');
     const filters=Object.fromEntries(Object.entries(req.query)
-      .filter(([key])=>!['view','page_cursor'].includes(key)));
+      .filter(([key])=>!['view','page_cursor','window_delta','window_count','known_cursor'].includes(key)));
     if(Object.keys(filters).some(key=>!['status','priority','assigned_to','category','tag',
       'archived','include_future','search'].includes(key)))
       return res.status(409).json({error:'Task window projection is not ready for this filter.',reason:'unsupported_view'});
@@ -2229,23 +2236,57 @@ router.get('/window',(req,res)=>{
       view.today=view.timeZone?utcToWall(now.toISOString(),view.timeZone)?.date:todayKey(d,now);
       if(!view.today)throw new RangeError('Invalid viewer time zone');
       view.now=now;
+      const scopeKey=taskWindowQueryKey(filters,view,{includeOffset:false});
+      const readKnown=cursor=>readTaskListDelta(d,{cursor,actor:me,query:scopeKey,authority,now:Number(now)});
+      const authorized=ids=>{
+        if(!ids.length)return true;
+        const restricted=taskListWhere(d,me,filters,{changedIds:ids});
+        const allowed=new Set(d.prepare(`SELECT t.id FROM tasks t ${restricted.where}`)
+          .all(...restricted.values).map(row=>row.id));
+        return ids.every(id=>allowed.has(id));
+      };
+      const stillAccessible=ids=>{
+        if(!ids.length)return true;
+        // A changed status, tag, or category may legitimately remove a card
+        // from the requested result. Distinguish that from lost row access:
+        // only the latter invalidates the loaded window for privacy.
+        const allowed=new Set(d.prepare(`SELECT t.id FROM tasks t WHERE t.id IN (${ids.map(()=>'?').join(',')})
+          AND ${taskScopeWhere('t',{includeFuture:true,includeSupervision:true})}
+          AND ${taskVisibilityWhere(d,me,'t')}`).all(...ids,me,me).map(row=>row.id));
+        return ids.every(id=>allowed.has(id));
+      };
+      let previous=null;
+      if(deltaCount!==null){
+        previous=readKnown(req.query.window_delta);
+        if(previous.reset_required)return previous;
+        if(previous.known_ids.length!==deltaCount)return {reset_required:true,reason:'window_size_changed'};
+        if(!stillAccessible(previous.known_ids))return {reset_required:true,reason:'visibility_changed'};
+        if(!previous.changed_ids.length)return {delta:true,no_change:true,delta_cursor:req.query.window_delta};
+        view.limit=deltaCount;
+        view.maxWindowLimit=400;
+      }
       if(view.offset>0){
         const key=taskWindowQueryKey(filters,view);
         const change=readTaskListDelta(d,{cursor:req.query.page_cursor,actor:me,query:key,authority,now:Number(now)});
         if(change.reset_required)return change;
         if(change.changed_ids.length)return {reset_required:true,reason:'window_changed'};
       }
+      let priorPage=null;
+      if(req.query.known_cursor!==undefined){
+        priorPage=readKnown(req.query.known_cursor);
+        if(priorPage.reset_required)return priorPage;
+        if(priorPage.changed_ids.length||!authorized(priorPage.known_ids))
+          return {reset_required:true,reason:'window_changed'};
+      }
       const page=readOrderedTaskWindow(d,me,filters,view);
       if(page.reset_required)return page;
-      if(page.ids.length){
-        const restricted=taskListWhere(d,me,filters,{changedIds:page.ids});
-        const allowed=new Set(d.prepare(`SELECT t.id FROM tasks t ${restricted.where}`)
-          .all(...restricted.values).map(row=>row.id));
-        if(page.ids.some(id=>!allowed.has(id)))return {reset_required:true,reason:'visibility_changed'};
-      }
-      const starts=taskStartProjection(d,{tasks:page.ids.map(id=>({id})),bounded:true});
+      if(!authorized(page.ids))return {reset_required:true,reason:'visibility_changed'};
+      const knownIds=previous?.known_ids||priorPage?.known_ids||[];
+      const knownSet=new Set(knownIds),changedSet=new Set(previous?.changed_ids||[]);
+      const hydrateIds=previous?page.ids.filter(id=>!knownSet.has(id)||changedSet.has(id)):page.ids;
+      const starts=taskStartProjection(d,{tasks:hydrateIds.map(id=>({id})),bounded:true});
       const views=new Map();
-      const data=withTaskReadProjection(d,me,()=>attachDocumentCounts(page.ids
+      const data=withTaskReadProjection(d,me,()=>attachDocumentCounts(hydrateIds
         .map(id=>hydrateTask({id},me,views,starts)),me))
         .map(row=>filters.include_future?row:starts.project(row));
       const nextView={...view,offset:page.next_offset};
@@ -2254,7 +2295,13 @@ router.get('/window',(req,res)=>{
       const nextCursor=page.next_offset==null?null:taskListCursor(d,{actor:me,authority,
         query:taskWindowQueryKey(filters,nextView),ids:page.ids,
         nextStartAt:nextBoundary,clock:page.clock});
-      return {data,groups:page.groups.map(({id,total,loaded})=>({id,total,loaded})),
+      const accumulated=previous?page.ids:[...knownIds,...page.ids];
+      if(new Set(accumulated).size!==accumulated.length)return {reset_required:true,reason:'window_overlap'};
+      const deltaCursor=accumulated.length<=400?taskListCursor(d,{actor:me,authority,
+        query:scopeKey,ids:accumulated,nextStartAt:nextBoundary,clock:page.clock}):null;
+      return {data,delta:!!previous,
+        ...(previous?{ordered_ids:page.ids,removed:knownIds.filter(id=>!page.ids.includes(id))}:{}),
+        delta_cursor:deltaCursor,groups:page.groups.map(({id,total,loaded})=>({id,total,loaded})),
         total:page.total,next_offset:page.next_offset,next_cursor:nextCursor,
         visibility:{...page.visibility,next_start_at:nextBoundary},query_key:page.scope_key,version:page.clock};
     });

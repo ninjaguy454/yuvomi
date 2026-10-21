@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {scoringFixture} from './helpers/task-scoring-route-fixture.js';
+import {captureTaskListClock,recordTaskListDelta} from '../server/services/task-list-delta.js';
 
 const view={groupMode:'none',sort:{field:'title',direction:'asc'},locale:'en',limit:2,offset:0};
 const url=(options={})=>`/tasks/window?view=${encodeURIComponent(JSON.stringify({...view,...options}))}`;
@@ -30,6 +31,82 @@ test('authorized Task window returns bounded cards, refill and a stable continua
   assert.equal(stale.reset_required,true);
   const refilled=await f.call('GET',url());
   assert.deepEqual(refilled.data.map(row=>row.id),[c,a]);
+});
+
+test('signed loaded-window delta hydrates only changed or entering cards and refills order',async t=>{
+  const f=await scoringFixture(t);
+  const insert=f.d.prepare("INSERT INTO tasks(title,category,priority,status,created_by,visibility) VALUES(?,'misc','medium','open',1,'all')");
+  const ids=['Alpha','Beta','Charlie','Delta'].map(title=>Number(insert.run(title).lastInsertRowid));
+  const first=await f.call('GET',url());
+  assert.equal(first.status,200);
+  assert.deepEqual(first.data.map(row=>row.id),ids.slice(0,2));
+  assert.ok(first.delta_cursor);
+  const deltaUrl=cursor=>`${url()}&window_count=2&window_delta=${encodeURIComponent(cursor)}`;
+  const quiet=await f.call('GET',deltaUrl(first.delta_cursor));
+  assert.deepEqual({delta:quiet.delta,no_change:quiet.no_change,data:quiet.data},{delta:true,no_change:true,data:undefined});
+  f.d.transaction(()=>{
+    const before=captureTaskListClock(f.d);
+    f.d.prepare('UPDATE tasks SET title=?,revision=revision+1 WHERE id=?').run('Aardvark',ids[2]);
+    recordTaskListDelta(f.d,before,[ids[2]]);
+  })();
+  const writes=f.changes();
+  const changed=await f.call('GET',deltaUrl(first.delta_cursor));
+  assert.equal(changed.status,200,JSON.stringify(changed));
+  assert.equal(changed.delta,true);
+  assert.deepEqual(changed.ordered_ids,[ids[2],ids[0]]);
+  assert.deepEqual(changed.removed,[ids[1]]);
+  assert.deepEqual(changed.data.map(row=>row.id),[ids[2]]);
+  assert.ok(changed.delta_cursor);
+  assert.equal(f.changes(),writes,'delta reads do not add writes after the tracked edit');
+  const stable=await f.call('GET',deltaUrl(changed.delta_cursor));
+  assert.equal(stable.no_change,true);
+  const page2=await f.call('GET',`${url({offset:2})}&page_cursor=${encodeURIComponent(changed.next_cursor)}&known_cursor=${encodeURIComponent(changed.delta_cursor)}`);
+  assert.equal(page2.status,200,JSON.stringify(page2));
+  assert.deepEqual(page2.data.map(row=>row.id),[ids[1],ids[3]]);
+  assert.ok(page2.delta_cursor,'page continuation extends the signed loaded set');
+  const allQuiet=await f.call('GET',`${url()}&window_count=4&window_delta=${encodeURIComponent(page2.delta_cursor)}`);
+  assert.equal(allQuiet.no_change,true);
+});
+
+test('filtered Task leaving loaded window refills by delta without retaining stale card',async t=>{
+  const f=await scoringFixture(t);
+  const insert=f.d.prepare("INSERT INTO tasks(title,category,priority,status,created_by,visibility) VALUES(?,'misc','medium','open',1,'all')");
+  const ids=['Alpha','Beta','Charlie'].map(title=>Number(insert.run(title).lastInsertRowid));
+  const filtered=`${url()}&status=open`;
+  const first=await f.call('GET',filtered);
+  assert.deepEqual(first.data.map(row=>row.id),ids.slice(0,2));
+  f.d.transaction(()=>{
+    const before=captureTaskListClock(f.d);
+    f.d.prepare("UPDATE tasks SET status='done',revision=revision+1 WHERE id=?").run(ids[0]);
+    recordTaskListDelta(f.d,before,[ids[0]]);
+  })();
+  const delta=await f.call('GET',`${filtered}&window_count=2&window_delta=${encodeURIComponent(first.delta_cursor)}`);
+  assert.equal(delta.status,200,JSON.stringify(delta));
+  assert.equal(delta.delta,true);
+  assert.deepEqual(delta.ordered_ids,[ids[1],ids[2]]);
+  assert.deepEqual(delta.removed,[ids[0]]);
+  assert.deepEqual(delta.data.map(row=>row.id),[ids[2]]);
+});
+
+test('loaded-window receipt remains bounded at 400 IDs with snapshot fallback beyond',async t=>{
+  const f=await scoringFixture(t);
+  const insert=f.d.prepare("INSERT INTO tasks(title,category,priority,status,created_by,visibility) VALUES(?,'misc','medium','open',1,'all')");
+  f.d.transaction(()=>{for(let n=0;n<405;n++)insert.run(`Bounded ${String(n).padStart(3,'0')}`);})();
+  let cursor=null,known=null,loaded=0;
+  for(let offset=0;offset<=400;offset+=100){
+    const query=`${url({offset,limit:100})}`+(cursor?`&page_cursor=${encodeURIComponent(cursor)}&known_cursor=${encodeURIComponent(known)}`:'');
+    const page=await f.call('GET',query);
+    assert.equal(page.status,200,JSON.stringify(page).slice(0,200));
+    loaded+=page.data.length;
+    assert.equal(loaded,Math.min(405,offset+100));
+    if(offset===300){
+      assert.ok(page.delta_cursor);
+      const quiet=await f.call('GET',`${url({offset:0,limit:100})}&window_count=400&window_delta=${encodeURIComponent(page.delta_cursor)}`);
+      assert.equal(quiet.no_change,true);
+    }
+    if(offset===400)assert.equal(page.delta_cursor,null,'the client falls back to bounded snapshot refill above 400 IDs');
+    known=page.delta_cursor;cursor=page.next_cursor;
+  }
 });
 
 test('Task window excludes private rows and refuses unsupported view projections',async t=>{
@@ -105,6 +182,9 @@ test('permission loss resets continuation and refills the first page without dis
   assert.equal(first.status,200);
   assert.equal(first.data[0].id,firstId);
   f.d.prepare("UPDATE tasks SET visibility='private',revision=revision+1 WHERE id=?").run(firstId);
+  const revokedDelta=await f.call('GET',`${url()}&window_count=2&window_delta=${encodeURIComponent(first.delta_cursor)}`,undefined,2);
+  assert.equal(revokedDelta.reset_required,true);
+  assert.ok(!revokedDelta.data,'a revoked loaded row cannot survive in a delta response');
   const stale=await f.call('GET',`${url({offset:2})}&page_cursor=${encodeURIComponent(first.next_cursor)}`,undefined,2);
   assert.equal(stale.reset_required,true);
   assert.ok(!stale.data);

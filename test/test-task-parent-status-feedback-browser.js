@@ -27,10 +27,17 @@ test('Task card paints after confirmation, preserves pending across reads, and r
     fixture.d.prepare('INSERT INTO task_assignments(task_id,user_id) VALUES(?,1)').run(taskId);
   }})();
   let held=null,release=null,signal=null,rejectNext=false,failNextList=false,denyNextWindow=false,writes=0,windowReads=0;
+  let holdWindowOffset=null,heldWindowSignal=null,releaseWindow=null;
+  let rejectContinuationOffset=null,rejectedContinuations=0;
+  const windowReplies=[];
   const writeDurations=[];
   const app=express();app.use(express.json());
   app.use('/api/v1',async(req,res)=>{
     if(req.method==='GET'&&req.path==='/tasks/window')windowReads++;
+    if(req.method==='GET'&&req.path==='/tasks/window'&&req.query.page_cursor&&rejectContinuationOffset!==null){
+      const offset=JSON.parse(req.query.view||'{}').offset||0;
+      if(offset===rejectContinuationOffset){rejectedContinuations++;return res.json({reset_required:true,reason:'synthetic_stale_continuation'});}
+    }
     if(req.path==='/automation/activity-options')return res.json({data:{activities:[],rotation_groups:[],skills:[]}});
     if(req.path==='/planning/place-search/status')return res.json({data:{configured:false}});
     if(req.path==='/planning/places'||req.path==='/automation/obligations')return res.json({data:[]});
@@ -47,13 +54,18 @@ test('Task card paints after confirmation, preserves pending across reads, and r
       return res.status(answer.status).json(answer);
     }
     const answer=await fixture.call(req.method,req.url,['GET','HEAD'].includes(req.method)?undefined:req.body);
+    if(req.method==='GET'&&req.path==='/tasks/window'&&holdWindowOffset!==null&&!req.query.window_delta){
+      const offset=JSON.parse(req.query.view||'{}').offset||0;
+      if(offset===holdWindowOffset){holdWindowOffset=null;heldWindowSignal?.();await new Promise(resolve=>{releaseWindow=resolve;});}
+    }
+    if(req.method==='GET'&&req.path==='/tasks/window')windowReplies.push({status:answer.status,error:answer.error,delta:answer.delta,reason:answer.reason,reset:answer.reset_required,no_change:answer.no_change,count:answer.data?.length});
     res.status(answer.status).json(answer);
   });
   const root=join(import.meta.dirname,'..');app.use(express.static(join(root,'public')));
   const links=[...readFileSync(join(root,'public/index.html'),'utf8').matchAll(/<link rel="stylesheet" href="[^"]+"\s*\/>/g)].map(match=>match[0]).join('');
   app.get('/status-feedback',(_req,res)=>res.send(`<!doctype html><html lang="en" data-theme="light"><head>${links}<link rel="stylesheet" href="/styles/tasks.css"><script src="/lucide.min.js" defer></script></head><body><main id="fixture"></main></body></html>`));
   const server=app.listen(0,'127.0.0.1');await new Promise(resolve=>server.once('listening',resolve));
-  t.after(async()=>{release?.();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));});
+  t.after(async()=>{release?.();releaseWindow?.();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));});
   const browser=await puppeteer.launch({headless:true,executablePath:process.env.PUPPETEER_EXECUTABLE_PATH||'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',args:['--no-sandbox','--disable-dev-shm-usage']});
   t.after(async()=>browser.close());
   const page=await browser.newPage();await page.setViewport({width:390,height:844});
@@ -94,14 +106,46 @@ test('Task card paints after confirmation, preserves pending across reads, and r
     if(fixtureSize>=90){
       await page.$eval('#task-window-more',node=>node.click());
       await page.waitForFunction(async()=>{const {__test}=await import('/pages/tasks.js');return __test.state.tasks.length===60;});
+      rejectContinuationOffset=60;
+      const toastsBefore=await page.evaluate(()=>window.toasts.length);
+      await page.click('#task-window-more');
+      await page.waitForFunction(before=>window.toasts.length>before,{timeout:10000},toastsBefore);
+      assert.equal(rejectedContinuations,3,'a persistently rejected next page has bounded automatic retries');
+      assert.equal(await page.evaluate(async()=>{const {__test}=await import('/pages/tasks.js');return __test.state.tasks.length;}),60);
+      rejectContinuationOffset=null;
+      await page.waitForFunction(async()=>{const {__test}=await import('/pages/tasks.js');return !__test.state.taskWindow?.loading;});
       await page.evaluate(async()=>{const {__test}=await import('/pages/tasks.js');await __test.loadTasks(document.querySelector('#fixture'));});
       assert.equal(await page.evaluate(async()=>{const {__test}=await import('/pages/tasks.js');return __test.state.tasks.length;}),60);
       await page.$eval('#task-window-more',node=>{node.focus();node.click();});
-      await page.waitForFunction(async()=>{const {__test}=await import('/pages/tasks.js');return __test.state.tasks.length===90;});
+      try{await page.waitForFunction(async()=>{const {__test}=await import('/pages/tasks.js');return __test.state.tasks.length===90;},{timeout:5000});}
+      catch(error){console.log('RESET_RECOVERY_DIAGNOSTIC',JSON.stringify(await page.evaluate(async()=>{const {__test}=await import('/pages/tasks.js');return {length:__test.state.tasks.length,window:__test.state.taskWindow,loadError:__test.state.loadError?.message,toasts:window.toasts.slice(-3)};})),windowReplies.slice(-12));throw error;}
       if(fixtureSize===90){
         assert.equal(await page.evaluate(()=>document.activeElement?.id),'task-window-status','keyboard focus moves to end-of-results status');
       }
       if(fixtureSize>90){
+        if(fixtureSize>=120){
+          // A refresh must not publish its older 90-card snapshot after an
+          // explicit Load more has already extended the visible window.
+          await page.evaluate(async()=>{const {__test}=await import('/pages/tasks.js');__test.state.taskWindow.delta_cursor=null;});
+          let heldWindow=new Promise(resolve=>{heldWindowSignal=resolve;});holdWindowOffset=0;
+          await page.evaluate(async()=>{const {__test}=await import('/pages/tasks.js');void __test.loadTasks(document.querySelector('#fixture'));});
+          await heldWindow;
+          await page.click('#task-window-more');
+          await page.waitForFunction(async()=>{const {__test}=await import('/pages/tasks.js');return __test.state.tasks.length===120;});
+          releaseWindow();releaseWindow=null;
+          await page.waitForFunction(async()=>{const {__test}=await import('/pages/tasks.js');return __test.state.tasks.length===120&&!__test.state.taskWindow.loading;});
+          // Inverse order: an old Load more response still represents a user
+          // intent after a refresh has replaced the signed window object.
+          if(fixtureSize>=150){
+            await page.evaluate(async()=>{const {__test}=await import('/pages/tasks.js');__test.state.taskWindow.delta_cursor=null;});
+            heldWindow=new Promise(resolve=>{heldWindowSignal=resolve;});holdWindowOffset=120;
+            await page.$eval('#task-window-more',node=>node.click());
+            await heldWindow;
+            await page.evaluate(async()=>{const {__test}=await import('/pages/tasks.js');await __test.loadTasks(document.querySelector('#fixture'));});
+            releaseWindow();releaseWindow=null;
+            await page.waitForFunction(async()=>{const {__test}=await import('/pages/tasks.js');return __test.state.tasks.length===150;});
+          }
+        }
         await page.evaluate(async()=>{const {__test}=await import('/pages/tasks.js');
           __test.state.bulkSelectMode=true;__test.state.selectedTaskIds.add(__test.state.tasks[70].id);
           __test.renderTaskList(document.querySelector('#fixture'));
@@ -196,7 +240,14 @@ test('Task card paints after confirmation, preserves pending across reads, and r
     saveSamples.push(await page.evaluate(()=>performance.now()-window.statusInputAt));
   }
   const summary=values=>{const sorted=[...values].sort((a,b)=>a-b),at=q=>Math.round(sorted[Math.ceil(q*sorted.length)-1]*10)/10;return {n:sorted.length,p50:at(.5),p95:at(.95),p99:at(.99),max:at(1)};};
-  console.log('TASK_STATUS_FEEDBACK_SAMPLES',JSON.stringify({fixture_tasks:fixtureSize,loaded_all:process.env.VIDAMIA_STATUS_FEEDBACK_LOAD_ALL==='1',viewport:'390x844',paint_frame_ms:summary(paintSamples),confirmed_stable_ms:summary(saveSamples),server_write_ms:summary(writeDurations),window_reads_for_19_statuses:windowReads-readsBefore}));
+  const kinds=windowReplies.slice(-(windowReads-readsBefore)).reduce((counts,item)=>{
+    const key=item.status!==200?`error:${item.status}:${item.error}`:item.reset?`reset:${item.reason}`:item.delta?`delta:${item.no_change?'quiet':item.count}`:`page:${item.count}`;
+    counts[key]=(counts[key]||0)+1;return counts;
+  },{});
+  if(process.env.VIDAMIA_STATUS_FEEDBACK_LOAD_ALL==='1')
+    assert.deepEqual({reads:windowReads-readsBefore,changed:kinds['delta:1']},{reads:19,changed:19},
+      'a fully loaded ordinary List uses one authorized changed-row window read per confirmed status');
+  console.log('TASK_STATUS_FEEDBACK_SAMPLES',JSON.stringify({fixture_tasks:fixtureSize,loaded_all:process.env.VIDAMIA_STATUS_FEEDBACK_LOAD_ALL==='1',viewport:'390x844',paint_frame_ms:summary(paintSamples),confirmed_stable_ms:summary(saveSamples),server_write_ms:summary(writeDurations),window_reads_for_19_statuses:windowReads-readsBefore,window_reply_kinds:kinds}));
   if(fixtureSize>30){
     failNextList=true;
     await page.click('#task-view-btn');

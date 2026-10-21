@@ -115,8 +115,8 @@ export function orderTaskWindow(rows, {
  * snapshot after each clock change: reusing an old offset alone misses an
  * off-window row which entered ahead of the boundary. Group totals always
  * describe the complete matching snapshot, not just hydrated cards. */
-export function sliceTaskWindow(groups, { offset = 0, limit = 30, collapsed = [] } = {}) {
-  if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100)
+export function sliceTaskWindow(groups, { offset = 0, limit = 30, collapsed = [] } = {},maxLimit=100) {
+  if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > maxLimit)
     throw new RangeError('Invalid Task window boundary');
   const closed = new Set(collapsed);
   let remaining = offset, capacity = limit;

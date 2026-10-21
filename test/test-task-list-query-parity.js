@@ -82,6 +82,18 @@ test('ordinary descriptor participants match assigned and responsible people on 
   assert.deepEqual(row.participant_ids,expected);
 });
 
+test('authorized assignee-count sort matches full ordinary Task cards without exposing a member pool',async t=>{
+  const f=await scoringFixture(t);
+  const one=await f.create({title:'Solo',assigned_to:[2]});
+  const two=await f.create({title:'Shared',assigned_to:[2,3]});
+  assert.equal(one.status,201);assert.equal(two.status,201);
+  const full=await f.call('GET','/tasks',undefined,1);
+  const matching=full.data.filter(row=>[one.data.id,two.data.id].includes(row.id));
+  assert.deepEqual(matching.map(row=>[row.id,(row.assigned_users||[]).length]).sort((a,b)=>a[1]-b[1]).map(row=>row[0]),[one.data.id,two.data.id]);
+  const page=readOrderedTaskWindow(f.d,1,{}, {groupMode:'none',sort:{field:'assignees',direction:'asc'},limit:20});
+  assert.deepEqual(page.ids.filter(id=>[one.data.id,two.data.id].includes(id)),[one.data.id,two.data.id]);
+});
+
 test('internal page recomputes entry, refill, and row ACL before selecting IDs',async t=>{
   const f=await scoringFixture(t);
   const ids=[];

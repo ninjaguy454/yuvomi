@@ -191,7 +191,7 @@ export function readOrderedTaskWindow(d,actor,query={},view={}) {
     throw new TypeError('Bucket sorts must be a Map');
   const fields=[field,...[...(view.bucketSorts?.values()||[])].map(sort=>sort?.field||'default')];
   if (!['category','none','due','status','location'].includes(mode)
-    ||fields.some(value=>!['default','title','due','category','location'].includes(value)))
+    ||fields.some(value=>!['default','title','due','category','location','assignees'].includes(value)))
     throw new RangeError('Task window projection is not ready for this view');
   if (mode==='status' && !Array.isArray(view.statusOrder))
     throw new TypeError('Status order is required for a Task window');
@@ -210,7 +210,7 @@ export function readOrderedTaskWindow(d,actor,query={},view={}) {
   if (view.expectedClock!==undefined && view.expectedClock!==clock)
     return {reset_required:true,reason:'window_changed'};
   const {rows,visibility}=readTaskListDescriptors(d,actor,query,{location:mode==='location'||fields.includes('location'),
-    tripDue:requiresDue,now});
+    participants:fields.includes('assignees'),tripDue:requiresDue,now});
   const groups=orderTaskWindow(rows,{...view,now,today:day});
   return {...sliceTaskWindow(groups,view),visibility,clock,
     query_key:taskWindowQueryKey(query,{...view,today:day}),

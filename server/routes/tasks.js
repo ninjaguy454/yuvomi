@@ -9,6 +9,7 @@ import {acceptTask} from '../services/task-acceptance.js';
 import {previewTemplateLaunch,createTemplateLaunch,TemplateLaunchError} from '../services/task-template-launch.js';
 import {attachTaskHelperViewMetadata} from '../services/task-helper-views.js';
 import {skipTaskOccurrence,taskSkipUnsupportedReason,taskSkipHasRotationScope} from '../services/task-skip.js';
+import {restoreAutoArchivedSkippedProjections} from '../services/task-auto-archive.js';
 import {closeIncompleteTask,reopenIncompleteTask,taskCloseUnsupportedReason} from '../services/task-close.js';
 /**
  * Modul: Aufgaben (Tasks)
@@ -911,6 +912,7 @@ function setArchived(taskId, archived) {
   else {
     const grace = new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 19) + 'Z';
     db.get().prepare('UPDATE tasks SET archived_at=NULL,auto_archived_at=NULL,auto_archive_after=? WHERE id=? AND archived_at IS NOT NULL').run(grace,taskId);
+    restoreAutoArchivedSkippedProjections(db.get(),taskId);
   }
   return db.get().prepare('SELECT archived_at FROM tasks WHERE id=?').get(taskId)?.archived_at??null;
 }

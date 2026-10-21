@@ -105,18 +105,26 @@ test('terminal child-scoped helper retires with a completed source', async t => 
   assert.ok(f.row(helper).archived_at,'the helper must not remain in the active Task list');
 });
 
-test('skipped source with a separate helper stays visible until its helper archive can be reconciled', async t => {
+test('skipped source and terminal separate helper archive and restore together', async t => {
   const f=await scoringFixture(t);
   const id=await root(f,'Old skipped source');skipped(f,id,OLD);
   const helper=await root(f,'Separate helper');
   f.d.prepare("UPDATE tasks SET status='done' WHERE id=?").run(helper);
   f.d.prepare('INSERT INTO task_activity_support_tasks(source_task_id,task_id) VALUES(?,?)').run(id,helper);
-  assert.deepEqual(service.reconcileTaskAutoArchive(f.d,{now:NOW}).archivedIds,[]);
+  assert.deepEqual(service.reconcileTaskAutoArchive(f.d,{now:NOW}).archivedIds,[id]);
+  assert.ok(f.row(id).archived_at);
+  assert.equal(f.row(helper).auto_archived_at,f.row(helper).archived_at);
+  const restored=await f.call('PATCH',`/tasks/${id}/archive`,{archived:false});
+  assert.equal(restored.status,200,JSON.stringify(restored));
   assert.equal(f.row(id).archived_at,null);
   assert.equal(f.row(helper).archived_at,null);
+  assert.equal(f.row(helper).auto_archived_at,null);
+  const changes=f.changes();
+  assert.equal((await f.call('PATCH',`/tasks/${id}/archive`,{archived:false})).status,200);
+  assert.equal(f.changes(),changes,'repeat restore does not rewrite the helper');
 });
 
-test('skipped source also defers a terminal helper linked from a child scope', async t => {
+test('skipped source also archives a terminal helper linked from a child scope', async t => {
   const f=await scoringFixture(t);
   const id=await root(f,'Old skipped source with child');skipped(f,id,OLD);
   const child=Number(f.d.prepare("INSERT INTO tasks(title,category,status,created_by,parent_task_id) VALUES('Skipped action','household','skipped',1,?)")
@@ -124,8 +132,45 @@ test('skipped source also defers a terminal helper linked from a child scope', a
   const helper=await root(f,'Separate child helper');
   f.d.prepare("UPDATE tasks SET status='done' WHERE id=?").run(helper);
   f.d.prepare('INSERT INTO task_activity_support_tasks(source_task_id,task_id) VALUES(?,?)').run(child,helper);
+  assert.deepEqual(service.reconcileTaskAutoArchive(f.d,{now:NOW}).archivedIds,[id]);
+  assert.ok(f.row(helper).archived_at);
+});
+
+test('skipped source with unfinished separate helper remains active', async t => {
+  const f=await scoringFixture(t);
+  const id=await root(f,'Old skipped with open helper');skipped(f,id,OLD);
+  const helper=await root(f,'Open separate helper');
+  f.d.prepare('INSERT INTO task_activity_support_tasks(source_task_id,task_id) VALUES(?,?)').run(id,helper);
   assert.deepEqual(service.reconcileTaskAutoArchive(f.d,{now:NOW}).archivedIds,[]);
   assert.equal(f.row(id).archived_at,null);
+  assert.equal(f.row(helper).archived_at,null);
+});
+
+test('restoring skipped source preserves a separately archived helper', async t => {
+  const f=await scoringFixture(t);
+  const id=await root(f,'Skipped with prearchived helper');skipped(f,id,OLD);
+  const helper=await root(f,'Manually archived helper');
+  f.d.prepare("UPDATE tasks SET status='done',archived_at='2026-10-12T00:00:00Z' WHERE id=?").run(helper);
+  f.d.prepare('INSERT INTO task_activity_support_tasks(source_task_id,task_id) VALUES(?,?)').run(id,helper);
+  assert.deepEqual(service.reconcileTaskAutoArchive(f.d,{now:NOW}).archivedIds,[id]);
+  const restored=await f.call('PATCH',`/tasks/${id}/archive`,{archived:false});
+  assert.equal(restored.status,200,JSON.stringify(restored));
+  assert.equal(f.row(helper).archived_at,'2026-10-12T00:00:00Z');
+  assert.equal(f.row(helper).auto_archived_at,null);
+});
+
+test('skipped helper archive failure rolls back source and sibling helper', async t => {
+  const f=await scoringFixture(t);
+  const id=await root(f,'Skipped atomic source');skipped(f,id,OLD);
+  const helper=await root(f,'Skipped atomic helper');
+  f.d.prepare("UPDATE tasks SET status='done' WHERE id=?").run(helper);
+  f.d.prepare('INSERT INTO task_activity_support_tasks(source_task_id,task_id) VALUES(?,?)').run(id,helper);
+  f.d.exec(`CREATE TRIGGER synthetic_skipped_helper_abort BEFORE UPDATE OF archived_at ON tasks
+    WHEN NEW.id=${helper} AND NEW.archived_at IS NOT NULL BEGIN SELECT RAISE(ABORT,'synthetic skipped helper failure'); END`);
+  const result=service.reconcileTaskAutoArchive(f.d,{now:NOW,onError:()=>{}});
+  assert.deepEqual(result.failedIds,[id]);
+  assert.equal(f.row(id).archived_at,null);
+  assert.equal(f.row(helper).archived_at,null);
 });
 
 test('restoring an old occurrence gives it 30 days before automatic rearchive', async t => {

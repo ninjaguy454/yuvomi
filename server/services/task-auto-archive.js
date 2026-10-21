@@ -17,10 +17,7 @@ const unfinishedSql = root => `WITH RECURSIVE linked(id) AS (
     WHERE action.counterpart_task_id IS NOT NULL
 ) SELECT 1 FROM linked JOIN tasks work ON work.id=linked.id
   WHERE work.id!=${root} AND work.status NOT IN ${TERMINAL} LIMIT 1`;
-// The current supervision reconciler deliberately exits for skipped source
-// work. Do not hide that source while a separate helper projection remains
-// visible; a later maintenance path can retire both with restore provenance.
-const pendingSkippedSupportSql = root => `WITH RECURSIVE source(id) AS (
+const linkedProjectionSql = root => `WITH RECURSIVE source(id) AS (
   SELECT ${root}
   UNION SELECT child.id FROM tasks child JOIN source ON child.parent_task_id=source.id
 ), support(id) AS (
@@ -28,8 +25,7 @@ const pendingSkippedSupportSql = root => `WITH RECURSIVE source(id) AS (
   UNION SELECT action.counterpart_task_id FROM task_supervision_actions action JOIN source ON action.source_task_id=source.id
     WHERE action.counterpart_task_id IS NOT NULL
   UNION SELECT child.id FROM tasks child JOIN support ON child.parent_task_id=support.id
-) SELECT 1 FROM support JOIN tasks work ON work.id=support.id
-  WHERE work.archived_at IS NULL LIMIT 1`;
+) SELECT work.id,work.archived_at,work.auto_archived_at FROM support JOIN tasks work ON work.id=support.id`;
 
 const closure = (d, id) => d.prepare(`SELECT t.id,t.status,t.archived_at,t.auto_archive_after,t.parent_task_id,
   CASE WHEN t.status='done' THEN c.completed_at ELSE t.skipped_at END AS closed_at
@@ -38,9 +34,7 @@ const closure = (d, id) => d.prepare(`SELECT t.id,t.status,t.archived_at,t.auto_
 function unfinishedLinkedWork(d, id) {
   return !!d.prepare(unfinishedSql('@root')).get({ root: id });
 }
-function pendingSkippedSupport(d,id){
-  return !!d.prepare(pendingSkippedSupportSql('@root')).get({root:id});
-}
+const linkedProjections=(d,id)=>d.prepare(linkedProjectionSql('@root')).all({root:id});
 function hasLinkedSupport(d,id){
   return !!d.prepare(`WITH RECURSIVE source(id) AS (
     SELECT ? UNION SELECT child.id FROM tasks child JOIN source ON child.parent_task_id=source.id
@@ -69,7 +63,6 @@ export function reconcileTaskAutoArchive(d, { now = new Date(), maxBatch = 20,
       AND ((t.status='done' AND c.completed_at IS NOT NULL AND c.completed_at<=?)
         OR (t.status='skipped' AND t.skipped_at IS NOT NULL AND t.skipped_at<=?))
       AND NOT EXISTS (${unfinishedSql('t.id')})
-      AND (t.status!='skipped' OR NOT EXISTS (${pendingSkippedSupportSql('t.id')}))
       AND (? IS NULL OR ${closedAtSql}>? OR (${closedAtSql}=? AND t.id>?))
     ORDER BY ${closedAtSql},t.id LIMIT ?`)
     .all(stamp, cutoff, cutoff, cursor?.closedAt??null, cursor?.closedAt??null,
@@ -85,14 +78,20 @@ export function reconcileTaskAutoArchive(d, { now = new Date(), maxBatch = 20,
         const closedMs = Date.parse(task?.closed_at ?? '');
         if (!task || task.parent_task_id !== null || task.archived_at || !['done', 'skipped'].includes(task.status)
           || !Number.isFinite(closedMs) || closedMs > cutoffMs || task.auto_archive_after > stamp
-          || unfinishedLinkedWork(d, task.id)
-          || (task.status==='skipped' && pendingSkippedSupport(d,task.id))) return false;
+          || unfinishedLinkedWork(d, task.id)) return false;
         const before = captureTaskListClock(d);
         const listRoot = trackableTaskListRoot(d, task.id);
         const result = d.prepare('UPDATE tasks SET archived_at=?,auto_archived_at=? WHERE id=? AND archived_at IS NULL')
           .run(stamp,stamp,task.id);
         if (!result.changes) return false;
-        if (task.status==='done' && hasLinkedSupport(d,task.id))
+        if (task.status==='skipped') {
+          // The standard supervisor reconciler intentionally exits for a
+          // skipped source. Retire only terminal linked projections we find
+          // in this transaction, marking exactly those this job changed.
+          const archiveProjection=d.prepare('UPDATE tasks SET archived_at=?,auto_archived_at=? WHERE id=? AND archived_at IS NULL');
+          for(const helper of linkedProjections(d,task.id)) if(!helper.archived_at)
+            archiveProjection.run(stamp,stamp,helper.id);
+        } else if (hasLinkedSupport(d,task.id))
           reconcileTaskSupervision(d, task.id, { notify: false });
         if (listRoot && listRoot === trackableTaskListRoot(d, task.id)) recordTaskListDelta(d, before, [listRoot]);
         return true;
@@ -102,6 +101,16 @@ export function reconcileTaskAutoArchive(d, { now = new Date(), maxBatch = 20,
   }
   return { archivedIds, failedIds, scanned, limited: scanned===maxBatch*4 || archivedIds.length===maxBatch,
     nextCursor: last ? { closedAt: last.closed_at, id: last.id } : null };
+}
+
+/** Invoked only by the authorized explicit restore route, in its transaction. */
+export function restoreAutoArchivedSkippedProjections(d,rootId){
+  if(closure(d,rootId)?.status!=='skipped')return 0;
+  const restore=d.prepare('UPDATE tasks SET archived_at=NULL,auto_archived_at=NULL WHERE id=? AND archived_at=? AND auto_archived_at=?');
+  let changed=0;
+  for(const helper of linkedProjections(d,rootId)) if(helper.auto_archived_at&&helper.auto_archived_at===helper.archived_at)
+    changed+=restore.run(helper.id,helper.archived_at,helper.auto_archived_at).changes;
+  return changed;
 }
 
 export function startTaskAutoArchive({ getDatabase = () => db.get(), now = () => new Date(), pollMs = 60_000 } = {}) {

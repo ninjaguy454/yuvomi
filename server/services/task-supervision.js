@@ -244,8 +244,16 @@ export function inspectTaskSupervision(d, taskId) {
     supervisor_user_id: null, supervisor_name: null, eligible_supervisors: [], qualified_supervisor_count: 0,
     supervisor_explanations: [], blocked_requirements: [] };
   if (!supported(d) || !source) return empty;
-  const members = householdMembers(d), byId = new Map(members.map(m => [Number(m.id), m]));
   const saved = d.prepare('SELECT * FROM task_supervision_actions WHERE source_task_id = ?').all(sourceId);
+  // A leaf with no skill source or saved helper has no supervision action.
+  // Avoid roster, presence and recursive scope reads on ordinary list cards.
+  if (!saved.length
+    && !d.prepare('SELECT 1 FROM tasks WHERE parent_task_id=? LIMIT 1').get(sourceId)
+    && !d.prepare('SELECT 1 FROM task_skill_requirements WHERE task_id=? LIMIT 1').get(sourceId)
+    && !d.prepare('SELECT 1 FROM task_activity_bindings WHERE task_id=? LIMIT 1').get(sourceId)
+    && !d.prepare('SELECT 1 FROM task_activity_support_tasks WHERE source_task_id=? LIMIT 1').get(sourceId))
+    return { ...empty, display_reason: null, source_revision: source.revision };
+  const members = householdMembers(d), byId = new Map(members.map(m => [Number(m.id), m]));
   const rows = ordinaryTaskScope(d, sourceId);
   const optionalContextFor = createTaskOptionalContextReader(d, rows);
   const support = d.prepare('SELECT task_id FROM task_activity_support_tasks WHERE source_task_id = ?').get(sourceId);

@@ -1424,6 +1424,7 @@ let state = {
   dragBucketKey:   null,
   filterPanelOpen: false,
   bulkSelectMode:  false,
+  bulkActionBusy:  false,
   selectedTaskIds: new Set(),
   searchQuery:     '',
   calendarCursor:  `${todayKey().slice(0, 7)}-01`,
@@ -5626,13 +5627,17 @@ function updateBulkActionsBar(container) {
   const buttons = bar.querySelectorAll('button[id^="bulk-"]');
 
   bar.hidden = !state.bulkSelectMode;
+  // Keep the live status outside the busy control so assistive tech can
+  // announce Saving as soon as the first request starts.
+  bar.dataset.busy = String(state.bulkActionBusy);
   bar.classList.toggle('bulk-actions-bar--active', selected > 0);
   buttons.forEach((button) => {
-    button.disabled = button.id !== 'bulk-exit' && selected === 0;
+    button.setAttribute('aria-busy', String(state.bulkActionBusy));
+    button.disabled = state.bulkActionBusy || (button.id !== 'bulk-exit' && selected === 0);
   });
 
   if (count) {
-    count.textContent = t('tasks.bulkSelectedCount', { count: selected });
+    count.textContent = state.bulkActionBusy ? t('common.saving') : t('tasks.bulkSelectedCount', { count: selected });
   }
 }
 
@@ -5695,6 +5700,7 @@ function wireBulkActions(container) {
   bar.addEventListener('click', async (e) => {
     const btn = e.target.closest('button[id^="bulk-"]');
     if (!btn) return;
+    if (state.bulkActionBusy) return;
     if (btn.id === 'bulk-exit') { exitTaskSelection(container); return; }
 
     const taskIds = [...state.selectedTaskIds];
@@ -5714,12 +5720,15 @@ function wireBulkActions(container) {
       return;
     }
 
+    state.bulkActionBusy = true;
+    updateBulkActionsBar(container);
     try {
       if (action === 'bulk-mark-done' || action === 'bulk-mark-open') {
         const status = btn.dataset.status;
         for (const id of taskIds) {
           const task = taskSnapshot(id);
-          if (task && canToggleTask(task)) await changeTaskStatus(task, status, taskStatusContext(container));
+          if (task && task.status !== status && canToggleTask(task))
+            await changeTaskStatus(task, status, taskStatusContext(container));
         }
         window.yuvomi.showToast(t('tasks.bulkStatusChanged'), 'success');
       } else if (action === 'bulk-archive') {
@@ -5731,7 +5740,13 @@ function wireBulkActions(container) {
       updateBulkActionsBar(container);
       await loadTasks(container);
     } catch (err) {
+      // Some earlier items may already have committed. Read their current
+      // revisions before the user retries the still-selected batch.
+      try { await loadTasks(container); } catch { /* loadTasks exposes its connection state */ }
       window.yuvomi.showToast(err.message ?? t('common.errorGeneric'), 'danger');
+    } finally {
+      state.bulkActionBusy = false;
+      updateBulkActionsBar(container);
     }
   });
 }

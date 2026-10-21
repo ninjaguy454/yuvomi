@@ -21,12 +21,12 @@ test('Task card paints after confirmation, preserves pending across reads, and r
   assert.equal(fourth.status,201);
   const fourthId=fourth.data.id;
   const fixtureSize=Number(process.env.VIDAMIA_STATUS_FEEDBACK_COUNT||4);
-  assert.ok(Number.isInteger(fixtureSize)&&fixtureSize>=4&&fixtureSize<=250);
+  assert.ok(Number.isInteger(fixtureSize)&&fixtureSize>=4&&fixtureSize<=600);
   fixture.d.transaction(()=>{for(let index=4;index<fixtureSize;index++){
     const taskId=Number(fixture.d.prepare("INSERT INTO tasks(title,created_by,assigned_to,points) VALUES('Synthetic feedback task',1,1,0)").run().lastInsertRowid);
     fixture.d.prepare('INSERT INTO task_assignments(task_id,user_id) VALUES(?,1)').run(taskId);
   }})();
-  let held=null,release=null,signal=null,rejectNext=false,failNextList=false,denyNextWindow=false,writes=0,windowReads=0;
+  let held=null,release=null,signal=null,rejectNext=false,rejectAtWrite=null,failNextList=false,denyNextWindow=false,writes=0,windowReads=0;
   let holdWindowOffset=null,heldWindowSignal=null,releaseWindow=null;
   let rejectContinuationOffset=null,rejectedContinuations=0;
   const windowReplies=[];
@@ -46,7 +46,8 @@ test('Task card paints after confirmation, preserves pending across reads, and r
     if(['/tasks','/tasks/window'].includes(req.path)&&req.method==='GET'&&failNextList){failNextList=false;return res.status(503).json({error:'Temporary list failure.'});}
     if(/^\/tasks\/\d+\/status$/.test(req.path)&&req.method==='PATCH'){
       writes++;
-      if(rejectNext){rejectNext=false;return res.status(409).json({error:'Changed on another device.'});}
+      if(rejectNext||rejectAtWrite===writes){rejectNext=false;rejectAtWrite=null;
+        return res.status(409).json({error:'Changed on another device.'});}
       const writeStart=performance.now();
       const answer=await fixture.call(req.method,req.url,req.body);
       writeDurations.push(performance.now()-writeStart);
@@ -168,6 +169,13 @@ test('Task card paints after confirmation, preserves pending across reads, and r
       assert.equal(await page.evaluate(async()=>{const {__test}=await import('/pages/tasks.js');return __test.state.tasks.length;}),fixtureSize);
     }
   }
+  if(process.env.VIDAMIA_TEST_NETWORK_LATENCY_MS){
+    const devtools=await page.createCDPSession();
+    await devtools.send('Network.enable');
+    await devtools.send('Network.emulateNetworkConditions',{offline:false,
+      latency:Number(process.env.VIDAMIA_TEST_NETWORK_LATENCY_MS),
+      downloadThroughput:300000,uploadThroughput:300000});
+  }
   const heldPromise=new Promise(resolve=>{signal=resolve;});
   await page.$eval(button,node=>{window.statusInputAt=performance.now();node.click();requestAnimationFrame(()=>requestAnimationFrame(()=>{window.statusPaintAt=performance.now();}));});
   await heldPromise;
@@ -244,10 +252,88 @@ test('Task card paints after confirmation, preserves pending across reads, and r
     const key=item.status!==200?`error:${item.status}:${item.error}`:item.reset?`reset:${item.reason}`:item.delta?`delta:${item.no_change?'quiet':item.count}`:`page:${item.count}`;
     counts[key]=(counts[key]||0)+1;return counts;
   },{});
-  if(process.env.VIDAMIA_STATUS_FEEDBACK_LOAD_ALL==='1')
+  if(process.env.VIDAMIA_STATUS_FEEDBACK_LOAD_ALL==='1'&&fixtureSize<=400)
     assert.deepEqual({reads:windowReads-readsBefore,changed:kinds['delta:1']},{reads:19,changed:19},
       'a fully loaded ordinary List uses one authorized changed-row window read per confirmed status');
+  if(process.env.VIDAMIA_STATUS_FEEDBACK_LOAD_ALL==='1'&&fixtureSize>400)
+    assert.ok(windowReads-readsBefore>19&&Object.keys(kinds).every(key=>key.startsWith('page:')),
+      'a window larger than the bounded receipt safely refills pages');
   console.log('TASK_STATUS_FEEDBACK_SAMPLES',JSON.stringify({fixture_tasks:fixtureSize,loaded_all:process.env.VIDAMIA_STATUS_FEEDBACK_LOAD_ALL==='1',viewport:'390x844',paint_frame_ms:summary(paintSamples),confirmed_stable_ms:summary(saveSamples),server_write_ms:summary(writeDurations),window_reads_for_19_statuses:windowReads-readsBefore,window_reply_kinds:kinds}));
+  if(process.env.VIDAMIA_STATUS_FEEDBACK_BULK==='1'){
+    assert.equal(fixtureSize,250,'bulk stress uses the fully loaded cross-page fixture');
+    const selected=await page.evaluate(async()=>{
+      const {__test}=await import('/pages/tasks.js');
+      const candidates=__test.state.tasks.filter(row=>row.status!=='done');
+      const ids=Array.from({length:12},(_,index)=>candidates[Math.floor(index*(candidates.length-1)/11)].id);
+      __test.state.bulkSelectMode=true;
+      for(const id of ids)__test.state.selectedTaskIds.add(id);
+      __test.renderTaskList(document.querySelector('#fixture'));
+      return ids;
+    });
+    assert.equal(new Set(selected).size,12);
+    const beforeWrites=writes,beforeReads=windowReads;
+    await page.$eval('#bulk-mark-done',button=>{window.bulkInputAt=performance.now();button.click();
+      requestAnimationFrame(()=>requestAnimationFrame(()=>{window.bulkFrameAt=performance.now();
+        window.bulkFrameState={selected:document.querySelector('#bulk-count')?.textContent,
+          busy:button.getAttribute('aria-busy'),disabled:button.disabled};}));});
+    await page.waitForFunction(()=>window.bulkFrameAt>0);
+    const first=await page.evaluate(()=>({ms:window.bulkFrameAt-window.bulkInputAt,state:window.bulkFrameState}));
+    await page.waitForFunction(async ids=>{
+      const {__test}=await import('/pages/tasks.js');
+      return !__test.state.bulkActionBusy&&__test.state.selectedTaskIds.size===0
+        &&ids.every(id=>__test.state.tasks.find(row=>row.id===id)?.status==='done');
+    },{timeout:15000},selected);
+    const confirmedMs=await page.evaluate(()=>performance.now()-window.bulkInputAt);
+    assert.equal(first.state.busy,'true','bulk action exposes its pending state before confirmation');
+    assert.equal(first.state.disabled,true,'a pending bulk action cannot be submitted twice');
+    assert.match(first.state.selected,/saving/i);
+    assert.equal(await page.$eval('#bulk-mark-done',button=>button.getAttribute('aria-busy')),'false');
+    assert.equal(writes-beforeWrites,12,'bulk cross-page selection sends one authorized status write per selected Task');
+    assert.equal(selected.filter(id=>fixture.d.prepare('SELECT status FROM tasks WHERE id=?').get(id)?.status==='done').length,12);
+    console.log('TASK_BULK_STATUS_SAMPLE',JSON.stringify({fixture_tasks:fixtureSize,selected:12,
+      first_frame_ms:first.ms,first_frame_state:first.state,confirmed_stable_ms:confirmedMs,
+      patch_requests:writes-beforeWrites,window_reads:windowReads-beforeReads}));
+    const retryIds=await page.evaluate(async()=>{
+      const {__test}=await import('/pages/tasks.js');
+      const ids=__test.state.tasks.filter(row=>row.status==='open').slice(0,2).map(row=>row.id);
+      __test.state.bulkSelectMode=true;
+      for(const id of ids)__test.state.selectedTaskIds.add(id);
+      __test.renderTaskList(document.querySelector('#fixture'));
+      return ids;
+    });
+    assert.equal(retryIds.length,2);
+    await page.waitForFunction(()=>{const button=document.querySelector('#bulk-mark-done');
+      return button&&!button.disabled&&button.getAttribute('aria-busy')==='false';},{timeout:5000});
+    const retryWrites=writes,toasts=await page.evaluate(()=>window.toasts.length);
+    rejectAtWrite=retryWrites+2;
+    // Selection is injected across distant pages; dispatch this synthetic retry
+    // on the control itself without relying on its offscreen scroll position.
+    await page.$eval('#bulk-mark-done',button=>button.click());
+    await page.waitForFunction(()=>document.querySelector('#bulk-mark-done')?.getAttribute('aria-busy')==='false',
+      {timeout:5000});
+    const failure=await page.evaluate(async()=>{const {__test}=await import('/pages/tasks.js');
+      return {toasts:window.toasts.length,selected:__test.state.selectedTaskIds.size,
+        busy:__test.state.bulkActionBusy,disabled:document.querySelector('#bulk-mark-done')?.disabled,
+        lastToast:window.toasts.at(-1)};});
+    failure.writes=writes-retryWrites;
+    assert.ok(failure.toasts>toasts,`failed bulk operation shows feedback: ${JSON.stringify(failure)}`);
+    assert.equal(writes-retryWrites,2,'the second bulk item rejects without an automatic replay');
+    assert.deepEqual(retryIds.map(id=>fixture.d.prepare('SELECT status FROM tasks WHERE id=?').get(id)?.status),
+      ['done','open'],'only the first item committed before the conflict');
+    assert.equal(await page.evaluate(async id=>{const {__test}=await import('/pages/tasks.js');
+      return __test.state.tasks.find(row=>row.id===id)?.status;},retryIds[0]),'done',
+      'failure refreshes the already committed item before retry');
+    assert.equal(await page.evaluate(async()=>{const {__test}=await import('/pages/tasks.js');
+      return __test.state.selectedTaskIds.size;}),2,'failed bulk work stays selected for deliberate retry');
+    assert.equal(await page.$eval('#bulk-mark-done',button=>button.disabled),false);
+    await page.$eval('#bulk-mark-done',button=>button.click());
+    await page.waitForFunction(async ids=>{const {__test}=await import('/pages/tasks.js');
+      return !__test.state.bulkActionBusy&&__test.state.selectedTaskIds.size===0
+        &&ids.every(id=>__test.state.tasks.find(row=>row.id===id)?.status==='done');
+    },{},retryIds);
+    assert.equal(writes-retryWrites,3,'deliberate retry writes only the unfinished item');
+    assert.ok(retryIds.every(id=>fixture.d.prepare('SELECT status FROM tasks WHERE id=?').get(id)?.status==='done'));
+  }
   if(fixtureSize>30){
     failNextList=true;
     await page.click('#task-view-btn');

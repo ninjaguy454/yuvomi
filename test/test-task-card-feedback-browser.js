@@ -254,6 +254,27 @@ test('full app second independent client converges for card completion and reope
   } finally { await first.context.close(); await second.context.close(); }
 });
 
+test('delayed stale status from one tab cannot replay work completed in another tab', async () => {
+  const f = fixture(), first = await open(f), second = await open(f, { secondary: true });
+  try {
+    const held = await hold(first.page);
+    await first.page.locator(selector(f.children[0])).click();
+    const delayed = await held.at();
+    assert.equal((await state(first.page, f.children[0])).busy, true);
+    await second.page.locator(selector(f.children[0])).click();
+    await waitSaved(second.page, f.children[0]);
+    assert.equal(row(f.children[0]).status, 'done');
+    const stale = first.page.waitForResponse(response => response.request().method()==='PATCH'
+      && /\/status$/.test(response.url()),{timeout:15000});
+    await delayed.continue();
+    assert.equal((await stale).status(),409);
+    await waitSaved(first.page, f.children[0]);
+    assert.equal(row(f.children[0]).status, 'done');
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM task_activity_events WHERE action_task_id=? AND event_type='completed'").get(f.children[0]).n,1);
+    assert.equal(held.requests.length,1,'the stale tab does not automatically replay the rejected write');
+  } finally { await first.context.close(); await second.context.close(); }
+});
+
 test('full app mobile swipe over a checkbox scrolls without mutation; deliberate tap paints before HTTP', async () => {
   const f = fixture({ count: 18, rotation:true }), { page, context } = await open(f, { mobile: true });
   try {
@@ -326,7 +347,7 @@ for (const mode of ['list', 'kanban']) test(`full app ${mode} preserves state ac
           if (response.status === 200) return new Response('Bad Gateway', { status: 502, headers: { 'Content-Type': 'text/plain' } });
           return response;
         }
-        if (method === 'GET' && (path === '/api/v1/tasks' || path === `/api/v1/tasks/${root}`)) {
+        if (method === 'GET' && (path === '/api/v1/tasks' || path === '/api/v1/tasks/window' || path === `/api/v1/tasks/${root}`)) {
           window.reliability.reads++;
           if (window.reliability.outage) return new Response('Bad Gateway', { status: 502 });
         }

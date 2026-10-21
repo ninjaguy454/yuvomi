@@ -25,6 +25,7 @@ import {mergeTaskListDelta,mergeTaskStartVisibility} from '/utils/task-list-delt
 import { reconcileTaskMarkup, captureTaskViewport } from '/utils/task-view-state.js';
 import { bindTaskCardSelection } from '/utils/task-card-selection.js';
 import { createTaskCardSubtasks, taskCardPendingProjection } from '/utils/task-card-subtasks.js';
+import { createTaskStatusFeedback } from '/utils/task-status-feedback.js';
 import { bountyAssigneeViews, bountyHelperView, taskCardViewKey } from '/utils/task-helper-views.js';
 import { bindTaskCardTouchDrag, taskDragHandle } from '/utils/task-card-drag.js';
 import { renderMonthYearPicker, dateInSelectedMonth } from '/components/month-year-picker.js';
@@ -738,7 +739,7 @@ function renderTaskCard(task, opts = {}) {
         ${helper ? '' : `<button type="button" class="task-status-btn task-status-btn--${task.status}" data-action="toggle-status" data-id="${task.id}" data-status="${task.status}" ${isClosedOccurrence(task) || !canToggleTask(task) || task.supervision_action?.can_complete === false ? 'disabled' : ''}
           title="${esc(statusLabel)}" aria-label="${esc(isClosedOccurrence(task) ? task.status==='closed_incomplete'?'Closed without completing remaining subtasks. No new completion points awarded. A parent or administrator can reopen it from Task details.':task.status==='skipped'?'Skipped. No new completion points awarded.':'Expired. Reopen from Task details to resume.' : `${statusLabel}. ${isDone ? t('tasks.markOpen', { title: task.title }) : t('tasks.markDone', { title: task.title })}`)}">
           <i data-lucide="${isClosedOccurrence(task) ? 'clock-alert' : 'check'}" class="task-status-btn__check" aria-hidden="true"></i>
-        </button>`}
+        </button><span class="task-status-feedback text-muted text-sm" role="status" aria-live="polite" hidden></span>`}
         ${board && !isClosedOccurrence(task) && canToggleTask(task) && task.supervision_action?.can_complete !== false ? `<button type="button" class="task-card__drag-handle" data-task-drag-handle draggable="true"
           data-action="open-task" data-id="${task.id}" aria-label="${esc(`Move Task: ${task.title}`)}" title="Hold to drag. Tap or press Enter for Task status."><i data-lucide="grip-vertical" class="icon-sm" aria-hidden="true"></i></button>` : ''}
       </div>
@@ -1554,6 +1555,38 @@ function updateTaskStartRefresh(container, visibility) {
 }
 const taskCardSubtasks = new WeakMap();
 const taskCardPendingFocus = new WeakMap();
+const taskParentStatusFeedback = new WeakMap();
+const taskParentStatusBusy = new WeakMap();
+function parentStatusFeedback(container) {
+  let feedback=taskParentStatusFeedback.get(container);
+  if(feedback)return feedback;
+  feedback=createTaskStatusFeedback(({id,status,phase})=>{
+    const canonical=taskSnapshot(id);
+    for(const card of container.querySelectorAll(`article[data-task-id="${id}"]`)) {
+      const button=card.querySelector('[data-action="toggle-status"]');
+      if(!button)continue;
+      const shown=phase && phase!=='failed' ? status : canonical?.status;
+      if(!shown)continue;
+      for(const value of ['open','in_progress','done','expired','skipped','closed_incomplete'])
+        button.classList.toggle(`task-status-btn--${value}`,value===shown);
+      button.dataset.status=canonical?.status||shown;
+      card.classList.toggle('task-card--done',shown==='done');
+      card.classList.toggle('kanban-card--done',shown==='done');
+      const message=phase==='pending'?'Saving…':phase==='uncertain'?'Checking save…'
+        :phase==='confirmed'?'Saved. Refreshing…':phase==='refresh_failed'?'Saved. Tap to refresh the list.'
+        :phase==='failed'?'Not saved. Tap to refresh before retrying.':'';
+      const label=({open:'Not Started',in_progress:'In Progress',done:'Completed'})[shown]||shown;
+      button.title=message||label;
+      button.setAttribute('aria-label',`${label}. ${message|| (shown==='done' ? t('tasks.markOpen',{title:canonical?.title||''}) : t('tasks.markDone',{title:canonical?.title||''}))}`);
+      button.setAttribute('aria-busy',String(phase==='pending'||phase==='uncertain'||phase==='confirmed'));
+      button.disabled=['pending','uncertain','confirmed'].includes(phase) || !canonical || !canToggleTask(canonical);
+      const notice=card.querySelector('.task-status-feedback');
+      if(notice){notice.hidden=!message;notice.textContent=message;}
+    }
+  });
+  taskParentStatusFeedback.set(container,feedback);
+  return feedback;
+}
 function taskSnapshot(id) {
   return state.tasks.flatMap(task => [task, ...(task.subtasks || [])]).find(task => Number(task.id) === Number(id));
 }
@@ -4320,6 +4353,7 @@ function renderTaskList(container) {
   }
   if (state.viewMode === 'kanban') {
     renderKanban(container);
+    taskParentStatusFeedback.get(container)?.repaint();
     return;
   }
   if (state.viewMode === 'calendar') {
@@ -4333,6 +4367,7 @@ function renderTaskList(container) {
   if (window.lucide) window.lucide.createIcons({ el: listEl });
   wireResponsiveTaskTags(listEl);
   if (!retained) stagger(listEl.querySelectorAll('.swipe-row, .kanban-card'));
+  taskParentStatusFeedback.get(container)?.repaint();
   updateBulkActionsBar(container);
   wireSwipeGestures(container);
   maybeShowSwipeHint(container);
@@ -5503,14 +5538,50 @@ function wireTaskList(container) {
     }
 
     if (action === 'toggle-status') {
-      const task = cardTaskSnapshot(target.closest('article[data-task-id]')) || (!target.closest('[data-helper-view-user-id]') ? taskSnapshot(id) : null);
-      if (!task || !canToggleTask(task)) return;
-      target.disabled = true;
+      const busy=taskParentStatusBusy.get(container)||new Set();
+      taskParentStatusBusy.set(container,busy);
+      if(busy.has(Number(id)))return;
+      busy.add(Number(id));
+      const feedback=parentStatusFeedback(container);
+      let token=null;
       try {
-        await changeTaskStatus(task, task.status === 'done' ? 'in_progress' : 'done',taskStatusContext(container,{gesture:e}));
-      } catch (err) { window.yuvomi.showToast(err.message, 'danger'); }
-      finally { target.disabled = false; }
-      await loadTasks(container);
+        const settled=feedback.get(id);
+        if(settled) {
+          if(!['failed','confirmed','refresh_failed'].includes(settled.phase))return;
+          await loadTasks(container,{full:true});
+          feedback.resetSettled(id);
+          // This click only refreshes a settled outcome. Toggling the fresh
+          // status here could reverse another client's successful completion.
+          if(settled.phase==='failed'&&taskSnapshot(id)?.status!==settled.status)
+            window.yuvomi.showToast('Task refreshed. Review its current status before trying again.','warning');
+          return;
+        }
+        const task=cardTaskSnapshot(target.closest('article[data-task-id]')) || (!target.closest('[data-helper-view-user-id]') ? taskSnapshot(id) : null);
+        if(!task||!canToggleTask(task))return;
+        const nextStatus=task.status==='done'?'in_progress':'done';
+        const result=await changeTaskStatus(task,nextStatus,taskStatusContext(container,{gesture:e,
+          beforeRequest:()=>{token=feedback.begin(id,nextStatus);},
+          onUncertain:()=>{if(token)feedback.set(id,token,'uncertain');},
+        }));
+        if(!result)return;
+        if(token)feedback.set(id,token,'confirmed');
+        try {
+          await loadTasks(container,{full:true});
+          const canonical=taskSnapshot(id);
+          // A successful filtered read may legitimately omit a Task that just
+          // crossed the active status boundary. Its saved intent is settled;
+          // do not leave a disabled card when another filter shows it later.
+          if(token&&(!canonical||Number(canonical.revision)>=Number(result.data?.revision)))feedback.clear(id,token);
+        } catch (refreshError) {
+          if(token)feedback.set(id,token,'refresh_failed');
+          window.yuvomi.showToast('Status saved, but the list could not refresh. Tap to refresh it.','warning');
+        }
+      } catch (err) {
+        if(token)feedback.set(id,token,'failed');
+        window.yuvomi.showToast(err.message,'danger');
+        if(err.status===403||err.status===409)loadTasks(container,{full:true}).catch(()=>{});
+      } finally {busy.delete(Number(id));}
+      return;
     }
 
     if (action === 'claim-activity') {

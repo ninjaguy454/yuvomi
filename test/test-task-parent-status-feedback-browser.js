@@ -1,0 +1,131 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {join} from 'node:path';
+import express from 'express';
+import puppeteer from 'puppeteer';
+import {scoringFixture} from './helpers/task-scoring-route-fixture.js';
+
+test('Task card paints after confirmation, preserves pending across reads, and retries a rejected change from fresh state',{timeout:60000},async t=>{
+  const fixture=await scoringFixture(t);
+  const created=await fixture.create({title:'Immediate status',assigned_to:[1],points:0});
+  assert.equal(created.status,201);
+  const id=created.data.id;
+  const second=await fixture.create({title:'Rejected status',assigned_to:[1],points:0});
+  assert.equal(second.status,201);
+  const secondId=second.data.id;
+  const third=await fixture.create({title:'Concurrent status',assigned_to:[1],points:0});
+  assert.equal(third.status,201);
+  const thirdId=third.data.id;
+  const fourth=await fixture.create({title:'Saved before list failure',assigned_to:[1],points:0});
+  assert.equal(fourth.status,201);
+  const fourthId=fourth.data.id;
+  const fixtureSize=Number(process.env.VIDAMIA_STATUS_FEEDBACK_COUNT||4);
+  assert.ok(Number.isInteger(fixtureSize)&&fixtureSize>=4&&fixtureSize<=250);
+  fixture.d.transaction(()=>{for(let index=4;index<fixtureSize;index++){
+    const taskId=Number(fixture.d.prepare("INSERT INTO tasks(title,created_by,assigned_to,points) VALUES('Synthetic feedback task',1,1,0)").run().lastInsertRowid);
+    fixture.d.prepare('INSERT INTO task_assignments(task_id,user_id) VALUES(?,1)').run(taskId);
+  }})();
+  let held=null,release=null,signal=null,rejectNext=false,failNextList=false,writes=0;
+  const writeDurations=[];
+  const app=express();app.use(express.json());
+  app.use('/api/v1',async(req,res)=>{
+    if(req.path==='/automation/activity-options')return res.json({data:{activities:[],rotation_groups:[],skills:[]}});
+    if(req.path==='/planning/place-search/status')return res.json({data:{configured:false}});
+    if(req.path==='/planning/places'||req.path==='/automation/obligations')return res.json({data:[]});
+    if(req.path==='/preferences')return res.json({data:{}});
+    if(req.path==='/tasks'&&req.method==='GET'&&failNextList){failNextList=false;return res.status(503).json({error:'Temporary list failure.'});}
+    if(/^\/tasks\/\d+\/status$/.test(req.path)&&req.method==='PATCH'){
+      writes++;
+      if(rejectNext){rejectNext=false;return res.status(409).json({error:'Changed on another device.'});}
+      const writeStart=performance.now();
+      const answer=await fixture.call(req.method,req.url,req.body);
+      writeDurations.push(performance.now()-writeStart);
+      if(!held){held=answer;signal?.();await new Promise(resolve=>{release=resolve;});}
+      return res.status(answer.status).json(answer);
+    }
+    const answer=await fixture.call(req.method,req.url,['GET','HEAD'].includes(req.method)?undefined:req.body);
+    res.status(answer.status).json(answer);
+  });
+  const root=join(import.meta.dirname,'..');app.use(express.static(join(root,'public')));
+  const links=[...readFileSync(join(root,'public/index.html'),'utf8').matchAll(/<link rel="stylesheet" href="[^"]+"\s*\/>/g)].map(match=>match[0]).join('');
+  app.get('/status-feedback',(_req,res)=>res.send(`<!doctype html><html lang="en" data-theme="light"><head>${links}<link rel="stylesheet" href="/styles/tasks.css"><script src="/lucide.min.js" defer></script></head><body><main id="fixture"></main></body></html>`));
+  const server=app.listen(0,'127.0.0.1');await new Promise(resolve=>server.once('listening',resolve));
+  t.after(async()=>{release?.();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));});
+  const browser=await puppeteer.launch({headless:true,executablePath:process.env.PUPPETEER_EXECUTABLE_PATH||'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',args:['--no-sandbox','--disable-dev-shm-usage']});
+  t.after(async()=>browser.close());
+  const page=await browser.newPage();await page.setViewport({width:390,height:844});
+  const errors=[];page.on('pageerror',error=>errors.push(error.message));
+  await page.goto(`http://127.0.0.1:${server.address().port}/status-feedback`);
+  await page.evaluate(async()=>{
+    localStorage.setItem('yuvomi-lang','en');window.toasts=[];window.yuvomi={showToast:message=>window.toasts.push(message),user:{id:1,role:'admin'}};
+    window.EventSource=class{addEventListener(){}close(){}};
+    const {initI18n,setLocale}=await import('/i18n.js');await initI18n();await setLocale('en');
+    await import('/components/datepicker.js');
+    const {setPermissions}=await import('/permissions.js');setPermissions({admin:true,capabilities:{'tasks.create':'allow'}});
+    const {render}=await import('/pages/tasks.js');await render(document.querySelector('#fixture'),{user:{id:1,role:'admin'}});
+  });
+  const button=`[data-action="toggle-status"][data-id="${id}"]`;
+  const button2=`[data-action="toggle-status"][data-id="${secondId}"]`;
+  await page.waitForSelector(button);
+  const heldPromise=new Promise(resolve=>{signal=resolve;});
+  await page.$eval(button,node=>{window.statusInputAt=performance.now();node.click();requestAnimationFrame(()=>requestAnimationFrame(()=>{window.statusPaintAt=performance.now();}));});
+  await heldPromise;
+  await page.waitForFunction(()=>window.statusPaintAt>0);
+  const paintMs=await page.evaluate(()=>window.statusPaintAt-window.statusInputAt);
+  assert.ok(paintMs<100,`visible frame after ${paintMs.toFixed(1)} ms`);
+  const pending=await page.$eval(button,node=>({done:node.classList.contains('task-status-btn--done'),busy:node.getAttribute('aria-busy'),disabled:node.disabled,feedback:node.nextElementSibling?.textContent}));
+  assert.deepEqual(pending,{done:true,busy:'true',disabled:true,feedback:'Saving…'});
+  await page.evaluate(id=>{for(let i=0;i<3;i++)document.querySelector(`[data-action="toggle-status"][data-id="${id}"]`).click();window.dispatchEvent(new Event('task-data-changed'));},id);
+  assert.equal(writes,1);
+  await page.waitForFunction(id=>document.querySelector(`[data-action="toggle-status"][data-id="${id}"]`)?.getAttribute('aria-busy')==='true',{},id);
+  release();release=null;
+  await page.waitForFunction(id=>!document.querySelector(`[data-action="toggle-status"][data-id="${id}"]`),{timeout:5000},id);
+  await page.click('#filter-toggle-btn');
+  await page.click('[data-filter="status"][data-value="done"]');
+  await page.waitForSelector(button);
+  assert.equal(await page.$eval(button,node=>node.disabled),false,'reentering a completed filter has no stuck pending feedback');
+  assert.equal(await page.$eval(button,node=>node.getAttribute('aria-busy')),null);
+  rejectNext=true;
+  await page.$eval(button2,node=>node.click());
+  await page.waitForFunction(id=>document.querySelector(`[data-action="toggle-status"][data-id="${id}"]`)?.nextElementSibling?.textContent.includes('Not saved'),{},secondId);
+  assert.equal(await page.$eval(button2,node=>node.classList.contains('task-status-btn--open')),true,'rejected intent restores canonical status');
+  assert.equal(await page.$eval(button2,node=>node.disabled),false);
+  await page.$eval(button2,node=>node.click());
+  await page.waitForFunction(id=>!document.querySelector(`[data-action="toggle-status"][data-id="${id}"]`)?.nextElementSibling?.textContent.includes('Not saved'),{},secondId);
+  assert.equal(writes,2,'refreshing a rejected intent does not issue a new write');
+  await page.$eval(button2,node=>node.click());
+  await page.waitForFunction(id=>{const button=document.querySelector(`[data-action="toggle-status"][data-id="${id}"]`);return button?.classList.contains('task-status-btn--done')&&button.getAttribute('aria-busy')==='false';},{timeout:5000},secondId);
+  assert.equal(writes,3,'one rejected request plus one deliberate retry');
+  const otherClient=await fixture.call('PATCH',`/tasks/${thirdId}/status`,{status:'done',expected_revision:third.data.revision});
+  assert.equal(otherClient.status,200);
+  rejectNext=true;
+  const button3=`[data-action="toggle-status"][data-id="${thirdId}"]`;
+  await page.$eval(button3,node=>node.click());
+  await page.waitForFunction(id=>document.querySelector(`[data-action="toggle-status"][data-id="${id}"]`)?.nextElementSibling?.textContent.includes('Not saved'),{},thirdId);
+  await page.$eval(button3,node=>node.click());
+  await page.waitForFunction(id=>{const button=document.querySelector(`[data-action="toggle-status"][data-id="${id}"]`);return button?.classList.contains('task-status-btn--done')&&button.getAttribute('aria-busy')==='false';}, {},thirdId);
+  assert.equal(writes,4,'refresh after 409 never reverses another client completion');
+  assert.equal(await page.$eval(button3,node=>node.classList.contains('task-status-btn--done')),true);
+  const button4=`[data-action="toggle-status"][data-id="${fourthId}"]`;
+  failNextList=true;
+  await page.$eval(button4,node=>node.click());
+  await page.waitForFunction(id=>document.querySelector(`[data-action="toggle-status"][data-id="${id}"]`)?.nextElementSibling?.textContent.includes('Tap to refresh'),{},fourthId);
+  assert.equal(await page.$eval(button4,node=>node.disabled),false,'saved write with failed list read exposes refresh action');
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'feedback fits the mobile viewport');
+  await page.$eval(button4,node=>node.click());
+  await page.waitForFunction(id=>{const button=document.querySelector(`[data-action="toggle-status"][data-id="${id}"]`);return button?.classList.contains('task-status-btn--done')&&button.getAttribute('aria-busy')==='false';},{timeout:5000},fourthId);
+  assert.equal(writes,5,'refresh after acknowledged write does not write again');
+  const paintSamples=[paintMs],saveSamples=[];
+  for(let sample=0;sample<19;sample++){
+    const prior=await page.$eval(button4,node=>node.dataset.status);
+    await page.$eval(button4,node=>{window.statusPaintAt=0;window.statusInputAt=performance.now();node.click();requestAnimationFrame(()=>requestAnimationFrame(()=>{window.statusPaintAt=performance.now();}));});
+    await page.waitForFunction(()=>window.statusPaintAt>0);
+    paintSamples.push(await page.evaluate(()=>window.statusPaintAt-window.statusInputAt));
+    await page.waitForFunction(({id,prior})=>{const node=document.querySelector(`[data-action="toggle-status"][data-id="${id}"]`);return node&&!node.disabled&&node.dataset.status!==prior&&node.getAttribute('aria-busy')==='false';},{timeout:5000},{id:fourthId,prior});
+    saveSamples.push(await page.evaluate(()=>performance.now()-window.statusInputAt));
+  }
+  const summary=values=>{const sorted=[...values].sort((a,b)=>a-b),at=q=>Math.round(sorted[Math.ceil(q*sorted.length)-1]*10)/10;return {n:sorted.length,p50:at(.5),p95:at(.95),p99:at(.99),max:at(1)};};
+  console.log('TASK_STATUS_FEEDBACK_SAMPLES',JSON.stringify({fixture_tasks:fixtureSize,viewport:'390x844',paint_frame_ms:summary(paintSamples),confirmed_stable_ms:summary(saveSamples),server_write_ms:summary(writeDurations)}));
+  assert.deepEqual(errors,[]);
+});

@@ -38,6 +38,7 @@ import { startScheduler as startPushScheduler } from './services/push-scheduler.
 import { startScheduler as startMedicationScheduler } from './services/medication-scheduler.js';
 import { startScheduler as startRecipeProviderScheduler } from './services/recipe-provider-sync.js';
 import { startTaskExpiration } from './services/task-expiration.js';
+import { startTaskAutoArchive } from './services/task-auto-archive.js';
 import { startSharedRotationScheduler } from './services/rotation-shared-scheduler.js';
 import { startTaskSupervisionRefresh } from './services/task-supervision-refresh.js';
 import { emailService } from './services/email.js';
@@ -627,6 +628,7 @@ app.listen(PORT, () => {
   startBackupScheduler();
   startSplitExpenseScheduler();
   startTaskExpiration();
+  startTaskAutoArchive();
   startSharedRotationScheduler();
   startMealCycleScheduler();
   startPushScheduler();

@@ -9201,6 +9201,10 @@ FORK_MIGRATIONS.push({version:10068,description:'Bounded atomic Task list delta 
     WHEN EXISTS(SELECT 1 FROM task_documents WHERE document_id=OLD.document_id) BEGIN
     UPDATE task_change_clock SET version=version+1 WHERE id=1; END;
 `});
+FORK_MIGRATIONS.push({version:10069,description:'Grace period after restoring a terminal Task before automatic archival',up:`
+  ALTER TABLE tasks ADD COLUMN auto_archive_after TEXT;
+  ALTER TABLE tasks ADD COLUMN auto_archived_at TEXT;
+`});
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];
 
 const FORK_MIGRATION_REMAPS = [

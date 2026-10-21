@@ -907,9 +907,12 @@ function nowStamp() {
  * Rückgabe: der neue archived_at-Wert (null = zurückgeholt).
  */
 function setArchived(taskId, archived) {
-  const value = archived ? nowStamp() : null;
-  db.get().prepare('UPDATE tasks SET archived_at = ? WHERE id = ?').run(value, taskId);
-  return value;
+  if (archived) db.get().prepare('UPDATE tasks SET archived_at=? WHERE id=? AND archived_at IS NULL').run(nowStamp(),taskId);
+  else {
+    const grace = new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 19) + 'Z';
+    db.get().prepare('UPDATE tasks SET archived_at=NULL,auto_archived_at=NULL,auto_archive_after=? WHERE id=? AND archived_at IS NOT NULL').run(grace,taskId);
+  }
+  return db.get().prepare('SELECT archived_at FROM tasks WHERE id=?').get(taskId)?.archived_at??null;
 }
 
 /** Verwaltbare Kategorien aus der DB (nach sort_order). */

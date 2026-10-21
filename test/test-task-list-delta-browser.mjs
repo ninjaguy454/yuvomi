@@ -11,14 +11,14 @@ test('mounted Tasks page discards a delayed delta after a newer edit',{timeout:6
   const created=await f.create({title:'Before concurrent edits',assigned_to:[2],points:0});
   assert.equal(created.status,201);const targetId=created.data.id;
   let holdNext=false,releaseFirst=null,firstPending=null;
-  const deltaRequests=[];
+  const deltaRequests=[];let obligationRequests=0;
   const app=express();app.use(express.json());
   app.use('/api/v1',async(req,res)=>{
     if(req.path==='/automation/activity-options')return res.json({data:{activities:[],rotation_groups:[],skills:[]}});
     if(req.path==='/planning/place-search/status')return res.json({data:{configured:false}});
     if(req.path==='/planning/places')return res.json({data:[]});
     if(req.path==='/preferences')return res.json({data:{}});
-    if(req.path==='/automation/obligations')return res.json({data:[]});
+    if(req.path==='/automation/obligations'){obligationRequests++;return res.json({data:[]});}
     const answer=await f.call(req.method,req.url,['GET','HEAD'].includes(req.method)?undefined:req.body);
     if(req.path==='/tasks'&&req.query.delta){
       deltaRequests.push(req.originalUrl);
@@ -63,5 +63,10 @@ test('mounted Tasks page discards a delayed delta after a newer edit',{timeout:6
   await page.evaluate(()=>window.dispatchEvent(new Event('task-data-changed')));
   await page.waitForFunction(id=>document.querySelector(`[data-action="open-task"][data-id="${id}"]`)?.closest('article')?.innerText.includes('Third remote edit'),{},targetId);
   assert.equal(await page.$eval('#task-title',input=>input.value),'Local unsaved draft');
+  assert.equal(obligationRequests,0,'list reads should not refetch obligations; the request dialog fetches on open');
+  const obligationResponse=page.waitForResponse(response=>response.url().includes('/automation/obligations'));
+  await page.$eval('#btn-assignment-requests',button=>button.click());
+  await obligationResponse;
+  assert.equal(obligationRequests,1,'opening assignment requests must fetch its current inbox');
   assert.deepEqual(errors,[]);
 });

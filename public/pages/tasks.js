@@ -1707,11 +1707,13 @@ async function loadTasks(container,{full=false}={}) {
       const key=taskQuery(),previous=taskPageDeltaStates.get(container);
       const base=`/tasks${key}`,delta=previous?.key===key&&previous.cursor;
       const url=delta?`${base}${key?'&':'?'}delta=${encodeURIComponent(previous.cursor)}`:base;
-      const [initial,obligations]=await Promise.all([api.get(url,{requireFresh:true}),
-        api.get('/automation/obligations').catch(error=>({data:error.status===403?[]:state.assignmentRequests}))]);
+      // The assignment-request dialog always fetches its own current inbox
+      // before showing actions. Repeating that read on every card refresh
+      // spends quota without updating anything visible in the list.
+      const initial=await api.get(url,{requireFresh:true});
       const data=initial.reset_required?await api.get(base,{requireFresh:true}):initial;
-      return {data,obligations,key};
-    }, ({data,obligations,key}) => {
+      return {data,key};
+    }, ({data,key}) => {
       if (!container.isConnected) return;
       if(key!==taskQuery())return;
       state.loadError = null;
@@ -1723,7 +1725,6 @@ async function loadTasks(container,{full=false}={}) {
       state.tasks = taskCardSubtasks.get(container.querySelector('#task-list'))?.reconcile(rows) ?? rows;
       if(data.delta_cursor)taskPageDeltaStates.set(container,{key,cursor:data.delta_cursor,visibility});
       else taskPageDeltaStates.delete(container);
-      state.assignmentRequests = obligations.data ?? [];
       applyTaskPagePermissions(container);
       renderTaskList(container);
     });
@@ -6044,7 +6045,7 @@ export async function render(container, { user }) {
 
   // Daten laden (Filter-State aus vorheriger Session berücksichtigen)
   try {
-    const [tasksData, metaData, preferencesData, activityData, assignmentData, placesData, placeStatusData] = await Promise.all([
+    const [tasksData, metaData, preferencesData, activityData, placesData, placeStatusData] = await Promise.all([
       api.get(`/tasks${taskQuery()}`),
       api.get('/tasks/meta/options'),
       // Reine Anzeigepräferenz: ein Fehler hier darf die Aufgabenliste nicht
@@ -6053,7 +6054,6 @@ export async function render(container, { user }) {
       // Activity Templates augment assignment; a catalogue failure must not
       // make the ordinary task list look unavailable.
       api.get('/automation/activity-options').catch(() => ({ data: { activities: [] } })),
-      api.get('/automation/obligations').catch(() => ({ data: [] })),
       api.get('/planning/places?active=false').catch(() => ({ data: [] })),
       api.get('/planning/place-search/status').catch(() => ({ data: { configured: false } })),
     ]);
@@ -6070,7 +6070,7 @@ export async function render(container, { user }) {
     state.activityTemplates = activityData.data?.activities ?? [];
     state.rotationGroups=activityData.data?.rotation_groups??[];
     state.skills = activityData.data?.skills ?? [];
-    state.assignmentRequests = assignmentData.data ?? [];
+    state.assignmentRequests = [];
     state.places = placesData.data ?? [];
     state.placeSearchStatus = placeStatusData.data ?? { configured: false };
     state.templateSwitchWarning = preferencesData.data?.tasks_template_switch_warning !== false;

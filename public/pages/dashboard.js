@@ -3814,6 +3814,7 @@ export async function render(container, { user }) {
   // dahinter waere die falscheste aller Angaben.
   let lastLoadedAt = null;
   try {
+    const moduleCountsGeneration = window.yuvomi?.moduleCountsGeneration?.();
     const [dashRes, weatherRes, prefsRes] = await Promise.all([
       api.get(layoutHintQuery('/dashboard')),
       api.get(`/weather?lang=${encodeURIComponent(getLocale())}`).catch(() => ({ data: null })),
@@ -3829,6 +3830,7 @@ export async function render(container, { user }) {
      * andere Zahl, also nimmt der Speicher sie nur ungefiltert an. */
     window.yuvomi?.primeModuleCountsFrom?.(dashRes, {
       filtered: layoutHintQuery('/dashboard') !== '/dashboard',
+      generation: moduleCountsGeneration,
     });
     // Geburtstags-Termine tragen serverseitig einen sprachneutralen Titel
     // („Birthday: <Name>"); anhand von birthday_name in die aktive Sprache

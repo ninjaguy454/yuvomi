@@ -1376,6 +1376,9 @@ const MODULE_COUNTS_TTL = 60_000;
 function resetModuleCounts() {
   _moduleCounts = {};
   _moduleCountsAt = 0;
+  if (_moduleCountsRefreshTimer) clearTimeout(_moduleCountsRefreshTimer);
+  _moduleCountsRefreshTimer = null;
+  _moduleCountsFirstInvalidatedAt = 0;
   // Und der Generationszähler steigt: eine Antwort, die noch unterwegs ist,
   // gehört der alten Sitzung und darf den Speicher nicht wieder füllen.
   _moduleCountsGen += 1;
@@ -1434,21 +1437,29 @@ function primeNavBadges(data) {
  * Abhaken): sonst loeste jeder Haken einen eigenen Abruf aus.
  */
 let _moduleCountsRefreshTimer = null;
+let _moduleCountsFirstInvalidatedAt = 0;
 function invalidateModuleCounts() {
   _moduleCountsAt = 0;
   /* DIE GENERATION MUSS MIT, sonst frisst eine noch laufende Antwort die
    * Entwertung. Sie stammt von VOR der Aenderung, kaeme aber danach an, setzte
    * ihren alten Stand in den Speicher und stempelte `_moduleCountsAt` neu -
-   * der entprellte Abruf 300 ms spaeter liefe dann in die TTL-Sperre, und die
+   * der entprellte Abruf spaeter liefe dann in die TTL-Sperre, und die
    * Zahl bliebe bis zu einer Minute auf dem Stand vor der Aenderung stehen.
    * Also genau in der Serie schneller Haken, fuer die diese Funktion da ist.
    * `resetModuleCounts()` direkt darueber tut aus demselben Grund dasselbe. */
   _moduleCountsGen += 1;
+  const now = Date.now();
+  if (!_moduleCountsFirstInvalidatedAt) _moduleCountsFirstInvalidatedAt = now;
   if (_moduleCountsRefreshTimer) clearTimeout(_moduleCountsRefreshTimer);
+  // A rapid sequence of parent/child status edits should not fetch the whole
+  // Dashboard after every interaction. The one-second ceiling still refreshes
+  // counts during a long sequence; the final edit settles within 600 ms.
+  const delay = Math.max(0, Math.min(600, 1000 - (now - _moduleCountsFirstInvalidatedAt)));
   _moduleCountsRefreshTimer = setTimeout(() => {
     _moduleCountsRefreshTimer = null;
+    _moduleCountsFirstInvalidatedAt = 0;
     refreshModuleCounts();
-  }, 300);
+  }, delay);
 }
 
 /**
@@ -1466,8 +1477,10 @@ function invalidateModuleCounts() {
  * eine UNGEFILTERTE Antwort darf den Speicher fuellen. Kommt sie gefiltert,
  * bleibt es beim eigenen Abruf.
  */
-function primeModuleCountsFrom(data, { filtered = false } = {}) {
-  if (filtered || !data) return;
+function primeModuleCountsFrom(data, { filtered = false, generation } = {}) {
+  // Dashboard may finish an older request after a Task mutation or logout.
+  // Its counts are only authoritative for the generation in which it started.
+  if (filtered || !data || generation !== _moduleCountsGen) return;
   _moduleCounts = moduleCountsFrom(data, {
     isAdmin: currentUser?.role === 'admin',
     shoppingVisible: navItems().some((item) => item.module === 'shopping'),
@@ -4873,6 +4886,7 @@ window.yuvomi = {
   // Die Uebersichtsseite reicht ihre `/dashboard`-Antwort herein, statt sie ein
   // zweites Mal holen zu lassen. Begruendung an `primeModuleCountsFrom`.
   primeModuleCountsFrom,
+  moduleCountsGeneration: () => _moduleCountsGen,
   applyTheme: (value) => {
     if(document.documentElement.hasAttribute('data-named-theme')) return;
     if (value === 'dark') {

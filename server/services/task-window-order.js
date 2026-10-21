@@ -1,4 +1,5 @@
 import { isValidTimeZone, storedToInstantMs } from '../utils/timezone.js';
+import { createHash } from 'node:crypto';
 
 const PRIORITY = { urgent: 0, high: 1, medium: 2, low: 3, none: 4 };
 const FALLBACK_CATEGORY = 'misc';
@@ -70,6 +71,8 @@ export function orderTaskWindow(rows, {
   }
   const categoryOrder = new Map(categories.map((row, index) => [row.key, index]));
   const dueOrder = ['overdue','today','thisWeek','nextWeek','later','noDate','expired','skipped','closed_incomplete'];
+  if(groupMode==='status' && [...groups.keys()].some(id=>!statusOrder.includes(id)))
+    throw new RangeError('Status group order is incomplete');
   const ids = [...groups.keys()].sort((a, b) => {
     if (groupMode === 'category') return (categoryOrder.get(a) ?? Number.MAX_SAFE_INTEGER) - (categoryOrder.get(b) ?? Number.MAX_SAFE_INTEGER)
       || categoryLabel(a).localeCompare(categoryLabel(b), locale);
@@ -127,4 +130,31 @@ export function sliceTaskWindow(groups, { offset = 0, limit = 30, collapsed = []
   const available = groups.reduce((sum,group)=>sum+(closed.has(group.id)?0:group.ids.length),0);
   return { groups:pages, ids:pages.flatMap(group=>group.ids), total:available,
     next_offset:offset + limit < available ? offset + limit : null };
+}
+
+/** Query identity for a future signed page cursor. Include every view setting
+ * that changes row membership, order, group labels, or the visible boundary.
+ * Actor and effective authorization remain separate cursor claims. */
+export function taskWindowQueryKey(filters = {}, view = {}, { includeOffset = true } = {}) {
+  const entries = Object.entries(filters).filter(([key])=>key!=='delta'&&key!=='cursor')
+    .map(([key,value])=>[key,[value].flat().map(String).sort()]).sort(([a],[b])=>a.localeCompare(b));
+  if(view.bucketSorts!==undefined && !(view.bucketSorts instanceof Map))throw new TypeError('Bucket sorts must be a Map');
+  const buckets=[...(view.bucketSorts||new Map())].sort(([a],[b])=>a.localeCompare(b));
+  const value={filters:entries,groupMode:view.groupMode||'category',sort:view.sort||null,
+    bucketSorts:buckets,categories:(view.categories||[]).map(row=>[row.key,row.name,row.label_key]),
+    locale:view.locale||'en',timeZone:view.timeZone||null,today:view.today||null,
+    statusOrder:view.statusOrder||[],collapsed:[...(view.collapsed||[])].sort(),
+    ...(includeOffset?{offset:view.offset||0}:{}),limit:view.limit||30};
+  return createHash('sha256').update(JSON.stringify(value)).digest('base64url');
+}
+
+/** ID-only reconciliation for one signed, authorized page. Never send an
+ * off-page changed row merely because its ID appears in the global journal. */
+export function diffAuthorizedTaskWindow(previous, current, changedIds = [], queryKey) {
+  if (!previous || previous.query_key!==queryKey || !Array.isArray(previous.ids))
+    return { reset_required:true, reason:'query_changed' };
+  const old=new Set(previous.ids),next=new Set(current.ids),changed=new Set(changedIds);
+  return {reset_required:false,removed:previous.ids.filter(id=>!next.has(id)),
+    hydrate_ids:current.ids.filter(id=>!old.has(id)||changed.has(id)),
+    ids:[...current.ids],groups:current.groups,total:current.total,next_offset:current.next_offset};
 }

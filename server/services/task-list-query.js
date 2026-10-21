@@ -2,9 +2,10 @@ import { normalizeCategoryFilter, taskCategoryWhere, taskScopeWhere, taskStartPr
 import { taskUnskippedWhere } from './task-window.js';
 import { taskVisibilityWhere } from './task-access.js';
 import { normalizeTags, tagKey } from '../utils/task-tags.js';
-import { orderTaskWindow, sliceTaskWindow } from './task-window-order.js';
+import { orderTaskWindow, sliceTaskWindow, taskWindowQueryKey } from './task-window-order.js';
 import { attachTaskLocations } from './task-locations.js';
 import { todayKey } from '../utils/timezone.js';
+import { captureTaskListClock } from './task-list-delta.js';
 
 const asList = value => value === undefined ? [] : [value].flat().filter(item => item !== '');
 
@@ -113,7 +114,8 @@ export function readTaskListDescriptors(d, actor, query = {}, { participants = f
     // infer its progress from physical checkboxes until that projection has
     // full parity with hydrateTask's supervisor filtering.
     if(d.prepare(`SELECT 1 FROM task_supervision_actions WHERE source_task_id IN (${ids.map(()=>'?').join(',')}) LIMIT 1`).get(...ids)
-      ||d.prepare(`SELECT 1 FROM task_activity_support_tasks WHERE task_id IN (${ids.map(()=>'?').join(',')}) LIMIT 1`).get(...ids))
+      ||d.prepare(`SELECT 1 FROM task_activity_support_tasks WHERE task_id IN (${ids.map(()=>'?').join(',')}) LIMIT 1`).get(...ids)
+      ||d.prepare(`SELECT 1 FROM workflow_instance_tasks WHERE task_id IN (${ids.map(()=>'?').join(',')}) LIMIT 1`).get(...ids))
       throw new RangeError('Supervised Task progress needs the full projection');
     for(const row of page){
       const scope=(children.get(row.id)||[]).filter(child=>!child.archived_at);
@@ -193,12 +195,24 @@ export function readOrderedTaskWindow(d,actor,query={},view={}) {
     throw new RangeError('Task window projection is not ready for this view');
   if (mode==='status' && !Array.isArray(view.statusOrder))
     throw new TypeError('Status order is required for a Task window');
+  if ((mode==='category'||fields.includes('category')) && typeof view.categoryLabel!=='function')
+    throw new TypeError('Localized category labels are required for a Task window');
+  if (mode==='location' && typeof view.labels?.noLocation!=='string')
+    throw new TypeError('Localized empty-location label is required for a Task window');
   const requiresDue=mode==='due'||fields.some(value=>value==='due'||value==='default');
   if (requiresDue && !view.timeZone)
     throw new TypeError('Viewer time zone is required for a Task window');
   const now=new Date();
+  const day=todayKey(d,now),scopeKey=taskWindowQueryKey(query,{...view,today:day},{includeOffset:false});
+  if (view.expectedScopeKey!==undefined && view.expectedScopeKey!==scopeKey)
+    return {reset_required:true,reason:'query_changed'};
+  const clock=captureTaskListClock(d);
+  if (view.expectedClock!==undefined && view.expectedClock!==clock)
+    return {reset_required:true,reason:'window_changed'};
   const {rows,visibility}=readTaskListDescriptors(d,actor,query,{location:mode==='location'||fields.includes('location'),
     tripDue:requiresDue,now});
-  const groups=orderTaskWindow(rows,{...view,now,today:todayKey(d,now)});
-  return {...sliceTaskWindow(groups,view),visibility};
+  const groups=orderTaskWindow(rows,{...view,now,today:day});
+  return {...sliceTaskWindow(groups,view),visibility,clock,
+    query_key:taskWindowQueryKey(query,{...view,today:day}),
+    scope_key:scopeKey};
 }

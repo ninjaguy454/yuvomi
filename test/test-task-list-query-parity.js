@@ -91,8 +91,14 @@ test('internal page recomputes entry, refill, and row ACL before selecting IDs',
   }
   const view={groupMode:'none',sort:{field:'title',direction:'asc'},offset:0,limit:2};
   const page=()=>readOrderedTaskWindow(f.d,2,{},view);
-  assert.deepEqual(page().ids,ids.slice(0,2));
+  const initial=page();assert.deepEqual(initial.ids,ids.slice(0,2));
+  assert.deepEqual(readOrderedTaskWindow(f.d,2,{}, {...view,offset:2,expectedClock:initial.clock,
+    expectedScopeKey:initial.scope_key}).ids,ids.slice(2));
+  assert.equal(readOrderedTaskWindow(f.d,2,{}, {...view,locale:'de',offset:2,
+    expectedScopeKey:initial.scope_key}).reason,'query_changed');
   f.d.prepare("UPDATE tasks SET title='Aardvark' WHERE id=?").run(ids[3]);
+  assert.equal(readOrderedTaskWindow(f.d,2,{}, {...view,offset:2,expectedClock:initial.clock}).reset_required,true,
+    'page two cannot continue across a changed ordering snapshot');
   assert.deepEqual(page().ids,[ids[3],ids[0]],'off-page edit enters visible boundary');
   f.d.prepare('UPDATE tasks SET archived_at=? WHERE id=?').run('2026-11-01T12:00:00Z',ids[3]);
   assert.deepEqual(page().ids,ids.slice(0,2),'archive refills boundary');
@@ -141,7 +147,8 @@ test('trip display deadline follows the next authorized active child',async t=>{
   const other=await f.create({title:'Other',assigned_to:[2],due_date:'2026-11-10'});
   assert.equal(other.status,201);
   const localSort=new Map([[`list:category:${root.data.category}`,{field:'due',direction:'asc'}]]);
-  const view={groupMode:'category',categories:[{key:root.data.category}],sort:{field:'title',direction:'asc'},
+  const view={groupMode:'category',categories:[{key:root.data.category}],categoryLabel:key=>key,
+    sort:{field:'title',direction:'asc'},
     bucketSorts:localSort,limit:10,timeZone:'UTC'};
   assert.throws(()=>readOrderedTaskWindow(f.d,1,{}, {...view,timeZone:null}),/Viewer time zone/);
   const page=readOrderedTaskWindow(f.d,1,{},view);

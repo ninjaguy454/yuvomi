@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
-import { orderTaskWindow, sliceTaskWindow } from '../server/services/task-window-order.js';
+import { orderTaskWindow, sliceTaskWindow, taskWindowQueryKey, diffAuthorizedTaskWindow } from '../server/services/task-window-order.js';
 
 const source = readFileSync(new URL('../public/pages/tasks.js', import.meta.url), 'utf8');
 const group = source.slice(source.indexOf('function groupBy('), source.indexOf('// Render-Bausteine', source.indexOf('function groupBy(')));
@@ -139,4 +139,41 @@ test('status groups retain browser status order and archive placement',()=>{
   const expected=vm.runInContext("taskBuckets(rows,'status').map(g=>({id:g.id,ids:sortedTasks(g.tasks).map(row=>row.id)}))",context);
   const actual=orderTaskWindow(rows,{groupMode:'status',statusOrder:[...statuses,'archived'],sort:{field:'title',direction:'asc'}});
   assert.deepEqual(actual.map(g=>({id:g.id,ids:g.ids})),JSON.parse(JSON.stringify(expected)));
+});
+
+test('window identity changes for membership, display order, and page boundary',()=>{
+  const base={groupMode:'category',sort:{field:'title',direction:'asc'},locale:'en',
+    timeZone:'America/New_York',today:'2026-10-21',categories:[{key:'misc',name:'Misc'}],
+    bucketSorts:new Map([['list:category:misc',{field:'due',direction:'asc'}]]),
+    offset:0,limit:30,collapsed:[]};
+  const key=taskWindowQueryKey({status:'open',delta:'ignored'},base);
+  assert.equal(key,taskWindowQueryKey({status:'open'},base),'transport cursor is excluded');
+  const changed=[
+    [{status:'done'},base],
+    [{status:'open',search:'milk'},base],
+    [{status:'open'},{...base,sort:{field:'due',direction:'asc'}}],
+    [{status:'open'},{...base,bucketSorts:new Map([['list:category:misc',{field:'default',direction:'asc'}]])}],
+    [{status:'open'},{...base,categories:[{key:'misc',name:'Other'}]}],
+    [{status:'open'},{...base,locale:'de'}],
+    [{status:'open'},{...base,timeZone:'Europe/Berlin'}],
+    [{status:'open'},{...base,today:'2026-10-22'}],
+    [{status:'open'},{...base,collapsed:['misc']}],
+    [{status:'open'},{...base,offset:30}],
+  ];
+  for(const [filter,view] of changed)assert.notEqual(taskWindowQueryKey(filter,view),key);
+  assert.equal(taskWindowQueryKey({status:'open'},base,{includeOffset:false}),
+    taskWindowQueryKey({status:'open'},{...base,offset:30},{includeOffset:false}),
+    'page navigation shares a scope key but never a page identity');
+});
+
+test('page delta sends only newly visible or changed authorized rows and ID-only removals',()=>{
+  const page=ids=>({ids,groups:[{id:'all',total:4,ids}],total:4,next_offset:2});
+  const old={...page([1,2]),query_key:'same'};
+  assert.deepEqual(diffAuthorizedTaskWindow(old,page([1,2]),[4],'same').hydrate_ids,[],
+    'an off-page edit after the boundary has no visible card payload');
+  const moved=diffAuthorizedTaskWindow(old,page([4,1]),[4],'same');
+  assert.deepEqual(moved.hydrate_ids,[4]);assert.deepEqual(moved.removed,[2]);
+  const revoked=diffAuthorizedTaskWindow(old,page([2,3]),[1],'same');
+  assert.deepEqual(revoked.removed,[1]);assert.deepEqual(revoked.hydrate_ids,[3]);
+  assert.equal(diffAuthorizedTaskWindow(old,page([1,2]),[],'new').reset_required,true);
 });

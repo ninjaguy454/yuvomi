@@ -55,6 +55,39 @@ test('bounded start projection walks only changed roots and their linked ancesto
   assert.equal(scope.taskStartProjection(guarded,{tasks:[{id:support}],bounded:true}).start(counterpart),expected);
 });
 
+test('batched start projection preserves linked ancestors without one read per root',async t=>{
+  clock(t);
+  const source=task(),action=task({parent:source,date:null,time:null});
+  const support=task({title:'Helper',date:null,time:null}),counterpart=task({title:'Helper step',parent:support,date:null,time:null});
+  d.prepare("INSERT INTO task_activity_support_tasks(source_task_id,task_id,role) VALUES(?,?,'supervisor')").run(source,support);
+  d.prepare("INSERT INTO task_supervision_actions(source_task_id,action_task_id,counterpart_task_id,learner_user_id,supervisor_user_id,state) VALUES(?,?,?,?,?,'assigned')").run(source,action,counterpart,2,1);
+  const roots=[{id:support}];for(let n=0;n<250;n++)roots.push({id:task({title:`Leaf ${n}`,date:null,time:null})});
+  const expected=scope.taskStartProjection(d,{tasks:roots,bounded:true});
+  let prepares=0;
+  const guarded={prepare(sql){prepares++;assert.ok(!String(sql).includes('WITH RECURSIVE edges'));return d.prepare(sql);}};
+  const batched=scope.taskStartProjection(guarded,{tasks:roots,batched:true});
+  for(const row of roots)assert.equal(batched.start(row.id),expected.start(row.id));
+  assert.equal(batched.start(counterpart),expected.start(counterpart));
+  assert.ok(prepares<40,`expected batched reads, saw ${prepares} prepares`);
+});
+
+test('batched start projection carries linked ancestry across 400-row boundaries',t=>{
+  clock(t);
+  const source=task({date:'2026-09-22'}),action=task({parent:source,date:null,time:null});
+  const support=task({title:'Boundary helper',date:null,time:null});
+  const counterpart=task({parent:support,date:null,time:null});
+  d.prepare("INSERT INTO task_activity_support_tasks(source_task_id,task_id,role) VALUES(?,?,'supervisor')").run(source,support);
+  d.prepare("INSERT INTO task_supervision_actions(source_task_id,action_task_id,counterpart_task_id,learner_user_id,supervisor_user_id,state) VALUES(?,?,?,?,?,'assigned')").run(source,action,counterpart,2,1);
+  const roots=Array.from({length:420},(_,n)=>({id:task({title:`Boundary ${n}`,date:null,time:null})}));
+  roots.push({id:support});
+  let prepares=0;const guarded={prepare(sql){prepares++;return d.prepare(sql);}};
+  const batched=scope.taskStartProjection(guarded,{tasks:roots,batched:true});
+  const bounded=scope.taskStartProjection(d,{tasks:[{id:support}],bounded:true});
+  for(const id of [source,action,support,counterpart])assert.equal(batched.start(id),bounded.start(id));
+  assert.equal(batched.visible(support),false);
+  assert.ok(prepares<45,`batch boundary produced ${prepares} prepares`);
+});
+
 test('bedtime same-day start is hidden before 19:00 and visible exactly at its household-local boundary',async t=>{
   clock(t);const id=task();
   for(const instant of ['2026-09-20T11:30:00Z','2026-09-20T22:59:59.999Z']){

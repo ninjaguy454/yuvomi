@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { performance } from 'node:perf_hooks';
 import { scoringFixture } from './helpers/task-scoring-route-fixture.js';
-import { readTaskListDescriptors } from '../server/services/task-list-query.js';
+import { readTaskListDescriptors, readOrderedTaskWindow } from '../server/services/task-list-query.js';
 
 const percentile = (values, fraction) => {
   const sorted = [...values].sort((a,b) => a-b);
@@ -16,18 +16,35 @@ test('synthetic descriptor versus full-card read by fixture size', { timeout: 12
   let size = 0;
   for (const target of [20,250,1000]) {
     f.d.transaction(() => { while (size < target) { size++; insert.run(`Window Task ${size}`); } })();
-    const descriptor = [], full = [], writes = f.changes();
+    const descriptor = [], page = [], full = [], writes = f.changes();
     for (let n = 0; n < 5; n++) {
       let at = performance.now();
       const window = readTaskListDescriptors(f.d, 1);
       descriptor.push(performance.now() - at);
       assert.equal(window.rows.length, target);
       at = performance.now();
+      const first=readOrderedTaskWindow(f.d,1,{}, {groupMode:'none',sort:{field:'title',direction:'asc'},limit:30});
+      page.push(performance.now() - at);
+      assert.equal(first.ids.length,Math.min(target,30));assert.equal(first.total,target);
+      at = performance.now();
       const response = await f.call('GET', '/tasks?include_future=1');
       full.push(performance.now() - at);
       assert.equal(response.status, 200); assert.equal(response.data.length, target);
     }
     assert.equal(f.changes(), writes, 'reads must make zero writes');
-    process.stdout.write(`WINDOW_BENCH size=${target} n=5 descriptor_p50=${percentile(descriptor,.5)} descriptor_p95=${percentile(descriptor,.95)} full_p50=${percentile(full,.5)} full_p95=${percentile(full,.95)} ms\n`);
+    const originalPrepare = f.d.prepare;
+    const calls = { prepare: 0, get: 0, all: 0, run: 0 };
+    f.d.prepare = function(sql) {
+      calls.prepare++;
+      const statement = originalPrepare.call(this, sql);
+      return new Proxy(statement, { get(target, property) {
+        if (['get','all','run'].includes(property)) return (...args) => {
+          calls[property]++; return target[property](...args);
+        };
+        const value = target[property]; return typeof value === 'function' ? value.bind(target) : value;
+      } });
+    };
+    try { readTaskListDescriptors(f.d, 1); } finally { f.d.prepare = originalPrepare; }
+    process.stdout.write(`WINDOW_BENCH size=${target} n=5 descriptor_p50=${percentile(descriptor,.5)} descriptor_p95=${percentile(descriptor,.95)} page_p50=${percentile(page,.5)} page_p95=${percentile(page,.95)} full_p50=${percentile(full,.5)} full_p95=${percentile(full,.95)} prepares=${calls.prepare} gets=${calls.get} alls=${calls.all} ms\n`);
   }
 });

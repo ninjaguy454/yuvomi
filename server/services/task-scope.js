@@ -95,7 +95,7 @@ export function taskScopeNeedsToday({ includeFuture = false } = {}) {
  * Resolve wall times once per distinct window using the lifecycle's DST policy;
  * lexical wall-clock comparisons would hide work again during a DST overlap.
  * Callers still enforce privacy independently, before returning rows/metadata. */
-export function taskStartProjection(d, { now = new Date(), tasks = null, bounded = false } = {}) {
+export function taskStartProjection(d, { now = new Date(), tasks = null, bounded = false, batched = false } = {}) {
   const serverNow = Number(now), timeZone = householdTimeZone(d);
   const tables = new Set(d.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('task_activity_support_tasks','task_supervision_actions')").all().map(row=>row.name));
   const columns = new Set(d.prepare('PRAGMA table_info(tasks)').all().map(row=>row.name));
@@ -106,7 +106,44 @@ export function taskStartProjection(d, { now = new Date(), tasks = null, bounded
     'SELECT counterpart_task_id,action_task_id FROM task_supervision_actions WHERE counterpart_task_id IS NOT NULL');
   const seeds = tasks == null ? 'SELECT id FROM tasks' : 'SELECT CAST(value AS INTEGER) FROM json_each(?)';
   let graph;
-  if(bounded&&tasks!=null){
+  if(batched&&tasks!=null){
+    // A window needs the same linked start inheritance as a delta, but can
+    // contain hundreds of roots. Walk structural descendants in one indexed
+    // CTE, then fetch their direct parents and helper links in bounded batches.
+    // No household-wide edge table is materialized on this path.
+    const seedIds=[...new Set(tasks.map(row=>Number(row.id??row)).filter(Number.isSafeInteger))];
+    const descendantIds=seedIds.length?d.prepare(`WITH RECURSIVE down(id) AS (
+      SELECT CAST(value AS INTEGER) FROM json_each(?)
+      UNION SELECT t.id FROM tasks t JOIN down ON t.parent_task_id=down.id
+    ) SELECT id FROM down`).all(JSON.stringify(seedIds)).map(row=>row.id):[];
+    const found=new Map(),pending=new Set(descendantIds);
+    while(pending.size){
+      const ids=[...pending].slice(0,400);for(const id of ids)pending.delete(id);
+      const rows=d.prepare(`SELECT id,parent_task_id,start_date,${columns.has('start_time')?'start_time':'NULL AS start_time'}
+        FROM tasks WHERE id IN (${ids.map(()=>'?').join(',')})`).all(...ids);
+      const parts=[];
+      if(tables.has('task_activity_support_tasks'))parts.push(
+        'SELECT task_id AS child_id,source_task_id AS parent_id FROM task_activity_support_tasks WHERE task_id IN (SELECT value FROM json_each(?))');
+      if(tables.has('task_supervision_actions'))parts.push(
+        'SELECT action_task_id AS child_id,source_task_id AS parent_id FROM task_supervision_actions WHERE action_task_id IN (SELECT value FROM json_each(?))',
+        'SELECT counterpart_task_id AS child_id,source_task_id AS parent_id FROM task_supervision_actions WHERE counterpart_task_id IN (SELECT value FROM json_each(?))',
+        'SELECT counterpart_task_id AS child_id,action_task_id AS parent_id FROM task_supervision_actions WHERE counterpart_task_id IN (SELECT value FROM json_each(?))');
+      const linked=new Map();
+      if(parts.length)for(const edge of d.prepare(parts.join(' UNION ALL ')).all(...parts.map(()=>JSON.stringify(ids)))){
+        const parents=linked.get(edge.child_id)||new Set();
+        if(edge.parent_id)parents.add(edge.parent_id);
+        linked.set(edge.child_id,parents);
+      }
+      for(const row of rows){
+        if(found.has(row.id))continue;
+        const parents=new Set(row.parent_task_id?[row.parent_task_id]:[]);
+        for(const parent of linked.get(row.id)||[])parents.add(parent);
+        found.set(row.id,{...row,parents:JSON.stringify([...parents])});
+        for(const parent of parents)if(!found.has(parent))pending.add(parent);
+      }
+    }
+    graph=[...found.values()];
+  }else if(bounded&&tasks!=null){
     // A delta hydrates a few changed roots. The ordinary graph query above
     // materializes every structural/helper edge in the household even for one
     // root, defeating the restricted list read. Walk indexed edges only from

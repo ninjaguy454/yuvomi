@@ -9205,6 +9205,18 @@ FORK_MIGRATIONS.push({version:10069,description:'Grace period after restoring a 
   ALTER TABLE tasks ADD COLUMN auto_archive_after TEXT;
   ALTER TABLE tasks ADD COLUMN auto_archived_at TEXT;
 `});
+FORK_MIGRATIONS.push({version:10070,description:'Avoid full-text Task reindexing on assignment and revision-only updates',up:`
+  DROP TRIGGER trg_search_tasks_au;
+  CREATE TRIGGER trg_search_tasks_au AFTER UPDATE OF title,description ON tasks
+  WHEN NEW.title IS NOT OLD.title OR NEW.description IS NOT OLD.description BEGIN
+    DELETE FROM search_index WHERE entity='task' AND entity_id=OLD.id;
+    INSERT INTO search_index(entity,entity_id,title,body)
+      SELECT 'task',t.id,COALESCE(t.title,''),
+        TRIM(COALESCE(t.description,'') || ' ' ||
+          COALESCE((SELECT group_concat(tag,' ') FROM task_tags WHERE task_id=t.id),''))
+      FROM tasks t WHERE t.id=NEW.id;
+  END;
+`});
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];
 
 const FORK_MIGRATION_REMAPS = [

@@ -20,7 +20,7 @@ test('mounted Tasks page discards a delayed delta after a newer edit',{timeout:6
     if(req.path==='/preferences')return res.json({data:{}});
     if(req.path==='/automation/obligations'){obligationRequests++;return res.json({data:[]});}
     const answer=await f.call(req.method,req.url,['GET','HEAD'].includes(req.method)?undefined:req.body);
-    if(req.path==='/tasks'&&req.query.delta){
+    if(req.path==='/tasks/window'&&req.query.window_delta){
       deltaRequests.push(req.originalUrl);
       if(holdNext){holdNext=false;firstPending?.();await new Promise(resolve=>{releaseFirst=resolve;});}
     }

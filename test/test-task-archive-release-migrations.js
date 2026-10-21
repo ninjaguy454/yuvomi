@@ -15,7 +15,7 @@ function migrate(d,migration){
   if(migration.foreignKeysOff)d.pragma('foreign_keys=ON');
 }
 
-test('schema 10067 to 10069 synthetic dry run preserves historical Task and reward rows',()=>{
+test('schema 10067 to 10070 synthetic dry run preserves historical Task and reward rows',()=>{
   const d=new Database(':memory:');d.pragma('foreign_keys=ON');
   try{
     for(const migration of ALL_MIGRATIONS.filter(row=>row.version<=10067))migrate(d,migration);
@@ -25,8 +25,8 @@ test('schema 10067 to 10069 synthetic dry run preserves historical Task and rewa
     const before={task:d.prepare('SELECT * FROM tasks WHERE id=?').get(id),
       completions:d.prepare('SELECT * FROM task_completions WHERE task_id=?').all(id),
       awards:d.prepare('SELECT * FROM reward_ledger').all()};
-    const pending=ALL_MIGRATIONS.filter(row=>row.version>=10068&&row.version<=10069);
-    assert.deepEqual(pending.map(row=>row.version),[10068,10069]);
+    const pending=ALL_MIGRATIONS.filter(row=>row.version>=10068&&row.version<=10070);
+    assert.deepEqual(pending.map(row=>row.version),[10068,10069,10070]);
     for(const migration of pending)migrate(d,migration);
     const after=d.prepare('SELECT * FROM tasks WHERE id=?').get(id);
     assert.deepEqual(Object.fromEntries(Object.entries(after).filter(([key])=>key in before.task)),before.task);

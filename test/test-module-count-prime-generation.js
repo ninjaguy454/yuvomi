@@ -27,6 +27,20 @@ test('an older Dashboard response cannot prime nav counts after a Task mutation'
   assert.ok(vm.runInContext('_moduleCountsAt', context) > 0);
 });
 
+test('a Dashboard response from a prior session cannot restore counts after reset', () => {
+  const context = vm.createContext({
+    Date, setTimeout: () => 1, clearTimeout: () => {},
+    currentUser: { role: 'member' }, navItems: () => [],
+    moduleCountsFrom: data => data, navBadgeCountsFrom: () => ({}), setNavBadge: () => {},
+  });
+  vm.runInContext(router.slice(start, end), context);
+  context.prior = vm.runInContext('_moduleCountsGen', context);
+  vm.runInContext('resetModuleCounts()', context);
+  vm.runInContext('primeModuleCountsFrom({ openTaskCount: 7 }, { generation: prior })', context);
+  assert.equal(vm.runInContext('_moduleCountsAt', context), 0);
+  assert.equal(vm.runInContext('Object.keys(_moduleCounts).length', context), 0);
+});
+
 test('Dashboard captures the count generation before starting its request', () => {
   const capture = dashboard.indexOf('const moduleCountsGeneration = window.yuvomi?.moduleCountsGeneration?.();');
   const request = dashboard.indexOf("api.get(layoutHintQuery('/dashboard'))", capture);

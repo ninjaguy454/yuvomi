@@ -256,6 +256,11 @@ export function bindDocumentAttachField(panel, {
   renderChips();
 
   return {
+    /** Freeze upload access with the form version being saved. */
+    policySnapshot: () => ({
+      visibility: typeof visibility === 'function' ? visibility() : visibility,
+      allowedMemberIds: typeof allowedMemberIds === 'function' ? allowedMemberIds() : allowedMemberIds,
+    }),
     /** IDs ohne Upload - für Aufrufer, die nur den aktuellen Stand brauchen. */
     documentIds: () => items.filter((i) => i.kind === 'document').map((i) => i.id),
 
@@ -269,20 +274,24 @@ export function bindDocumentAttachField(panel, {
      * angehängt zu haben glaubt.
      * @returns {Promise<number[]>}
      */
-    async commit() {
-      for (const item of items) {
+    async commit(policy = null) {
+      // This call saves one selected version. Files or links added while an
+      // upload is pending belong to a later form save.
+      const selected=[...items];
+      for (const item of selected) {
         if (item.kind !== 'file') continue;
         // Sichtbarkeit erst beim Hochladen aufloesen: in einem Formular, das
         // sie selbst fuehrt (Aufgaben), kann sie zwischen Dateiwahl und
         // Speichern noch umgestellt worden sein.
-        const vis = typeof visibility === 'function' ? visibility() : visibility;
+        const vis = policy ? policy.visibility : typeof visibility === 'function' ? visibility() : visibility;
         const res = await api.post('/documents', {
           name: documentName ? documentName(item.file) : item.file.name,
           description: '',
           category: typeof category === 'function' ? category() : category,
           visibility: vis,
           status: 'active',
-          allowed_member_ids: vis === 'restricted' && allowedMemberIds ? allowedMemberIds() : [],
+          allowed_member_ids: vis === 'restricted' && allowedMemberIds
+            ? policy ? policy.allowedMemberIds || [] : allowedMemberIds() : [],
           original_name: item.file.name,
           content_data: await readFileAsDataUrl(item.file),
           ...(folderKey ? { folder_key: folderKey } : {}),
@@ -294,7 +303,7 @@ export function bindDocumentAttachField(panel, {
         item.mime = res.data?.mime_type || item.file?.type || '';
         delete item.file;
       }
-      return items.filter((i) => i.id).map((i) => i.id);
+      return selected.filter((i) => i.id).map((i) => i.id);
     },
   };
 }

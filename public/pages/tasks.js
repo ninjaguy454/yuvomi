@@ -1341,6 +1341,7 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
       })}
 
       <div id="task-form-error" class="form-error" hidden></div>
+      <p id="task-form-save-status" class="form-hint" role="status" aria-live="polite" hidden></p>
 
       <div class="modal-panel__footer modal-panel__footer--plain">
         ${isEdit ? `
@@ -3033,9 +3034,14 @@ async function saveTaskRecord(form, body) {
   // edited the form after a lost response, apply those edits to this same task.
   idField.value = savedTaskId;
   taskCreateAttempts.delete(form);
-  if (serialized !== attempt.serialized) response = await api.put(`/tasks/${savedTaskId}`, { ...body, ...taskRevision(response.data) });
   const controls = taskFormControls.get(form);
   if (controls && response.data) controls.originalTask = structuredClone(response.data);
+  if (serialized !== attempt.serialized) {
+    const expectedRevision=Number(response?.data?.revision);
+    try { response = await api.put(`/tasks/${savedTaskId}`, { ...body, ...taskRevision(response.data) }); }
+    catch(error){error.taskSaveExpectedRevision=expectedRevision;throw error;}
+    if (controls && response.data) controls.originalTask = structuredClone(response.data);
+  }
   return savedTaskId;
 }
 
@@ -3061,6 +3067,10 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
   errorEl.hidden = true;
   submitBtn.disabled = true;
   submitBtn.textContent = t('common.saving');
+  const saveStatus=form.querySelector('#task-form-save-status');
+  const setSaveStatus=(message)=>{if(saveStatus){saveStatus.textContent=message;saveStatus.hidden=!message;}};
+  const clearErrorFeedbackOnEdit=()=>form.addEventListener('input',()=>submitBtn.classList.remove('btn--error-static','btn--shaking'),{once:true});
+  setSaveStatus(taskId?'Saving this version. You can continue editing.':'Creating Task…');
 
   const originalLabel = taskId ? t('common.save') : t('common.create');
 
@@ -3134,6 +3144,10 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
   // The editor contains source actions only. Archived actions and generated
   // helper projections stay under server reconciliation, not this replace-set.
   if (controls?.subtasks) body.subtasks = controls.subtasks.getValue().filter((step) => step.title.trim()).map((step) => ({ ...step, title: step.title.trim() }));
+  // Capture the version represented by this request before any confirmation,
+  // upload or network wait. Later edits belong to the next save.
+  const submittedState=controls?readTaskEditState(form,controls):null;
+  const submittedDocumentPolicy=taskDocuments?.policySnapshot?.()||null;
 
   // Das Feld fehlt bei Unteraufgaben und bei bereits gespiegelten Aufgaben - in
   // beiden Fällen soll gar kein Ziel mitgeschickt werden, sonst nähme der Server
@@ -3150,6 +3164,48 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
     showTaskFormErrors(form, [{ field: taskErrorField(msg), message }], { title: taskId ? "Task couldn't be saved" : "Task couldn't be created" });
     submitBtn.disabled = false;
     submitBtn.textContent = originalLabel;
+  };
+  const blockUnconfirmedSave=(message,{checkRevision=null}={})=>{
+    setSaveStatus(message);
+    submitBtn.disabled=true;
+    submitBtn.textContent=originalLabel;
+    if(saveStatus){
+      const download=document.createElement('button');
+      download.type='button';download.className='btn btn--secondary';download.textContent='Download draft';
+      download.addEventListener('click',()=>{
+        const draft={task_id:Number(form.querySelector('#task-id')?.value)||null,
+          saved_at:new Date().toISOString(),state:readTaskEditState(form,controls)};
+        const url=URL.createObjectURL(new Blob([JSON.stringify(draft,null,2)],{type:'application/json'}));
+        const link=document.createElement('a');link.href=url;
+        link.download=`vidamia-task-draft-${draft.task_id||'new'}.json`;
+        document.body.append(link);link.click();link.remove();
+        setTimeout(()=>URL.revokeObjectURL(url),60_000);
+      });
+      saveStatus.append(' ',download);
+    }
+    if(checkRevision==null||!saveStatus)return;
+    const check=document.createElement('button');
+    check.type='button';check.className='btn btn--secondary';check.textContent='Check save result';check.dataset.taskSaveCheck='';
+    check.addEventListener('click',async()=>{
+      check.disabled=true;
+      try{
+        const currentTaskId=form.querySelector('#task-id')?.value||taskId;
+        const latest=(await api.get(`/tasks/${currentTaskId}`))?.data;
+        if(!latest||!form.isConnected)return;
+        if(Number(latest.revision)===Number(checkRevision)){
+          controls.originalTask=structuredClone(latest);
+          submitBtn.classList.remove('btn--error-static','btn--shaking');
+          submitBtn.disabled=false;
+          setSaveStatus('This version was not saved. Your draft is ready to retry.');
+        }else{
+          blockUnconfirmedSave('This Task changed. Download your draft before reopening the latest Task to compare.');
+        }
+      }catch(error){
+        if(form.isConnected)blockUnconfirmedSave('Could not check the current Task. Keep this editor open and check again when connected.',{checkRevision});
+      }
+      finally{check.disabled=false;}
+    });
+    saveStatus.append(' ',check);
   };
   if (dueTimeRaw && !dueTime) { resetSubmit(t('calendar.invalidDate')); return; }
   body.due_time = dueTime || null;
@@ -3257,15 +3313,22 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
   try {
     const historicalFuture = body.edit_scope === 'future' && (controls?.originalTask?.status === 'done'
       || isClosedOccurrence(controls?.originalTask) || isArchived(controls?.originalTask));
-    documentIds = !isDevicePrincipal() && !historicalFuture && taskDocuments ? await taskDocuments.commit() : null;
+    documentIds = !isDevicePrincipal() && !historicalFuture && taskDocuments ? await taskDocuments.commit(submittedDocumentPolicy) : null;
+    if(submittedState&&documentIds!==null){
+      submittedState.occurrence.documents=[...documentIds];
+      submittedState.occurrence.pendingFiles=false;
+    }
   } catch (err) {
     resetSubmit(err.message || t('common.errorGeneric'));
     btnError(submitBtn);
     return;
   }
 
+  let taskRecordSaved=false;
   try {
     const savedTaskId = await saveTaskRecord(form, permittedBody);
+    taskRecordSaved=true;
+    setSaveStatus('Task saved. Updating the view…');
     const documentLinksChanged = documentIds && (originalDocumentIds === null
       || JSON.stringify(documentIds.map(Number).sort((a, b) => a - b)) !== JSON.stringify(originalDocumentIds));
     window.yuvomi.showToast(taskEditResultMessage(controls?.lastSaveResponse, t(taskId ? 'tasks.savedToast' : 'tasks.createdToast')), 'success');
@@ -3308,8 +3371,9 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
           // Haken behauptete das Gegenteil. So bleibt der Weg zum zweiten
           // Versuch offen - die Chips sind noch da, ein erneutes Speichern
           // schickt dieselbe Liste.
-          resetSubmit(t('tasks.documentsLinkFailed'));
+          blockUnconfirmedSave('Task saved, but its document links could not be confirmed. Keep this editor open; download the draft before reopening to review the links.');
           btnError(submitBtn);
+          clearErrorFeedbackOnEdit();
           await refreshTags();
           await onChanged();
           return;
@@ -3317,7 +3381,6 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
       }
     }
 
-    btnSuccess(submitBtn, originalLabel);
     // Erst die Tag-Liste, dann neu zeichnen: ein gerade vergebener Tag soll
     // sofort in Filterleiste und Vorschlägen stehen (#586).
     await refreshTags();
@@ -3326,16 +3389,43 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
       console.warn('[Tasks] saved Task refresh failed:',refreshError);
       window.yuvomi?.showToast?.('Task saved, but the list could not refresh. Reopen Tasks to see the latest state.', 'warning');
     }
+    const stillThisEditor=document.querySelector('#shared-modal-overlay #task-form')===form;
+    if(stillThisEditor&&submittedState&&JSON.stringify(readTaskEditState(form,controls))!==JSON.stringify(submittedState)){
+      // The response acknowledged the first version. Preserve edits made
+      // during the request and use its returned revision for the next PUT.
+      controls.editBaseline=submittedState;
+      controls?.subtasks?.setReadOnly(isDevicePrincipal());
+      applyTaskFormPermissions(form,controls?.originalTask,controls);
+      submitBtn.disabled=false;
+      submitBtn.textContent=t('common.save');
+      setSaveStatus('Previous edits saved. Newer edits are still in this draft.');
+      return;
+    }
+    btnSuccess(submitBtn, originalLabel);
     // The refresh can outlive this editor. Close only the form that initiated
     // the save; a newer dialog may already contain a different unsaved draft.
-    if (document.querySelector('#shared-modal-overlay #task-form') === form) {
+    if (stillThisEditor) {
       await closeModal({ force: true });
     }
   } catch (err) {
-    resetSubmit(err.status === 409 ? `${err.data?.error || err.message} Your draft has been kept. Close and reopen the Task to review current changes before saving again.` : err.message);
+    if(taskRecordSaved){
+      blockUnconfirmedSave('Task saved, but a follow-up change could not be confirmed. Keep this editor open; download the draft before reopening to review it.');
+    }else if((taskId||form.querySelector('#task-id')?.value)&&(err.status===409||err.outcome==='unknown')){
+      const futureSeriesEdit=permittedBody.edit_scope==='future'||permittedBody.edit_scope==='future_only';
+      blockUnconfirmedSave(err.status===409
+        ?'This Task changed while you were editing. Your draft is preserved; reopen the latest Task to compare before saving again.'
+        :futureSeriesEdit
+          ?'The series save result is uncertain. Your draft is preserved; reopen the Task and compare its future definition before saving again.'
+          :'The save result is uncertain. Your draft is preserved; check the current Task before retrying.',
+        {checkRevision:futureSeriesEdit?null:err.taskSaveExpectedRevision??permittedBody.expected_revision});
+    }else{
+      setSaveStatus('Save failed. Your draft is still here. Retry when ready.');
+      resetSubmit(err.message);
+    }
     if (!taskCreateAttempts.has(form)) controls?.subtasks?.setReadOnly(isDevicePrincipal());
     applyTaskFormPermissions(form, controls?.originalTask, controls);
     btnError(submitBtn);
+    clearErrorFeedbackOnEdit();
   }
 }
 // --------------------------------------------------------

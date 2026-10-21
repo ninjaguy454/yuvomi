@@ -94,7 +94,8 @@ test('a schema migration invalidates a cursor without a Task-clock change',()=>{
 test('oversized GET cursors are refused before they can exceed practical URL budgets',()=>{
   const d=fixture();
   try{
-    assert.throws(()=>taskListCursor(d,{...context,ids:Array.from({length:401},(_,i)=>i+1)}),/Invalid Task list cursor/);
+    assert.throws(()=>taskListCursor(d,{...context,ids:Array.from({length:601},(_,i)=>i+1)}),/Invalid Task list cursor/);
+    assert.ok(taskListCursor(d,{...context,ids:Array.from({length:500},(_,i)=>i+1)}));
     assert.equal(taskListCursor(d,{...context,ids:Array.from({length:400},(_,i)=>Number.MAX_SAFE_INTEGER-i)}),null);
   }
   finally{d.close();}

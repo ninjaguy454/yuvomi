@@ -21,7 +21,7 @@ test('Task card paints after confirmation, preserves pending across reads, and r
   assert.equal(fourth.status,201);
   const fourthId=fourth.data.id;
   const fixtureSize=Number(process.env.VIDAMIA_STATUS_FEEDBACK_COUNT||4);
-  assert.ok(Number.isInteger(fixtureSize)&&fixtureSize>=4&&fixtureSize<=600);
+  assert.ok(Number.isInteger(fixtureSize)&&fixtureSize>=4&&fixtureSize<=800);
   fixture.d.transaction(()=>{for(let index=4;index<fixtureSize;index++){
     const taskId=Number(fixture.d.prepare("INSERT INTO tasks(title,created_by,assigned_to,points) VALUES('Synthetic feedback task',1,1,0)").run().lastInsertRowid);
     fixture.d.prepare('INSERT INTO task_assignments(task_id,user_id) VALUES(?,1)').run(taskId);
@@ -181,7 +181,8 @@ test('Task card paints after confirmation, preserves pending across reads, and r
   await heldPromise;
   await page.waitForFunction(()=>window.statusPaintAt>0);
   const paintMs=await page.evaluate(()=>window.statusPaintAt-window.statusInputAt);
-  assert.ok(paintMs<100,`visible frame after ${paintMs.toFixed(1)} ms`);
+  if(fixtureSize<=600)assert.ok(paintMs<100,`visible frame after ${paintMs.toFixed(1)} ms`);
+  else console.log('TASK_STRESS_FIRST_FRAME_MS',paintMs.toFixed(1));
   const pending=await page.$eval(button,node=>({done:node.classList.contains('task-status-btn--done'),busy:node.getAttribute('aria-busy'),disabled:node.disabled,feedback:node.nextElementSibling?.textContent}));
   assert.deepEqual(pending,{done:true,busy:'true',disabled:true,feedback:'Saving…'});
   await page.evaluate(id=>{for(let i=0;i<3;i++)document.querySelector(`[data-action="toggle-status"][data-id="${id}"]`).click();window.dispatchEvent(new Event('task-data-changed'));},id);
@@ -252,10 +253,10 @@ test('Task card paints after confirmation, preserves pending across reads, and r
     const key=item.status!==200?`error:${item.status}:${item.error}`:item.reset?`reset:${item.reason}`:item.delta?`delta:${item.no_change?'quiet':item.count}`:`page:${item.count}`;
     counts[key]=(counts[key]||0)+1;return counts;
   },{});
-  if(process.env.VIDAMIA_STATUS_FEEDBACK_LOAD_ALL==='1'&&fixtureSize<=400)
+  if(process.env.VIDAMIA_STATUS_FEEDBACK_LOAD_ALL==='1'&&fixtureSize<=600)
     assert.deepEqual({reads:windowReads-readsBefore,changed:kinds['delta:1']},{reads:19,changed:19},
       'a fully loaded ordinary List uses one authorized changed-row window read per confirmed status');
-  if(process.env.VIDAMIA_STATUS_FEEDBACK_LOAD_ALL==='1'&&fixtureSize>400)
+  if(process.env.VIDAMIA_STATUS_FEEDBACK_LOAD_ALL==='1'&&fixtureSize>600)
     assert.ok(windowReads-readsBefore>19&&Object.keys(kinds).every(key=>key.startsWith('page:')),
       'a window larger than the bounded receipt safely refills pages');
   console.log('TASK_STATUS_FEEDBACK_SAMPLES',JSON.stringify({fixture_tasks:fixtureSize,loaded_all:process.env.VIDAMIA_STATUS_FEEDBACK_LOAD_ALL==='1',viewport:'390x844',paint_frame_ms:summary(paintSamples),confirmed_stable_ms:summary(saveSamples),server_write_ms:summary(writeDurations),window_reads_for_19_statuses:windowReads-readsBefore,window_reply_kinds:kinds}));
@@ -333,6 +334,37 @@ test('Task card paints after confirmation, preserves pending across reads, and r
     },{},retryIds);
     assert.equal(writes-retryWrites,3,'deliberate retry writes only the unfinished item');
     assert.ok(retryIds.every(id=>fixture.d.prepare('SELECT status FROM tasks WHERE id=?').get(id)?.status==='done'));
+  }
+  if(fixtureSize===500&&process.env.VIDAMIA_STATUS_FEEDBACK_LOAD_ALL==='1'){
+    const before=await page.evaluate(async()=>{const {__test}=await import('/pages/tasks.js');
+      const selected=__test.state.tasks[300],changed=__test.state.tasks[310];
+      __test.state.bulkSelectMode=true;__test.state.selectedTaskIds.add(selected.id);
+      __test.renderTaskList(document.querySelector('#fixture'));
+      const prior=document.documentElement.style.scrollBehavior;
+      document.documentElement.style.scrollBehavior='auto';
+      scrollTo(0,Math.min(1800,document.documentElement.scrollHeight-innerHeight-100));
+      document.documentElement.style.scrollBehavior=prior;
+      return {selected:selected.id,changed:changed.id,revision:changed.revision,scrollY};});
+    const outside=await fixture.call('PATCH',`/tasks/${before.changed}/status`,
+      {status:'done',expected_revision:before.revision});
+    assert.equal(outside.status,200);
+    const reads=windowReads;
+    await page.evaluate(async()=>{const {__test}=await import('/pages/tasks.js');
+      await __test.loadTasks(document.querySelector('#fixture'));});
+    const after=await page.evaluate(async ids=>{const {__test}=await import('/pages/tasks.js');
+      return {selected:__test.state.selectedTaskIds.has(ids.selected),count:__test.state.selectedTaskIds.size,
+        scrollY,loaded:__test.state.tasks.length,changedStatus:__test.state.tasks.find(row=>row.id===ids.changed)?.status};},before);
+    assert.equal(after.count,1,'an unrelated changed row keeps the cross-page bulk selection');
+    assert.equal(after.selected,true);
+    assert.equal(after.changedStatus,'done');
+    assert.match(await page.$eval('#bulk-count',node=>node.textContent),/1/);
+    assert.equal(after.loaded,500);
+    assert.equal(windowReads-reads,1,'the external edit uses one loaded-window delta');
+    assert.ok(Math.abs(after.scrollY-before.scrollY)<50,
+      `delta keeps the mobile-size scroll position: ${JSON.stringify({before:before.scrollY,after:after.scrollY})}`);
+    await page.evaluate(async()=>{const {__test}=await import('/pages/tasks.js');
+      __test.state.selectedTaskIds.clear();__test.state.bulkSelectMode=false;
+      __test.renderTaskList(document.querySelector('#fixture'));});
   }
   if(fixtureSize>30){
     failNextList=true;

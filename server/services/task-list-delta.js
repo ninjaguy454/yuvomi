@@ -3,7 +3,8 @@
  * No trigger writes one row per affected Task. */
 import {createHmac,timingSafeEqual} from 'node:crypto';
 
-const FORMAT=1,MAX_WINDOW=400,MAX_EVENTS=256,KEEP_EVENTS=512;
+const FORMAT=1,MAX_EVENTS=256,KEEP_EVENTS=512;
+export const MAX_TASK_LIST_WINDOW_IDS=600;
 const clockStatement=d=>d.prepare('SELECT version FROM task_change_clock WHERE id=1');
 export const captureTaskListClock=d=>Number(clockStatement(d).get()?.version||0);
 const schemaVersion=d=>{
@@ -49,7 +50,7 @@ function secret(){
 }
 function signed(body){return createHmac('sha256',secret()).update(body).digest('base64url');}
 function reset(reason){return {reset_required:true,reason};}
-function validIds(values,max=MAX_WINDOW){return Array.isArray(values)&&values.length<=max
+function validIds(values,max=MAX_TASK_LIST_WINDOW_IDS){return Array.isArray(values)&&values.length<=max
   &&values.every(id=>Number.isSafeInteger(id)&&id>0)&&new Set(values).size===values.length;}
 
 export function taskListCursor(d,{actor,query,ids,authority='',nextStartAt=null,clock=captureTaskListClock(d)}){

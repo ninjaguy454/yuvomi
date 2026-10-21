@@ -96,7 +96,7 @@ import { attachTaskSupervision, reconcileTaskSupervision, assertTaskSupervisionA
 import { EXPIRATION_POLICIES, taskDeadlineMs, taskStartMs, taskWindowAncestors } from '../services/task-window.js';
 import { createTaskOptionalContextReader } from '../services/task-optional.js';
 import { taskChangesStream } from '../services/task-changes.js';
-import {captureTaskListClock,recordTaskListDelta,readTaskListDelta,taskListCursor,trackableTaskListRoot} from '../services/task-list-delta.js';
+import {MAX_TASK_LIST_WINDOW_IDS,captureTaskListClock,recordTaskListDelta,readTaskListDelta,taskListCursor,trackableTaskListRoot} from '../services/task-list-delta.js';
 import { actorPermissions,assertCapability,hasCapability } from '../permissions.js';
 
 const log = createLogger('Tasks');
@@ -2219,7 +2219,7 @@ router.get('/window',(req,res)=>{
       ||typeof view.categoryLabels!=='object'||Array.isArray(view.categoryLabels))
       return res.status(400).json({error:'Invalid Task window view.'});
     const deltaCount=req.query.window_delta===undefined?null:Number(req.query.window_count);
-    if(deltaCount!==null&&(!Number.isSafeInteger(deltaCount)||deltaCount<1||deltaCount>400||view.offset!==0
+    if(deltaCount!==null&&(!Number.isSafeInteger(deltaCount)||deltaCount<1||deltaCount>MAX_TASK_LIST_WINDOW_IDS||view.offset!==0
       ||typeof req.query.window_delta!=='string'||req.query.window_delta.length>6000))
       return res.status(400).json({error:'Invalid Task window delta.'});
     if(req.query.known_cursor!==undefined&&(view.offset===0||typeof req.query.known_cursor!=='string'
@@ -2263,7 +2263,7 @@ router.get('/window',(req,res)=>{
         if(!stillAccessible(previous.known_ids))return {reset_required:true,reason:'visibility_changed'};
         if(!previous.changed_ids.length)return {delta:true,no_change:true,delta_cursor:req.query.window_delta};
         view.limit=deltaCount;
-        view.maxWindowLimit=400;
+        view.maxWindowLimit=MAX_TASK_LIST_WINDOW_IDS;
       }
       if(view.offset>0){
         const key=taskWindowQueryKey(filters,view);
@@ -2297,7 +2297,7 @@ router.get('/window',(req,res)=>{
         nextStartAt:nextBoundary,clock:page.clock});
       const accumulated=previous?page.ids:[...knownIds,...page.ids];
       if(new Set(accumulated).size!==accumulated.length)return {reset_required:true,reason:'window_overlap'};
-      const deltaCursor=accumulated.length<=400?taskListCursor(d,{actor:me,authority,
+      const deltaCursor=accumulated.length<=MAX_TASK_LIST_WINDOW_IDS?taskListCursor(d,{actor:me,authority,
         query:scopeKey,ids:accumulated,nextStartAt:nextBoundary,clock:page.clock}):null;
       return {data,delta:!!previous,
         ...(previous?{ordered_ids:page.ids,removed:knownIds.filter(id=>!page.ids.includes(id))}:{}),

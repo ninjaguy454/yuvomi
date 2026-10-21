@@ -38,7 +38,7 @@ test('measure authorized first page, continuation, and full list at 20/250/1000 
     assert.equal(f.changes(),writes,'reads write no Task data');
     process.stdout.write(`WINDOW_API size=${target} initial_cards=${initial.data.length} initial_bytes=${initialBytes} initial_sql_prepares=${initialPrepares} page_n=${first.length} page_p50=${pct(first,.5)} page_p95=${pct(first,.95)} page_p99=${pct(first,.99)} page_max=${pct(first,1)} next_n=${next.length} next_p50=${next.length?pct(next,.5):'na'} next_p95=${next.length?pct(next,.95):'na'} full_n=${full.length} full_p50=${pct(full,.5)} full_p95=${pct(full,.95)} writes=0 ms\n`);
     let loaded=initial.data.length,page=initial;
-    const count=Math.min(target,250);
+    const count=Math.min(target,Number(process.env.VIDAMIA_WINDOW_BENCH_LOADED||250));
     while(page.next_cursor&&loaded<count){
       const view={groupMode:'none',sort:{field:'title',direction:'asc'},locale:'en',limit:Math.min(100,count-loaded),offset:page.next_offset};
       page=await f.call('GET',`/tasks/window?view=${encodeURIComponent(JSON.stringify(view))}&page_cursor=${encodeURIComponent(page.next_cursor)}&known_cursor=${encodeURIComponent(page.delta_cursor)}`);

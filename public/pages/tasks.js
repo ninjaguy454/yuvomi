@@ -1548,6 +1548,7 @@ function taskQuery() {
 }
 
 const TASK_WINDOW_SIZE=30;
+const TASK_WINDOW_DELTA_MAX=600;
 function taskWindowSupported(){
   if(state.viewMode!=='list'||state.offersOnly||!['none','category','due'].includes(state.groupMode))return false;
   const fields=[state.sheetSort?.field||'default',
@@ -1606,7 +1607,7 @@ async function fetchTaskWindowSnapshot(target=TASK_WINDOW_SIZE){
   throw new Error('The Task list changed while loading. Please retry.');
 }
 async function fetchTaskWindowDelta(current){
-  if(!current?.delta_cursor||!state.tasks.length||state.tasks.length>400)return null;
+  if(!current?.delta_cursor||!state.tasks.length||state.tasks.length>TASK_WINDOW_DELTA_MAX)return null;
   const response=await api.get(taskWindowUrl(taskWindowView(),null,taskQuery(),state.searchQuery.trim(),
     {window_delta:current.delta_cursor,window_count:state.tasks.length}),{requireFresh:true});
   if(response.reset_required)return null;

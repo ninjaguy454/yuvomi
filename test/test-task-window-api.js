@@ -88,25 +88,52 @@ test('filtered Task leaving loaded window refills by delta without retaining sta
   assert.deepEqual(delta.data.map(row=>row.id),[ids[2]]);
 });
 
-test('loaded-window receipt remains bounded at 400 IDs with snapshot fallback beyond',async t=>{
+test('loaded-window delta covers 500 cards, then falls back safely beyond 600 IDs',async t=>{
   const f=await scoringFixture(t);
   const insert=f.d.prepare("INSERT INTO tasks(title,category,priority,status,created_by,visibility) VALUES(?,'misc','medium','open',1,'all')");
-  f.d.transaction(()=>{for(let n=0;n<405;n++)insert.run(`Bounded ${String(n).padStart(3,'0')}`);})();
-  let cursor=null,known=null,loaded=0;
-  for(let offset=0;offset<=400;offset+=100){
+  const ids=[];
+  f.d.transaction(()=>{for(let n=0;n<605;n++)ids.push(Number(insert.run(`Bounded ${String(n).padStart(3,'0')}`).lastInsertRowid));})();
+  let cursor=null,known=null,knownAt500=null,loaded=0;
+  for(let offset=0;offset<=600;offset+=100){
     const query=`${url({offset,limit:100})}`+(cursor?`&page_cursor=${encodeURIComponent(cursor)}&known_cursor=${encodeURIComponent(known)}`:'');
-    const page=await f.call('GET',query);
+    const page=await f.call('GET',query,undefined,2);
     assert.equal(page.status,200,JSON.stringify(page).slice(0,200));
     loaded+=page.data.length;
-    assert.equal(loaded,Math.min(405,offset+100));
-    if(offset===300){
+    assert.equal(loaded,Math.min(605,offset+100));
+    if(offset===400){
       assert.ok(page.delta_cursor);
-      const quiet=await f.call('GET',`${url({offset:0,limit:100})}&window_count=400&window_delta=${encodeURIComponent(page.delta_cursor)}`);
+      assert.ok(page.delta_cursor.length<6000,'the 500-ID signed receipt fits the URL guard');
+      knownAt500=page.delta_cursor;
+      const quiet=await f.call('GET',`${url({offset:0,limit:100})}&window_count=500&window_delta=${encodeURIComponent(page.delta_cursor)}`,undefined,2);
       assert.equal(quiet.no_change,true);
     }
-    if(offset===400)assert.equal(page.delta_cursor,null,'the client falls back to bounded snapshot refill above 400 IDs');
+    if(offset===500)assert.ok(page.delta_cursor,'600 loaded IDs remain covered');
+    if(offset===600)assert.equal(page.delta_cursor,null,'larger loaded windows use bounded snapshot refill');
     known=page.delta_cursor;cursor=page.next_cursor;
   }
+  f.d.transaction(()=>{
+    const before=captureTaskListClock(f.d);
+    f.d.prepare('UPDATE tasks SET title=?,revision=revision+1 WHERE id=?').run('Aardvark enters',ids[604]);
+    recordTaskListDelta(f.d,before,[ids[604]]);
+  })();
+  const writes=f.changes();
+  const changed=await f.call('GET',`${url({offset:0,limit:100})}&window_count=500&window_delta=${encodeURIComponent(knownAt500)}`,undefined,2);
+  assert.equal(changed.status,200,JSON.stringify(changed).slice(0,200));
+  assert.equal(changed.delta,true);
+  assert.equal(changed.ordered_ids.length,500);
+  assert.equal(changed.ordered_ids[0],ids[604]);
+  assert.deepEqual(changed.data.map(row=>row.id),[ids[604]],'only the entering card is hydrated');
+  assert.deepEqual(changed.removed,[ids[499]],'the displaced boundary card is removed by ID');
+  assert.equal(f.changes(),writes,'the larger delta read writes no Task data');
+  f.d.transaction(()=>{
+    const before=captureTaskListClock(f.d);
+    f.d.prepare("UPDATE tasks SET visibility='private',revision=revision+1 WHERE id=?").run(ids[604]);
+    recordTaskListDelta(f.d,before,[ids[604]]);
+  })();
+  const revoked=await f.call('GET',`${url({offset:0,limit:100})}&window_count=500&window_delta=${encodeURIComponent(changed.delta_cursor)}`,undefined,2);
+  assert.equal(revoked.reset_required,true,'revoking a loaded card invalidates the signed window');
+  assert.equal(revoked.reason,'visibility_changed');
+  assert.ok(!revoked.data,'revocation returns no Task data');
 });
 
 test('Task window excludes private rows and refuses unsupported view projections',async t=>{

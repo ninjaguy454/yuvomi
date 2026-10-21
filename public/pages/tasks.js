@@ -3198,6 +3198,8 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
   // Dokumente": ein PUT mit leerer Liste löscht als Replace-Set alles, was an
   // der Aufgabe hängt.
   let documentIds = null;
+  const originalDocumentIds = Array.isArray(controls?.originalTask?.documents)
+    ? controls.originalTask.documents.map(document => Number(document.id)).sort((a, b) => a - b) : null;
   try {
     const historicalFuture = body.edit_scope === 'future' && (controls?.originalTask?.status === 'done'
       || isClosedOccurrence(controls?.originalTask) || isArchived(controls?.originalTask));
@@ -3210,6 +3212,8 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
 
   try {
     const savedTaskId = await saveTaskRecord(form, permittedBody);
+    const documentLinksChanged = documentIds && (originalDocumentIds === null
+      || JSON.stringify(documentIds.map(Number).sort((a, b) => a - b)) !== JSON.stringify(originalDocumentIds));
     window.yuvomi.showToast(taskEditResultMessage(controls?.lastSaveResponse, t(taskId ? 'tasks.savedToast' : 'tasks.createdToast')), 'success');
     if(controls?.lastSaveResponse?.rotation_warning)window.yuvomi.showToast(controls.lastSaveResponse.rotation_warning,'info');
 
@@ -3233,7 +3237,7 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
       // der Nutzer glaubt, der Zettel hänge dran. Die Aufgabe IST gespeichert,
       // deshalb bleibt das kein Abbruch, sondern eine Meldung, die den einen
       // Teil benennt, der nicht geklappt hat.
-      if (documentIds) {
+      if (documentLinksChanged) {
         try {
           const response = await api.put(`/tasks/${savedTaskId}/documents`, {
             document_ids: documentIds, ...taskRevision(taskFormControls.get(form)?.originalTask),
@@ -5731,12 +5735,9 @@ export async function openTaskById(taskId, { user = null, container = null, onCh
   }
 
   // The shared view can mount the complete fork Task form from Calendar or
-  // Dashboard too. Activity/skill names are needed while inspecting. Place
-  // catalogues and form preferences are needed only if Edit is opened.
-  const activityData = await api.get('/automation/activity-options').catch(() => ({ data: { activities: [] } }));
-  state.activityTemplates = activityData.data?.activities ?? state.activityTemplates;
-  state.rotationGroups=activityData.data?.rotation_groups??state.rotationGroups;
-  state.skills = activityData.data?.skills ?? state.skills;
+  // Dashboard too. The authorized Task response already carries its saved
+  // skill names and assignment provenance for inspection. Fetch the full
+  // activity catalogue only when the editor actually needs choices.
 
   if (user) {
     state.currentUserId = user.id ?? null;
@@ -5764,11 +5765,15 @@ export async function openTaskById(taskId, { user = null, container = null, onCh
     onChanged,
     edit: !canOfferEdit ? null : {
       ready: async () => {
-        const [placesData, placeStatusData, preferencesData] = await Promise.all([
+        const [activityData, placesData, placeStatusData, preferencesData] = await Promise.all([
+          api.get('/automation/activity-options').catch(() => ({ data: { activities: [] } })),
           api.get('/planning/places?active=false').catch(() => ({ data: [] })),
           api.get('/planning/place-search/status').catch(() => ({ data: { configured: false } })),
           api.get('/preferences').catch(() => ({ data: {} })),
         ]);
+        state.activityTemplates = activityData.data?.activities ?? state.activityTemplates;
+        state.rotationGroups = activityData.data?.rotation_groups ?? state.rotationGroups;
+        state.skills = activityData.data?.skills ?? state.skills;
         state.places = placesData.data ?? state.places;
         state.placeSearchStatus = placeStatusData.data ?? state.placeSearchStatus ?? { configured: false };
         state.templateSwitchWarning = preferencesData.data?.tasks_template_switch_warning !== false;

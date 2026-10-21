@@ -37,7 +37,8 @@ let server,browser,base,ownedBrowser;
 test.before(async()=>{
   server=app.listen(0,'127.0.0.1');await new Promise(resolve=>server.on('listening',resolve));base=`http://127.0.0.1:${server.address().port}`;
   const edge='C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
-  browser=await puppeteer.launch({headless:true,pipe:true,executablePath:process.env.PUPPETEER_EXECUTABLE_PATH||(process.platform==='win32'&&existsSync(edge)?edge:undefined),args:['--disable-dev-shm-usage']});
+  browser=await puppeteer.launch({headless:true,pipe:true,executablePath:process.env.PUPPETEER_EXECUTABLE_PATH||(process.platform==='win32'&&existsSync(edge)?edge:undefined),
+    args:['--disable-dev-shm-usage',...(process.env.VIDAMIA_TEST_BROWSER_NO_SANDBOX==='1'?['--no-sandbox']:[])]});
   const processHandle=browser.process();ownedBrowser={pid:processHandle.pid,profile:processHandle.spawnargs.find(arg=>arg.startsWith('--user-data-dir='))?.slice('--user-data-dir='.length),processHandle};
 });
 test.after(async()=>{await browser?.close();await new Promise(resolve=>server?.close(resolve)||resolve());if(ownedBrowser)console.log('SCORING_UI_OWNED_CLEANUP',JSON.stringify({node_pid:process.pid,chrome_pid:ownedBrowser.pid,chrome_exit:ownedBrowser.processHandle.exitCode,server_listening:server.listening,profile:ownedBrowser.profile,profile_removed:ownedBrowser.profile?!existsSync(ownedBrowser.profile):null}));});

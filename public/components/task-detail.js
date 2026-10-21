@@ -1585,7 +1585,11 @@ function renderTaskDetail(task, reminders = [], ctx) {
   const tags = tagChipsNode(task.tags);
   if (tags) tags.classList.add('task-detail-tags');
   const activity = disclosureNode(ctx, 'activity', 'Activity', 'task-detail-activity-disclosure');
-  activity.appendChild(activityNode(task, ctx));
+  // Activity history has its own authorized endpoint. A closed disclosure
+  // needs no history rows; the existing open/toggle handler loads them when
+  // requested and refreshes them while the disclosure is visible.
+  if (activity.open) activity.appendChild(activityNode(task, ctx));
+  else { const placeholder = document.createElement('div'); placeholder.className = 'task-detail-activity'; activity.appendChild(placeholder); }
   const history = task.is_recurring ? disclosureNode(ctx, 'recurrence-history', 'Occurrence history', 'task-detail-history-disclosure') : null;
   if (history) history.appendChild(seriesHistoryNode(task, ctx));
   const rotations = rotationContextNode(task, ctx);
@@ -2021,7 +2025,10 @@ export function openTaskDetail({
       const title = pane?.closest('.modal-panel')?.querySelector('.modal-panel__title');
       if (title) title.textContent = task.title;
     }
-    if (source === 'live') {
+    // Comment writes advance the parent Task revision. An unrelated change
+    // event may still require this authorized Task read for ACL/eligibility,
+    // but a same-revision snapshot cannot contain changed comments.
+    if (source === 'live' && oldRevision !== task.revision) {
       if (ctx.queue?.busy) ctx.commentsDirty = true;
       else { ctx.commentsDirty = false; ctx.refreshComments?.(); ctx.refreshVisibleHistory(); }
     }

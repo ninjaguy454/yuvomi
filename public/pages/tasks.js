@@ -21,6 +21,7 @@ import {mountCardColorPicker} from '/components/card-color-picker.js';
 import {cardColorAttribute} from '/utils/card-colors.js';
 import { structuralSubtasks, helperWaitingLabel } from '/utils/task-progress.js';
 import { watchTaskChanges, latestTaskLoader, createTaskStartRefresh, taskConnectionState } from '/utils/task-live.js';
+import {mergeTaskListDelta,mergeTaskStartVisibility} from '/utils/task-list-delta.js';
 import { reconcileTaskMarkup, captureTaskViewport } from '/utils/task-view-state.js';
 import { bindTaskCardSelection } from '/utils/task-card-selection.js';
 import { createTaskCardSubtasks, taskCardPendingProjection } from '/utils/task-card-subtasks.js';
@@ -1537,13 +1538,16 @@ function taskQuery() {
 }
 
 const taskPageLoaders = new WeakMap();
+const taskPageDeltaStates = new WeakMap();
 const taskPageOperations = new WeakMap();
 const taskStatusContext = (container, options = {}) => ({ ...options, signal: taskPageOperations.get(container)?.signal });
 const taskStartRefreshers = new WeakMap();
 function updateTaskStartRefresh(container, visibility) {
   let refresher = taskStartRefreshers.get(container);
   if (!refresher) {
-    refresher = createTaskStartRefresh(() => loadTasks(container));
+    // A time boundary changes visibility without a database mutation; a
+    // journal delta alone cannot discover Tasks becoming visible on the clock.
+    refresher = createTaskStartRefresh(() => loadTasks(container,{full:true}));
     taskStartRefreshers.set(container, refresher);
   }
   refresher.update(visibility);
@@ -1693,17 +1697,32 @@ function reconcileTaskListMarkup(listEl, html) {
   taskCardSubtasks.get(listEl)?.repaint();
   return retained;
 }
-async function loadTasks(container) {
+async function loadTasks(container,{full=false}={}) {
   if (!container || !container.isConnected || taskPageOperations.get(container)?.signal.aborted) return;
+  if(full)taskPageDeltaStates.delete(container);
   persistAssignedToMe();
   let loader = taskPageLoaders.get(container);
   if (!loader) {
-    loader = latestTaskLoader(() => Promise.all([api.get(`/tasks${taskQuery()}`, { requireFresh: true }), api.get('/automation/obligations').catch(error => ({ data: error.status === 403 ? [] : state.assignmentRequests }))]), ([data, obligations]) => {
+    loader = latestTaskLoader(async()=>{
+      const key=taskQuery(),previous=taskPageDeltaStates.get(container);
+      const base=`/tasks${key}`,delta=previous?.key===key&&previous.cursor;
+      const url=delta?`${base}${key?'&':'?'}delta=${encodeURIComponent(previous.cursor)}`:base;
+      const [initial,obligations]=await Promise.all([api.get(url,{requireFresh:true}),
+        api.get('/automation/obligations').catch(error=>({data:error.status===403?[]:state.assignmentRequests}))]);
+      const data=initial.reset_required?await api.get(base,{requireFresh:true}):initial;
+      return {data,obligations,key};
+    }, ({data,obligations,key}) => {
       if (!container.isConnected) return;
+      if(key!==taskQuery())return;
       state.loadError = null;
       updateTaskConnectionNotice(container, false);
-      updateTaskStartRefresh(container, data.visibility);
-      state.tasks = taskCardSubtasks.get(container.querySelector('#task-list'))?.reconcile(data.data ?? []) ?? data.data ?? [];
+      const old=taskPageDeltaStates.get(container);
+      const visibility=data.delta?mergeTaskStartVisibility(old?.visibility,data.visibility):data.visibility;
+      updateTaskStartRefresh(container,visibility);
+      const rows=data.delta?mergeTaskListDelta(state.tasks,data):data.data??[];
+      state.tasks = taskCardSubtasks.get(container.querySelector('#task-list'))?.reconcile(rows) ?? rows;
+      if(data.delta_cursor)taskPageDeltaStates.set(container,{key,cursor:data.delta_cursor,visibility});
+      else taskPageDeltaStates.delete(container);
       state.assignmentRequests = obligations.data ?? [];
       applyTaskPagePermissions(container);
       renderTaskList(container);
@@ -1714,6 +1733,7 @@ async function loadTasks(container) {
   catch (error) {
     if (error.transient || !Number.isInteger(error.status) || error.status >= 500 || error.status === 429) updateTaskConnectionNotice(container, true);
     if (error.status === 403 && container.isConnected) {
+      taskPageDeltaStates.delete(container);
       updateTaskStartRefresh(container, null);
       taskCardSubtasks.get(container.querySelector('#task-list'))?.reconcile([]);
       state.tasks = []; state.assignmentRequests = [];
@@ -6039,6 +6059,9 @@ export async function render(container, { user }) {
     ]);
     state.loadError = null;
     state.tasks = tasksData.data ?? [];
+    if(tasksData.delta_cursor)taskPageDeltaStates.set(container,
+      {key:taskQuery(),cursor:tasksData.delta_cursor,visibility:tasksData.visibility});
+    else taskPageDeltaStates.delete(container);
     updateTaskStartRefresh(container, tasksData.visibility);
     state.users = metaData.users ?? [];
     state.categories = metaData.categories ?? [];
@@ -6143,6 +6166,7 @@ export async function render(container, { user }) {
     state.pendingViewRefresh = null;
     taskPageLoaders.get(container)?.dispose();
     taskPageLoaders.delete(container);
+    taskPageDeltaStates.delete(container);
     state.tagResizeObserver?.disconnect();
   };
 }

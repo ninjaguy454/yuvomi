@@ -17,7 +17,7 @@ import {closeIncompleteTask,reopenIncompleteTask,taskCloseUnsupportedReason} fro
  */
 
 import { createLogger } from '../logger.js';
-import { randomUUID } from 'node:crypto';
+import { createHash,randomUUID } from 'node:crypto';
 import express from 'express';
 import {assignNewTaskCardColor,setTaskCardColor,freezeSeriesCardColorPolicy,preserveFutureCardColorPolicies} from '../services/task-card-colors.js';
 import {validateCardColorChoice,normalizeCardColorChoice} from '../../public/utils/card-colors.js';
@@ -94,7 +94,8 @@ import { attachTaskSupervision, reconcileTaskSupervision, assertTaskSupervisionA
 import { EXPIRATION_POLICIES, taskDeadlineMs, taskStartMs, taskWindowAncestors } from '../services/task-window.js';
 import { createTaskOptionalContextReader } from '../services/task-optional.js';
 import { taskChangesStream } from '../services/task-changes.js';
-import { assertCapability,hasCapability } from '../permissions.js';
+import {captureTaskListClock,recordTaskListDelta,readTaskListDelta,taskListCursor,trackableTaskListRoot} from '../services/task-list-delta.js';
+import { actorPermissions,assertCapability,hasCapability } from '../permissions.js';
 
 const log = createLogger('Tasks');
 
@@ -1010,9 +1011,10 @@ function attachDocumentCounts(tasks, me) {
     SELECT td.task_id AS id, COUNT(*) AS n
     FROM task_documents td
     JOIN family_documents d ON d.id = td.document_id
-    WHERE d.status != 'archived' AND ${DOC_VISIBLE_SQL}
+    WHERE td.task_id IN (SELECT CAST(value AS INTEGER) FROM json_each(@ids))
+      AND d.status != 'archived' AND ${DOC_VISIBLE_SQL}
     GROUP BY td.task_id
-  `).all({ me });
+  `).all({ me,ids:JSON.stringify(tasks.map(task=>Number(task.id))) });
   const map = new Map(counts.map((r) => [r.id, r.n]));
   for (const task of tasks) task.document_count = map.get(task.id) ?? 0;
   return tasks;
@@ -2178,6 +2180,15 @@ router.delete('/categories/:key', (req, res) => {
 // Query-Parameter: status, priority, assigned_to, category, archived
 // Response: { data: Task[] }  (jede Task enthält subtask_progress)
 // --------------------------------------------------------
+function taskListQueryKey(query){
+  return JSON.stringify(Object.entries(query).filter(([key])=>key!=='delta')
+    .map(([key,value])=>[key,[value].flat().map(String).sort()]).sort(([a],[b])=>a.localeCompare(b)));
+}
+function taskListAuthority(d,actor){
+  // Permission edits do not necessarily advance the Task clock. Bind the
+  // cursor to the current effective grants, including role changes.
+  return createHash('sha256').update(JSON.stringify(actorPermissions(d,actor))).digest('base64url');
+}
 router.get('/', (req, res) => {
   try {
     const me = req.authUserId || req.session.userId;
@@ -2191,6 +2202,15 @@ router.get('/', (req, res) => {
       return res.set('Cache-Control','private, no-store').json(payload);
     }
     const payload = withTaskReadSnapshot(db.get(),me,()=>{
+    const d=db.get(),queryKey=taskListQueryKey(req.query);
+    const cursorAllowed=!req.devicePrincipal&&Number.isSafeInteger(Number(me))&&Number(me)>0;
+    const authority=cursorAllowed?taskListAuthority(d,me):'';
+    const change=req.query.delta===undefined?null:cursorAllowed
+      ?readTaskListDelta(d,{cursor:req.query.delta,actor:me,query:queryKey,authority})
+      :{reset_required:true,reason:'unsupported_principal'};
+    if(change?.reset_required)return change;
+    if(change&&!change.changed_ids.length)return {delta:true,reset_required:false,data:[],removed:[],
+      delta_cursor:taskListCursor(d,{actor:me,query:queryKey,authority,ids:change.known_ids,nextStartAt:change.next_start_at})};
     const { status, priority, assigned_to, category, tag, include_future, archived } = req.query;
 
     let sql = `
@@ -2320,6 +2340,12 @@ router.get('/', (req, res) => {
       params.push(tagKey(value));
     }
 
+    // Restrict the authoritative projection before child and capability
+    // hydration. Missing or newly private roots become ID-only removals only
+    // when the signed cursor proves they belonged to this visible window.
+    if(change){sql+=` AND t.id IN (${change.changed_ids.map(()=>'?').join(',')})`;
+      params.push(...change.changed_ids);}
+
     // Sichtbarkeit (#474): eigene + für alle sichtbare + zugewiesene-sichtbare.
     sql += ` AND ${taskVisibilityWhere(db.get(), me, 't')}`;
     params.push(me, me);
@@ -2337,21 +2363,36 @@ router.get('/', (req, res) => {
         CASE t.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1
                         WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END,
         t.due_date ASC NULLS LAST,
-        t.created_at DESC
+        t.created_at DESC,
+        t.id DESC
     `;
 
     const candidates = db.get().prepare(sql).all(...params).map(task => ({ ...task, subtasks: JSON.parse(task.subtasks || '[]') })).map(addAssignedUsers);
-    const startProjection = taskStartProjection(db.get(),{tasks:candidates});
+    const startProjection = taskStartProjection(db.get(),{tasks:candidates,bounded:!!change});
     const rows = include_future ? candidates : candidates.filter(startProjection.visible);
     attachTaskActivityBindings(db.get(), rows);
     attachTaskLocations(db.get(), rows);
     attachTaskActionLinks(rows);
     const supervisionViews=new Map(); // One synchronous, read-only response.
     const hydrated = withTaskReadProjection(db.get(),me,()=>attachDocumentCounts(rows.map(row=>hydrateTask(row,me,supervisionViews,startProjection)),me));
-    return { data: include_future ? hydrated : hydrated.map(startProjection.project),
-      visibility:startProjection.metadata([...candidates,...hydrated],{includeFuture:!!include_future}) };
+    const data=include_future?hydrated:hydrated.map(startProjection.project);
+    const visibility=startProjection.metadata([...candidates,...hydrated],{includeFuture:!!include_future});
+    if(change){
+      const present=new Set(data.map(row=>Number(row.id))),known=new Set(change.known_ids);
+      const removed=change.changed_ids.filter(id=>known.has(id)&&!present.has(id));
+      for(const id of removed)known.delete(id);
+      for(const id of present)known.add(id);
+      if(known.size>400)return {reset_required:true,reason:'window_too_large'};
+      return {delta:true,reset_required:false,data,removed,visibility,
+        delta_cursor:taskListCursor(d,{actor:me,query:queryKey,authority,ids:[...known],
+          nextStartAt:[change.next_start_at,visibility.next_start_at].filter(value=>value!=null)
+            .reduce((min,value)=>min==null?value:Math.min(min,value),null)})};
+    }
+    return {data,visibility,
+      delta_cursor:cursorAllowed&&data.length<=400?taskListCursor(d,{actor:me,query:queryKey,
+        authority,ids:data.map(row=>Number(row.id)),nextStartAt:visibility.next_start_at}):null};
     });
-    res.json(payload);
+    res.set('Cache-Control','private, no-store').json(payload);
   } catch (err) {
     if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('GET / error:', err);
@@ -2637,6 +2678,7 @@ export function createTaskDefinition(req, res) {
     if(windowError)return res.status(400).json({error:windowError,code:400});
     assertTaskMutation(db.get(),req,null,{...req.body,expiration_policy},{operation:'create'});
     const taskId = db.get().transaction(() => {
+      const listClockBefore=captureTaskListClock(db.get());
       const authoredRotationFields = new Map();
       req.validateDeviceDefinition?.({points,assigned_to:userIds,start_date,start_time,due_date,due_time,expiration_policy,is_recurring,recurrence_rule,recurrence_from_completion});
       if(parent_task_id){
@@ -2753,7 +2795,10 @@ export function createTaskDefinition(req, res) {
         const series=ensureSeriesDefinition(db.get(),Number(result.lastInsertRowid));
         if(series)recordOccurrenceDefinition(db.get(),Number(result.lastInsertRowid),{definitionId:series.definition.id,baseline:true});
       }
-      return result.lastInsertRowid;
+      const createdId=Number(result.lastInsertRowid);
+      const listRoot=trackableTaskListRoot(db.get(),createdId);
+      if(listRoot)recordTaskListDelta(db.get(),listClockBefore,[listRoot]);
+      return createdId;
     })();
 
     const task = db.get().prepare(`
@@ -3211,8 +3256,10 @@ export function updateTaskDefinition(req, res) {
     let unchanged=false;
     let rotationChanges={preserved:[]};
     db.get().transaction(() => {
+      const listClockBefore=captureTaskListClock(db.get());
       const current=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(task.id);
       if(!current)throw new TaskStateError('Task not found.',{},404);
+      const listRootBefore=trackableTaskListRoot(db.get(),current.id);
       assertTaskRevision(db.get(),current,req.body,{required:true,requireParent:true});
       assertTaskMutation(db.get(),req,current,req.body,{operation:'update'});
       req.validateDeviceDefinition?.({points,assigned_to:userIds,start_date,start_time,due_date,due_time,expiration_policy,is_recurring,recurrence_rule,recurrence_from_completion});
@@ -3435,6 +3482,9 @@ export function updateTaskDefinition(req, res) {
       // gelesene Zeile, damit im selben Zug geänderte Regel/Fälligkeit schon zählen.
 
       notifyTaskAssignments(db.get(), task.id, assignedBefore);
+      const listRootAfter=trackableTaskListRoot(db.get(),current.id);
+      if(listRootBefore&&listRootBefore===listRootAfter)
+        recordTaskListDelta(db.get(),listClockBefore,[listRootBefore]);
     }).immediate();
 
     addAssignedUsers(updated);
@@ -4003,14 +4053,23 @@ router.patch('/:id/status', (req,res) => {
       if(!mayEditTaskDefinition(previous,req))return res.status(403).json(LOCKED_ERROR);
       assertTaskMutation(db.get(),req,previous,req.body,{operation:'archive'});
       const archived_at=db.get().transaction(()=>{
+        const before=captureTaskListClock(db.get()),root=trackableTaskListRoot(db.get(),previous.id);
         const value=setArchived(previous.id,true);
         reconcileTaskSupervision(db.get(),previous.id,{actorId:req.authUserId||req.session.userId});
+        if(root&&root===trackableTaskListRoot(db.get(),previous.id))recordTaskListDelta(db.get(),before,[root]);
         return value;
       })();
       return res.json({data:{...previous,archived_at,revision:db.get().prepare('SELECT revision FROM tasks WHERE id=?').get(previous.id).revision}});
     }
-    const result=changeTaskStatus(db.get(),Number(req.params.id),req.body.status,
+    const rootId=trackableTaskListRoot(db.get(),previous.id);
+    const change=()=>changeTaskStatus(db.get(),Number(req.params.id),req.body.status,
       {actorId:req.authUserId||req.session.userId,body:req.body});
+    const result=rootId?db.get().transaction(()=>{
+      const before=captureTaskListClock(db.get()),value=change();
+      if(trackableTaskListRoot(db.get(),previous.id)===rootId)
+        recordTaskListDelta(db.get(),before,[rootId]);
+      return value;
+    }).immediate():change();
     const task=withTaskReadSnapshot(db.get(),req.authUserId||req.session.userId,()=>{
       if(!mayAccessTask(result.task,req.authUserId||req.session.userId))
         throw new TaskStateError('Task not found.',{},404);
@@ -4065,8 +4124,10 @@ router.patch('/:id/archive', (req, res) => {
     // Der Status bleibt unangetastet - eine zurückgeholte Aufgabe steht wieder
     // genau dort, wo sie beim Ablegen stand.
     const archivedAt = db.get().transaction(() => {
+      const before=captureTaskListClock(db.get()),root=trackableTaskListRoot(db.get(),task.id);
       const value = setArchived(task.id, req.body.archived !== false);
       reconcileTaskSupervision(db.get(), task.id, { actorId: req.authUserId || req.session.userId });
+      if(root&&root===trackableTaskListRoot(db.get(),task.id))recordTaskListDelta(db.get(),before,[root]);
       return value;
     })();
     res.json({ data: { id: task.id, status: task.status, archived_at: archivedAt,
@@ -4175,12 +4236,14 @@ router.delete('/:id', (req, res) => {
     const queued = doomed.reduce((n, row) => n + (queueTodoDeletion('tasks', row) ? 1 : 0), 0);
 
     const result = db.get().transaction(() => {
+      const before=captureTaskListClock(db.get()),root=trackableTaskListRoot(db.get(),victim.id);
       // Preserve proven series identity before ON DELETE SET NULL severs the
       // legacy predecessor chain. Older deletions never authorize hole filling.
       registerRecurrenceOccurrence(db.get(),Number(req.params.id));
       const survivingSources = deleteTaskSupervisionProjections(db.get(), Number(req.params.id));
       const removed = db.get().prepare('DELETE FROM tasks WHERE id = ?').run(req.params.id);
       for (const sourceId of survivingSources) reconcileTaskSupervision(db.get(), sourceId, { actorId: req.authUserId || req.session.userId });
+      if(root&&removed.changes&&survivingSources.length===0)recordTaskListDelta(db.get(),before,[root]);
       return removed;
     })();
     if (result.changes === 0)

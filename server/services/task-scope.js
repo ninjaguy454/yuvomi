@@ -95,7 +95,7 @@ export function taskScopeNeedsToday({ includeFuture = false } = {}) {
  * Resolve wall times once per distinct window using the lifecycle's DST policy;
  * lexical wall-clock comparisons would hide work again during a DST overlap.
  * Callers still enforce privacy independently, before returning rows/metadata. */
-export function taskStartProjection(d, { now = new Date(), tasks = null } = {}) {
+export function taskStartProjection(d, { now = new Date(), tasks = null, bounded = false } = {}) {
   const serverNow = Number(now), timeZone = householdTimeZone(d);
   const tables = new Set(d.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('task_activity_support_tasks','task_supervision_actions')").all().map(row=>row.name));
   const columns = new Set(d.prepare('PRAGMA table_info(tasks)').all().map(row=>row.name));
@@ -105,7 +105,34 @@ export function taskStartProjection(d, { now = new Date(), tasks = null } = {}) 
     'SELECT counterpart_task_id,source_task_id FROM task_supervision_actions WHERE counterpart_task_id IS NOT NULL',
     'SELECT counterpart_task_id,action_task_id FROM task_supervision_actions WHERE counterpart_task_id IS NOT NULL');
   const seeds = tasks == null ? 'SELECT id FROM tasks' : 'SELECT CAST(value AS INTEGER) FROM json_each(?)';
-  const graph = d.prepare(`WITH RECURSIVE edges(child_id,parent_id) AS (${links.join(' UNION ')}),
+  let graph;
+  if(bounded&&tasks!=null){
+    // A delta hydrates a few changed roots. The ordinary graph query above
+    // materializes every structural/helper edge in the household even for one
+    // root, defeating the restricted list read. Walk indexed edges only from
+    // the supplied roots and their actual descendants/ancestors instead.
+    const read=d.prepare(`SELECT id,parent_task_id,start_date,${columns.has('start_time')?'start_time':'NULL AS start_time'} FROM tasks WHERE id=?`);
+    const children=d.prepare('SELECT id FROM tasks WHERE parent_task_id=?');
+    const parentParts=[];
+    if(tables.has('task_activity_support_tasks'))parentParts.push('SELECT source_task_id AS parent_id FROM task_activity_support_tasks WHERE task_id=?');
+    if(tables.has('task_supervision_actions'))parentParts.push(
+      'SELECT source_task_id AS parent_id FROM task_supervision_actions WHERE action_task_id=?',
+      'SELECT source_task_id AS parent_id FROM task_supervision_actions WHERE counterpart_task_id=?',
+      'SELECT action_task_id AS parent_id FROM task_supervision_actions WHERE counterpart_task_id=?');
+    const linked=parentParts.length?d.prepare(parentParts.join(' UNION ')):null;
+    const seeds=tasks.map(row=>Number(row.id??row)).filter(Number.isSafeInteger);
+    const descendants=new Set(),down=[...seeds];
+    while(down.length){const id=down.pop();if(descendants.has(id))continue;descendants.add(id);
+      for(const child of children.all(id))down.push(child.id);}
+    const found=new Map(),up=[...descendants];
+    while(up.length){const id=up.pop();if(found.has(id))continue;const row=read.get(id);if(!row)continue;
+      const parents=new Set(row.parent_task_id?[row.parent_task_id]:[]);
+      if(linked)for(const parent of linked.all(...parentParts.map(()=>id)))if(parent.parent_id)parents.add(parent.parent_id);
+      found.set(id,{...row,parents:JSON.stringify([...parents])});
+      for(const parent of parents)if(!found.has(parent))up.push(parent);
+    }
+    graph=[...found.values()];
+  }else graph = d.prepare(`WITH RECURSIVE edges(child_id,parent_id) AS (${links.join(' UNION ')}),
     descendants(id) AS (${seeds} UNION SELECT t.id FROM tasks t JOIN descendants s ON t.parent_task_id=s.id),
     scope(id) AS (SELECT id FROM descendants UNION SELECT e.parent_id FROM edges e JOIN scope s ON e.child_id=s.id)
     SELECT t.id,t.start_date,${columns.has('start_time') ? 't.start_time' : 'NULL AS start_time'},

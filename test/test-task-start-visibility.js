@@ -42,6 +42,19 @@ const ids=body=>body.data.map(row=>row.id);
 const at=(t,instant)=>t.mock.timers.setTime(Date.parse(instant));
 function clock(t,instant='2026-09-20T11:30:00Z'){t.mock.timers.enable({apis:['Date'],now:Date.parse(instant)});}
 
+test('bounded start projection walks only changed roots and their linked ancestors',async t=>{
+  clock(t);
+  const source=task(),action=task({parent:source,date:null,time:null});
+  const support=task({title:'Helper',date:null,time:null}),counterpart=task({title:'Helper step',parent:support,date:null,time:null});
+  d.prepare("INSERT INTO task_activity_support_tasks(source_task_id,task_id,role) VALUES(?,?,'supervisor')").run(source,support);
+  d.prepare("INSERT INTO task_supervision_actions(source_task_id,action_task_id,counterpart_task_id,learner_user_id,supervisor_user_id,state) VALUES(?,?,?,?,?,'assigned')").run(source,action,counterpart,2,1);
+  for(let n=0;n<250;n++)task({title:`Unrelated ${n}`,date:null,time:null});
+  const expected=scope.taskStartProjection(d,{tasks:[{id:support}]}).start(counterpart);
+  const guarded={prepare(sql){assert.ok(!String(sql).includes('WITH RECURSIVE edges'),
+    'bounded projection must not materialize the global edges CTE');return d.prepare(sql);}};
+  assert.equal(scope.taskStartProjection(guarded,{tasks:[{id:support}],bounded:true}).start(counterpart),expected);
+});
+
 test('bedtime same-day start is hidden before 19:00 and visible exactly at its household-local boundary',async t=>{
   clock(t);const id=task();
   for(const instant of ['2026-09-20T11:30:00Z','2026-09-20T22:59:59.999Z']){

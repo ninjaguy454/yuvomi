@@ -9156,6 +9156,51 @@ FORK_MIGRATIONS.push({version:10065,description:'Persist Rotation Group assignme
 }});
 FORK_MIGRATIONS.push({version:10066,description:'Classify legacy Rotation definitions requiring reviewed conversion',up:addGroupCompatibilityReviewSchema});
 FORK_MIGRATIONS.push({version:10067,description:'Map consistent legacy Task cohorts to reusable Rotation Groups',up:convertLegacyRotationGroups});
+FORK_MIGRATIONS.push({version:10068,description:'Bounded atomic Task list delta coverage',up:`
+  CREATE TABLE task_list_delta_events(
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    before_clock INTEGER NOT NULL,
+    after_clock INTEGER NOT NULL,
+    root_ids_json TEXT NOT NULL CHECK(json_valid(root_ids_json)),
+    CHECK(after_clock>before_clock)
+  );
+  CREATE INDEX idx_task_list_delta_after ON task_list_delta_events(after_clock);
+  -- These fields are projected on Task cards but predate the Task clock.
+  -- Uncovered changes create a clock gap, so old list cursors reset safely.
+  CREATE TRIGGER trg_task_locations_list_insert AFTER INSERT ON task_locations BEGIN
+    UPDATE task_change_clock SET version=version+1 WHERE id=1; END;
+  CREATE TRIGGER trg_task_locations_list_update AFTER UPDATE ON task_locations BEGIN
+    UPDATE task_change_clock SET version=version+1 WHERE id=1; END;
+  CREATE TRIGGER trg_task_locations_list_delete AFTER DELETE ON task_locations BEGIN
+    UPDATE task_change_clock SET version=version+1 WHERE id=1; END;
+  CREATE TRIGGER trg_task_action_links_list_insert AFTER INSERT ON task_action_links BEGIN
+    UPDATE task_change_clock SET version=version+1 WHERE id=1; END;
+  CREATE TRIGGER trg_task_action_links_list_update AFTER UPDATE ON task_action_links BEGIN
+    UPDATE task_change_clock SET version=version+1 WHERE id=1; END;
+  CREATE TRIGGER trg_task_action_links_list_delete AFTER DELETE ON task_action_links BEGIN
+    UPDATE task_change_clock SET version=version+1 WHERE id=1; END;
+  CREATE TRIGGER trg_task_claim_eligibility_list_insert AFTER INSERT ON task_claim_eligibility BEGIN
+    UPDATE task_change_clock SET version=version+1 WHERE id=1; END;
+  CREATE TRIGGER trg_task_claim_eligibility_list_update AFTER UPDATE ON task_claim_eligibility BEGIN
+    UPDATE task_change_clock SET version=version+1 WHERE id=1; END;
+  CREATE TRIGGER trg_task_claim_eligibility_list_delete AFTER DELETE ON task_claim_eligibility BEGIN
+    UPDATE task_change_clock SET version=version+1 WHERE id=1; END;
+  CREATE TRIGGER trg_family_documents_task_list_update AFTER UPDATE ON family_documents
+    WHEN EXISTS(SELECT 1 FROM task_documents WHERE document_id=NEW.id) BEGIN
+    UPDATE task_change_clock SET version=version+1 WHERE id=1; END;
+  CREATE TRIGGER trg_family_documents_task_list_delete AFTER DELETE ON family_documents
+    WHEN EXISTS(SELECT 1 FROM task_documents WHERE document_id=OLD.id) BEGIN
+    UPDATE task_change_clock SET version=version+1 WHERE id=1; END;
+  CREATE TRIGGER trg_family_document_access_task_list_insert AFTER INSERT ON family_document_access
+    WHEN EXISTS(SELECT 1 FROM task_documents WHERE document_id=NEW.document_id) BEGIN
+    UPDATE task_change_clock SET version=version+1 WHERE id=1; END;
+  CREATE TRIGGER trg_family_document_access_task_list_update AFTER UPDATE ON family_document_access
+    WHEN EXISTS(SELECT 1 FROM task_documents WHERE document_id=OLD.document_id OR document_id=NEW.document_id) BEGIN
+    UPDATE task_change_clock SET version=version+1 WHERE id=1; END;
+  CREATE TRIGGER trg_family_document_access_task_list_delete AFTER DELETE ON family_document_access
+    WHEN EXISTS(SELECT 1 FROM task_documents WHERE document_id=OLD.document_id) BEGIN
+    UPDATE task_change_clock SET version=version+1 WHERE id=1; END;
+`});
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];
 
 const FORK_MIGRATION_REMAPS = [

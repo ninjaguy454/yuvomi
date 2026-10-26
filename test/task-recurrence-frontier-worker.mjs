@@ -1,5 +1,8 @@
 import {workerData,parentPort} from 'node:worker_threads';
 import Database from 'better-sqlite3-multiple-ciphers';
+import {mock} from 'node:test';
+// A worker must use the parent fixture's calendar, not the machine's real date.
+if(workerData.now!=null)mock.timers.enable({apis:['Date'],now:new Date(workerData.now)});
 process.env.DB_PATH=':memory:';process.env.TZ='UTC';process.env.SESSION_SECRET='recurrence-frontier-worker';
 const {_setTestDatabase}=await import('../server/db.js');
 const {reconcileTaskRecurrence}=await import('../server/routes/tasks.js');

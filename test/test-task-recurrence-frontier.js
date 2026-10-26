@@ -143,7 +143,7 @@ test('same titles without canonical linkage remain different series',()=>{
 test('independent database connections serialize deletion and reconciliation without duplicate occurrence keys',async()=>{
   chain();
   const run=mode=>new Promise((resolve,reject)=>{
-    const worker=new Worker(new URL('./task-recurrence-frontier-worker.mjs',import.meta.url),{workerData:{path,mode}});
+    const worker=new Worker(new URL('./task-recurrence-frontier-worker.mjs',import.meta.url),{workerData:{path,mode,now:Date.now()}});
     worker.once('message',resolve);worker.once('error',reject);worker.once('exit',code=>{if(code)reject(new Error(`Worker failed: ${code}`));});
   });
   await Promise.all(['reconcile','delete','reconcile','reconcile'].map(run));

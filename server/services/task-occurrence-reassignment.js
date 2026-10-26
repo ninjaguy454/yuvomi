@@ -1,6 +1,6 @@
 /** An explicit occurrence override. Source rules and future cursors stay intact. */
 import {createHash} from 'node:crypto';
-import {buildSubtaskOccurrenceSnapshot,planWithSupervisor} from './subtask-occurrence-resolution.js';
+import {buildSubtaskOccurrenceSnapshot,planWithSupervisor,isSubtaskOccurrenceRoot} from './subtask-occurrence-resolution.js';
 import {taskCapabilities,taskSupervisionManagementAllowed,assertTaskMutation} from './task-access.js';
 import {setTaskAssignmentsBatch} from './task-assignments.js';
 import {updateCapturedDirectAssignees,proposedTaskAssigneePolicy} from './task-assignee-policy.js';
@@ -20,7 +20,7 @@ const ordinaryChildren=d=>d.prepare(`SELECT t.* FROM tasks t WHERE t.parent_task
 
 function authorize(d,rootTaskId,actorId,taskIds){
   const root=d.prepare('SELECT * FROM tasks WHERE id=?').get(rootTaskId);
-  if(!root||root.parent_task_id||root.archived_at||!['open','unavailable','in_progress'].includes(root.status))
+  if(!root||!isSubtaskOccurrenceRoot(d,root)||root.archived_at||!['open','unavailable','in_progress'].includes(root.status))
     fail('Choose an unfinished Activity occurrence.');
   const children=ordinaryChildren(d).all(root.id);
   if(!children.length||!taskIds.every(id=>children.some(child=>child.id===id)))
@@ -48,7 +48,7 @@ function authorize(d,rootTaskId,actorId,taskIds){
 
 function authorizeSavedReceipt(d,rootTaskId,actorId,taskIds,changes=[]){
   const root=d.prepare('SELECT * FROM tasks WHERE id=?').get(rootTaskId);
-  if(!root||root.parent_task_id||!taskCapabilities(d,actorId,root).view)
+  if(!root||!isSubtaskOccurrenceRoot(d,root)||!taskCapabilities(d,actorId,root).view)
     fail('This actor cannot read this Activity receipt.',403);
   for(const id of taskIds){
     const child=d.prepare('SELECT * FROM tasks WHERE id=?').get(id);

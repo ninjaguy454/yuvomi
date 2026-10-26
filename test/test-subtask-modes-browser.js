@@ -135,5 +135,10 @@ test('a nested Workflow Activity exposes and executes unfinished assignment reco
     await page.waitForFunction(()=>document.querySelector('[data-occurrence-resolve-status]')?.textContent==='Assignments saved for this occurrence.');
     const action=f.d.prepare('SELECT id FROM tasks WHERE parent_task_id=?').get(activity.task_id);
     assert.deepEqual(f.d.prepare('SELECT user_id FROM task_assignments WHERE task_id=?').all(action.id),[{user_id:2}]);
+    const resolved=await f.call('GET','/tasks/'+activity.task_id);
+    await page.evaluate(async task=>{document.querySelectorAll('.modal-backdrop').forEach(e=>e.remove());
+      const module=await import('/pages/tasks.js');return module.openOccurrenceReassignmentModal(task,{users:[{id:1,display_name:'Owner'},{id:2,display_name:'Worker'}]});},resolved.data);
+    assert.ok(await page.$('[data-occurrence-person="2"]'),'resolved Workflow worker retains occurrence-only reassignment entry');
+
   }finally{routeFixture=null;await page.close();}
 });

@@ -1915,7 +1915,7 @@ export function openTaskDetail({
       })});
   }
 
-  if(!canEdit && !task.parent_task_id && !archived && ['open','unavailable','in_progress'].includes(task.status)
+  if(!canEdit && (!task.parent_task_id||task.activity_template_id&&task.scoring?.root_task_id===task.id) && !archived && ['open','unavailable','in_progress'].includes(task.status)
     && canTask(task,'change_assignment') && canTask(task,'reassign')
     && structuralSubtasks(task).some(child=>canTask(child,'change_assignment')&&canTask(child,'reassign')
       && ['open','unavailable','in_progress'].includes(child.status) && subtaskParticipants(child).length)) {

@@ -72,6 +72,10 @@ test('Template API persists ordered policy, workflow materializes only extras, a
  const workflow=Number(f.d.prepare("INSERT INTO workflow_templates(name,category,subject_required,input_schema_json,created_by) VALUES('Extra workflow','household',0,'[]',1)").run().lastInsertRowid);f.d.prepare("INSERT INTO workflow_template_steps(workflow_template_id,activity_template_id,step_key,sort_order) VALUES(?,?,'work',0)").run(workflow,template);
  const instance=instantiateWorkflow(f.d,workflow,{createdBy:1});const actual=f.d.prepare('SELECT t.* FROM tasks t JOIN workflow_instance_tasks w ON w.task_id=t.id WHERE w.workflow_instance_id=? AND w.role=\'primary\'').get(instance.id);
  assert.ok(actual,JSON.stringify(instance));assert.deepEqual(JSON.parse(actual.additional_assignee_ids_json),[3,1]);assert.deepEqual(people(f,actual.id),[1,2,3]);
+ const beforeCursor=cursors(f),owner=actual.assigned_to;
+ const saved=await f.edit(actual.id,{title:'Renamed workflow Activity',assignment_group:JSON.parse(actual.assignment_group_json),additional_assignee_ids:[3,1]});
+ assert.equal(saved.status,200,JSON.stringify(saved));assert.equal(f.row(actual.id).title,'Renamed workflow Activity');assert.equal(f.row(actual.id).assigned_to,owner);assert.deepEqual(cursors(f),beforeCursor);
+
  const launched=await f.create({activity_template_id:template});assert.equal(launched.status,201,JSON.stringify(launched));
  assert.equal((await call('PUT','/admin/activity-templates/'+template,{additional_assignee_ids:[]})).status,200);assert.deepEqual(people(f,launched.data.id),[1,2,3]);assert.deepEqual(JSON.parse(f.row(launched.data.id).additional_assignee_ids_json),[3,1]);
 });

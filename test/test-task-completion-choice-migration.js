@@ -72,7 +72,7 @@ test('encrypted deployed 10070 database upgrades once and preserves legacy closu
       assert.equal(result.status,0,result.stdout+result.stderr);
       return [...(result.stdout+result.stderr).matchAll(/Migration (\d+) applied:/g)].map(row=>Number(row[1]));
     };
-    assert.deepEqual(boot(),[10079]);d=open();assert.deepEqual(snapshot(),before);
+    assert.deepEqual(boot(),[10071,10072,10073,10074,10075,10076,10077,10078,10079,10080]);d=open();assert.deepEqual(snapshot(),before);
     assert.equal(d.prepare('SELECT status,completion_kept_subtasks FROM tasks WHERE id=1').get().status,'done');
     assert.equal(d.prepare('SELECT status FROM tasks WHERE id=2').get().status,'open');
     assert.equal(d.prepare('SELECT legacy_incomplete,completion_recorded,recurrence_handled FROM task_completion_choices WHERE task_id=1').get().completion_recorded,0);

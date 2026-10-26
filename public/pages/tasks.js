@@ -1060,7 +1060,7 @@ function renderTaskScoringControls(task, isEdit) {
 }
 
 function occurrenceReassignmentRows(task) {
-  if (!task?.id || task.parent_task_id || task.is_supervision_projection || task.archived_at
+  if (!task?.id || (task.parent_task_id&&!(task.activity_template_id&&isTaskScoringOwner(task))) || task.is_supervision_projection || task.archived_at
     || !['open','unavailable','in_progress'].includes(task.status)
     || !canTask(task, 'change_assignment') || !canTask(task, 'reassign')) return [];
   return structuralSubtasks(task).filter(child=>['open','unavailable','in_progress'].includes(child.status)

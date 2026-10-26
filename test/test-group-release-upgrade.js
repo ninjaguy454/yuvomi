@@ -21,8 +21,8 @@ test('deployed schema10070 upgrades without replaying archive migrations or rewr
       .run(current,JSON.stringify({task:{is_recurring:1,recurrence_rule:'FREQ=DAILY',recurrence_from_completion:0}}),current);
     const before={tasks:d.prepare('SELECT * FROM tasks ORDER BY id').all(),
       occurrences:d.prepare('SELECT * FROM task_recurrence_occurrences').all(),definitions:d.prepare('SELECT * FROM task_recurrence_definitions').all()};
-    const pending=ALL_MIGRATIONS.filter(row=>row.version>10070&&row.version<=10078);
-    assert.deepEqual(pending.map(row=>row.version),[10071,10072,10073,10074,10075,10076,10077,10078]);
+    const pending=ALL_MIGRATIONS.filter(row=>row.version>10070&&row.version<=10080);
+    assert.deepEqual(pending.map(row=>row.version),[10071,10072,10073,10074,10075,10076,10077,10078,10079,10080]);
     for(const row of pending)migrate(d,row);
     for(const row of before.tasks){const after=d.prepare('SELECT * FROM tasks WHERE id=?').get(row.id);
       assert.deepEqual(Object.fromEntries(Object.keys(row).map(key=>[key,after[key]])),row);}

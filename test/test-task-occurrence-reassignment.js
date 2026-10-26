@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {scoringFixture} from './helpers/task-scoring-route-fixture.js';
 import {saveRotationGroup} from '../server/services/rotation.js';
+import {instantiateWorkflow} from '../server/services/activity-workflows.js';
 import {reconcileTaskSupervision} from '../server/services/task-supervision.js';
 
 const assignments=(d,id)=>d.prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id')
@@ -246,4 +247,24 @@ test('reassigning one supervised action preserves its sibling helper and shared 
   reconcileTaskSupervision(f.d,root,{actorId:1,notify:false});
   assert.deepEqual(f.d.prepare('SELECT action_task_id,counterpart_task_id,supervisor_user_id FROM task_supervision_actions WHERE source_task_id=? ORDER BY action_task_id').all(root),history,'completed helper history survives later skill changes');
   assert.equal(f.d.prepare('SELECT status FROM tasks WHERE id=?').get(support).status,'done');
+});
+
+test('workflow Activity reassigns its own unfinished child without changing source rules or future turns',async t=>{
+ const f=await scoringFixture(t),g=saveRotationGroup(f.d,{name:'Workflow replace workers',member_ids:[2,3]},{actorId:1});
+ const template=await f.call('POST','/automation/admin/activity-templates',{name:'Workflow replace',assignment_strategy:'fixed',fixed_user_id:1,
+   subtask_candidate_pool:{person_ids:[],group_ids:[g.id]},checklist:[{title_template:'Workflow group work',assignment_rule:{kind:'group',group_id:g.id,mode:'smart'}}]});
+ assert.equal(template.status,201,JSON.stringify(template));
+ const wid=Number(f.d.prepare("INSERT INTO workflow_templates(name,category,subject_required,created_by) VALUES('Replace workflow','misc',0,1)").run().lastInsertRowid);
+ f.d.prepare("INSERT INTO workflow_template_steps(workflow_template_id,activity_template_id,step_key,sort_order) VALUES(?,?,'step',0)").run(wid,template.data.id);
+ const made=instantiateWorkflow(f.d,wid,{createdBy:1}),root=made.tasks.find(row=>row.role==='primary').task_id;
+ const child=childIds(f.d,root)[0],from=assignments(f.d,child)[0],to=from===2?3:2;
+ const source=f.d.prepare('SELECT * FROM task_subtask_assignment_rules WHERE task_id=?').get(child),cursor=f.d.prepare('SELECT * FROM assignment_rotation_state ORDER BY rotation_key').all();
+ const request=body([child],{from_user_id:from,replacement_user_id:to}),shown=await preview(f,root,request);
+ assert.equal(shown.status,200,JSON.stringify(shown));assert.equal(shown.data.can_apply,true);
+ const save={...request,preview_hash:shown.data.preview_hash,idempotency_key:'workflow-only-override'};
+ const saved=await apply(f,root,save);assert.equal(saved.status,200,JSON.stringify(saved));assert.deepEqual(assignments(f.d,child),[to]);
+ assert.deepEqual(f.d.prepare('SELECT * FROM task_subtask_assignment_rules WHERE task_id=?').get(child),source);
+ assert.deepEqual(f.d.prepare('SELECT * FROM assignment_rotation_state ORDER BY rotation_key').all(),cursor);
+ const n=f.changes();assert.deepEqual(await apply(f,root,save),saved);assert.equal(f.changes(),n);
+ const wrong=await preview(f,child,request);assert.notEqual(wrong.status,200);
 });

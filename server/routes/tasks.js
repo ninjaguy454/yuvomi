@@ -3268,7 +3268,7 @@ export function updateTaskDefinition(req, res) {
     const additionalIds=normalizeAdditionalAssignees(db.get(),req.body.additional_assignee_ids,additionalAssigneeIds(task));
     const additionalChanged=JSON.stringify(additionalIds)!==JSON.stringify(additionalAssigneeIds(task));
     if(additionalChanged&&additionalIds.length&&!assignmentGroup)throw new TaskSkillError('Choose fixed additional people with the fixed assignee selection.');
-    if(req.body.additional_assignee_ids!==undefined&&task.parent_task_id)throw new TaskSkillError('Choose additional Activity assignees on the parent Activity.');
+    if(req.body.additional_assignee_ids!==undefined&&!isSubtaskOccurrenceRoot(db.get(),task))throw new TaskSkillError('Choose additional Activity assignees on the parent Activity.');
     if(additionalChanged&&!historicalSeriesOnly&&['done','expired','skipped','closed_incomplete'].includes(task.status))throw new TaskStateError('Preserve completed assignments; edit future occurrences instead.',{},409);
     if(additionalChanged){const permissions=taskCapabilities(db.get(),req,task);
       if(!permissions.change_assignment||!permissions.reassign)return res.status(403).json({error:'Your permissions do not allow changing additional assignees.',code:403});}

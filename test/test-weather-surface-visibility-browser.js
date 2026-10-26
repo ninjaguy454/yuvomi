@@ -42,8 +42,8 @@ async function pixels(page){
 async function state(page){return page.evaluate(()=>{
   const rgba=value=>{const c=document.createElement('canvas').getContext('2d');c.clearRect(0,0,1,1);c.fillStyle=value;c.fillRect(0,0,1,1);return [...c.getImageData(0,0,1,1).data];};
   const luminance=rgb=>rgb.slice(0,3).map(v=>v/255).map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4).reduce((sum,v,i)=>sum+v*[.2126,.7152,.0722][i],0);
-  const control=document.querySelector('.task-status-bucket__toggle>.activity-card__chevron'),css=getComputedStyle(control),ink=luminance(rgba(css.color)),backing=rgba(css.backgroundColor),surface=luminance(backing);
-  return{chevron:{alpha:backing[3]/255,contrast:(Math.max(ink,surface)+.05)/(Math.min(ink,surface)+.05)},bucketAlpha:rgba(getComputedStyle(document.querySelector('.task-board__bucket')).backgroundColor)[3]/255,cards:[...document.querySelectorAll('.activity-card')].map(n=>({transform:getComputedStyle(n).transform,alpha:rgba(getComputedStyle(n).backgroundColor)[3]/255})),stats:window.scene.getStats(),rimPointers:[...document.querySelectorAll('.local-weather-card-rim,.local-weather-card-rim *')].map(n=>getComputedStyle(n).pointerEvents),overflow:document.documentElement.scrollWidth>innerWidth+1};
+  const control=document.querySelector('.task-status-bucket__toggle>.activity-card__chevron'),css=getComputedStyle(control),ink=luminance(rgba(css.color)),backing=rgba(css.backgroundColor),surface=luminance(rgba(getComputedStyle(document.documentElement).getPropertyValue('--color-surface')));
+  return{chevron:{alpha:backing[3]/255,paletteContrast:(Math.max(ink,surface)+.05)/(Math.min(ink,surface)+.05)},bucketAlpha:rgba(getComputedStyle(document.querySelector('.task-board__bucket')).backgroundColor)[3]/255,cards:[...document.querySelectorAll('.activity-card')].map(n=>({transform:getComputedStyle(n).transform,alpha:rgba(getComputedStyle(n).backgroundColor)[3]/255})),stats:window.scene.getStats(),rimPointers:[...document.querySelectorAll('.local-weather-card-rim,.local-weather-card-rim *')].map(n=>getComputedStyle(n).pointerEvents),overflow:document.documentElement.scrollWidth>innerWidth+1};
 });}
 for(const [width,height]of [[390,844],[1280,800]])for(const [condition,day]of [['rain',true],['snow',true],['sunny',true],['sunny',false]])test(`weather surfaces remain perceptible and usable at ${width}px ${condition} ${day?'day':'night'}`,async()=>{
   const page=await browser.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
@@ -52,8 +52,45 @@ for(const [width,height]of [[390,844],[1280,800]])for(const [condition,day]of [[
     if(condition!=='sunny')assert.ok(rendered.every(row=>row.innerEdge>=24),`${condition} should paint visible detail on tinted and pale cards beyond the old clipped four-pixel edge: ${JSON.stringify(rendered)}`);
     else assert.ok(rendered.every(row=>row.edge===0&&row.center===0),'dry clear states have no wet or frosted card effects');
     assert.ok(rendered.every(row=>row.center===0),'weather decoration leaves the text area untouched');
-    assert.equal(s.chevron.alpha,1,'collapse-state icon needs its own opaque photographic backing');assert.ok(s.chevron.contrast>=3,'collapse-state icon meets nontext control contrast');
+    assert.equal(s.chevron.alpha,0,'Weather collapse-state icon has no circular backing');assert.ok(s.chevron.paletteContrast>=4.5,'heading ink and shadow palette retain readable contrast');
     assert.ok(s.bucketAlpha<=.65,'weather Kanban column must reveal its landscape');assert.ok(s.cards.every(row=>row.alpha>=.89&&row.alpha<=.91),'card tint remains translucent and bounded for contrast');
+  }finally{await page.close();}
+});
+
+for(const width of [390,1280])for(const [condition,day]of [['snow',true],['sunny',false]])test(`Weather status headings have readable unboxed glyphs at ${width}px ${condition} ${day?'day':'night'}`,async()=>{
+  const page=await browser.newPage();
+  try{
+    await setup(page,condition,day,width,844);
+    await page.evaluate(()=>{
+      const icon=open=>`<svg class="activity-card__chevron${open?' activity-card__chevron--open':''}" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg>`;
+      document.querySelector('.task-board__bucket-scroll').innerHTML=[['Done',45,true],['Expired',12,false],['Skipped',5,false]].map(([label,count,open])=>`<section class="task-status-bucket${open?'':' task-status-bucket--collapsed'}"><h3 class="task-status-bucket__heading"><button type="button" class="task-status-bucket__toggle" aria-expanded="${open}">${icon(open)}<span>${label}</span></button><span class="task-status-bucket__count">${count}</span></h3></section>`).join('');
+    });
+    const headingState=()=>page.evaluate(()=>[...document.querySelectorAll('.task-status-bucket__heading')].map(heading=>{
+      const button=heading.querySelector('button'),label=button.querySelector('span'),icon=button.querySelector('svg'),count=heading.querySelector('.task-status-bucket__count'),css=node=>getComputedStyle(node),rect=button.getBoundingClientRect();
+      return{label:label.textContent,count:count.textContent,expanded:button.getAttribute('aria-expanded'),height:rect.height,width:rect.width,weight:Number(css(label).fontWeight),countWeight:Number(css(count).fontWeight),shadow:css(label).textShadow,countShadow:css(count).textShadow,iconShadow:css(icon).filter,iconTransform:css(icon).transform,backgrounds:[label,icon,count].map(node=>css(node).backgroundColor),focus:{style:css(button).outlineStyle,width:parseFloat(css(button).outlineWidth)}};
+    }));
+    const headings=await headingState();reports.push({name:`${width}-${condition}-${day?'day':'night'}-headings`,headings});
+    assert.deepEqual(headings.map(row=>[row.label,row.count,row.expanded]),[['Done','45','true'],['Expired','12','false'],['Skipped','5','false']]);
+    for(const row of headings){
+      assert.ok(row.backgrounds.every(value=>value==='rgba(0, 0, 0, 0)'),'status text, chevron and count must not sit in individual pills: '+JSON.stringify(row));
+      assert.ok(row.weight>=700&&row.countWeight>=700,'labels and counts have stronger typography');
+      assert.notEqual(row.shadow,'none');assert.notEqual(row.countShadow,'none');assert.notEqual(row.iconShadow,'none','chevrons retain a glyph shadow over the landscape');
+      assert.ok(row.height>=44&&row.width>=200,'removing backings preserves full-row targets');
+    }
+    assert.notEqual(headings[0].iconTransform,headings[1].iconTransform,'expanded and collapsed chevrons remain distinct');
+    if(output)await page.screenshot({path:join(output,`${width}-${condition}-${day?'day':'night'}-headings.png`)});
+    await page.focus('.task-board__bucket-sort');await page.keyboard.press('Tab');
+    assert.equal(await page.$eval('.task-status-bucket__toggle',node=>node===document.activeElement),true);
+    const focused=(await headingState())[0].focus;assert.equal(focused.style,'solid');assert.ok(focused.width>=2,'keyboard focus remains visible');
+    if(output)await page.screenshot({path:join(output,`${width}-${condition}-${day?'day':'night'}-headings-focus.png`)});
+    const heights=headings.map(({height})=>height);
+    await page.evaluate(()=>{
+      const button=document.querySelector('.task-status-bucket__toggle');button.disabled=true;
+      window.scene.dispose();
+    });
+    const plain=await headingState();assert.deepEqual(plain.map(({height})=>height),heights,'Weather typography preserves target heights');assert.ok(plain.every(row=>row.width>=200),'ordinary headings retain full-row targets');
+    assert.equal(await page.$eval('.task-status-bucket__toggle',node=>node.disabled),true,'theme changes preserve disabled semantics');
+    assert.ok(plain.every(row=>row.shadow==='none'&&row.iconShadow==='none'),'leaving Weather restores ordinary headings');
   }finally{await page.close();}
 });
 
@@ -66,6 +103,7 @@ test('wet edge motion stops for reduced motion and accessibility modes restore o
     const cdp=await page.createCDPSession();
     for(const feature of [{name:'prefers-reduced-transparency',value:'reduce'},{name:'forced-colors',value:'active'}]){
       await cdp.send('Emulation.setEmulatedMedia',{features:[feature]});await page.waitForFunction(()=>!window.scene.getStats().rafActive);await waitForOpaqueCards(page);const current=await state(page);assert.equal(current.bucketAlpha,1);assert.ok(current.cards.every(row=>row.alpha===1));assert.equal(await page.$eval('.local-weather-card-rim',node=>getComputedStyle(node).display),'none');
+      assert.equal(await page.$eval('.task-status-bucket__toggle',node=>getComputedStyle(node).textShadow),'none');assert.equal(await page.$eval('.task-status-bucket__toggle svg',node=>getComputedStyle(node).filter),'none');
     }
     await cdp.send('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'reduce'}]});await cdp.detach();await page.evaluate(()=>window.scene.dispose());await waitForOpaqueCards(page);const plain=await stateAfterDispose(page);assert.equal(plain.bucketAlpha,1);assert.ok(plain.cards.every(alpha=>alpha===1));assert.equal(await page.$('.local-weather-card-rim'),null,'leaving weather removes all material decoration');
   }finally{await page.close();}

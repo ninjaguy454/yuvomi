@@ -20,10 +20,13 @@
 html[data-local-weather-scene] .app-shell{background:transparent}
 html[data-local-weather-scene] .app-content,html[data-local-weather-scene][data-named-theme] .app-content{position:relative;background-color:transparent;background-image:none}
 html[data-local-weather-scene] .lg-backdrop{display:none}
-/* Reveal the landscape through large Task columns, keeping small label/control
- * backings opaque. This must not fade the column's children or other themes. */
+/* Reveal the landscape through Task columns without fading their children. */
 html[data-local-weather-scene] .task-board__bucket{background:color-mix(in srgb,var(--color-surface-2) 46%,transparent)}
-html[data-local-weather-scene] :is(.task-board__bucket-title,.task-board__bucket-sort,.task-status-bucket__toggle>span,.task-status-bucket__toggle>.activity-card__chevron,.task-status-bucket__count){background-color:var(--color-surface);border-radius:var(--radius-sm)}
+html[data-local-weather-scene] :is(.task-board__bucket-title,.task-board__bucket-sort){background-color:var(--color-surface);border-radius:var(--radius-sm)}
+/* Status headings use bold ink and a close glyph shadow instead of separate
+ * label, count and chevron backings. Keep the full-row button and focus ring. */
+html[data-local-weather-scene] :is(.task-status-bucket__toggle,.task-status-bucket__count){color:var(--color-text-primary);font-weight:var(--font-weight-bold);text-shadow:-1px 0 var(--color-surface),1px 0 var(--color-surface),0 -1px var(--color-surface),0 1px var(--color-surface)}
+html[data-local-weather-scene] .task-status-bucket__toggle>.activity-card__chevron{stroke-width:2.5;filter:drop-shadow(0 1px 1px var(--color-surface))}
 /* Weather palette inks are checked against both photographic extremes at 90%. */
 html[data-local-weather-scene] [data-card-color].activity-card,html[data-local-weather-scene] [data-card-color].activity-card:hover{background-color:color-mix(in srgb,var(--card-fill) 90%,transparent)}
 html[data-local-weather-scene] :is(.page-header,.dashboard-overview,.wall-dashboard__header){background:var(--color-surface);border-radius:var(--radius-md)}
@@ -45,6 +48,7 @@ html[data-local-weather-scene] :is(.wall-dashboard__connection,.wall-dashboard__
 .local-weather-snow-fragment{position:absolute;width:2px;height:3px;background:#f9ffff;clip-path:polygon(40% 0,100% 28%,73% 100%,0 66%);opacity:0;pointer-events:none}
 @media(max-width:700px){.local-weather-scene{height:100dvh}}
 @media(prefers-reduced-motion:reduce){.local-weather-cloud-strip{will-change:auto}}
+@media(prefers-reduced-transparency:reduce),(forced-colors:active){html[data-local-weather-scene] :is(.task-status-bucket__toggle,.task-status-bucket__count){text-shadow:none}html[data-local-weather-scene] .task-status-bucket__toggle>.activity-card__chevron{filter:none}}
 @media(prefers-reduced-transparency:reduce),(forced-colors:active){html[data-local-weather-scene] .task-board__bucket{background:var(--color-surface-2)}html[data-local-weather-scene] [data-card-color].activity-card,html[data-local-weather-scene] [data-card-color].activity-card:hover{background-color:var(--card-fill)}}
 @media(prefers-reduced-transparency:reduce){.local-weather-card-rim,.local-weather-sky-viewport,.local-weather-atmosphere{display:none!important}html[data-local-weather-scene] .app-content,html[data-local-weather-scene][data-named-theme] .app-content{background-color:var(--color-bg)}}
 @media(forced-colors:active){.local-weather-scene,.local-weather-card-rim{display:none!important}html[data-local-weather-scene] .app-content,html[data-local-weather-scene][data-named-theme] .app-content{background-color:Canvas}}

@@ -8,6 +8,10 @@ const ids = values => [...new Set((values || []).map(Number))].sort((a, b) => a 
 const text = value => String(value ?? '').trim();
 const point = value => value === undefined ? 0 : validTaskPoints(value) ? Number(value) : value;
 const assignmentGroup=value=>typeof value==='string'?JSON.parse(value):value||null;
+const subtaskEditValue=(row,...fields)=>{
+  for(const field of fields)if(Object.hasOwn(row,field))return typeof row[field]==='string'?JSON.parse(row[field]):row[field];
+  return undefined;
+};
 const candidatePool=value=>{
   const pool=typeof value==='string'?JSON.parse(value):value;
   return pool?{person_ids:[...(pool.person_ids||[])].map(Number),group_ids:[...(pool.group_ids||[])].map(Number)}:null;
@@ -24,9 +28,10 @@ export function taskEditDefinition(value) {
     subtasks: (value.subtasks || []).filter(step => text(step.title)).map(step => ({
       id: Number(step.id) || null, ...(step.action_key ? {action_key:step.action_key} : {}), ...(step.client_key ? {client_key:step.client_key} : {}), title: text(step.title), points: point(step.points), is_optional: !!step.is_optional, skill_ids: ids(step.skill_ids),
       ...(step.assigned_user_ids===undefined?{}:{assigned_user_ids:ids(step.assigned_user_ids)}),
-      assignment_group:assignmentGroup(step.assignment_group??step.assignment_group_json),
-      ...(step.assignment_rule||step.subtask_assignment_rule?{assignment_rule:step.assignment_rule??step.subtask_assignment_rule,
-        supervisor_pool:step.supervisor_pool??step.subtask_supervisor_pool??null}:{}),
+      assignment_group:subtaskEditValue(step,'assignment_group','assignment_group_json')??null,
+      ...(subtaskEditValue(step,'assignment_rule','subtask_assignment_rule','assignment_rule_json')!==undefined
+        ?{assignment_rule:subtaskEditValue(step,'assignment_rule','subtask_assignment_rule','assignment_rule_json'),
+          supervisor_pool:subtaskEditValue(step,'supervisor_pool','subtask_supervisor_pool','supervisor_pool_json')??null}:{}),
     })),
     skill_ids: ids(value.skill_ids), assigned_to: ids(value.assigned_to),
     owner_user_id: Number(value.owner_user_id) || null,

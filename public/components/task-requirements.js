@@ -143,15 +143,17 @@ export function bindSkillPicker(root, { onChange = null, onCreateSkill = null } 
 }
 
 const decode=value=>typeof value==='string'?JSON.parse(value):value??null;
-const subtaskSource=value=>decode(value.assignment_rule??value.subtask_assignment_rule??value.assignment_rule_json);
-const sourceGroup=value=>{const rule=subtaskSource(value);return rule?.kind==='group'?rule:decode(value.assignment_group??value.assignment_group_json);};
-const sourceSupervisor=value=>decode(value.supervisor_pool??value.subtask_supervisor_pool??value.supervisor_pool_json);
+const sourceField=(value,...fields)=>{for(const field of fields)if(Object.hasOwn(value,field))return decode(value[field]);return null;};
+const subtaskSource=value=>sourceField(value,'assignment_rule','subtask_assignment_rule','assignment_rule_json');
+const sourceGroup=value=>{const rule=subtaskSource(value);return rule?.kind==='group'?rule:sourceField(value,'assignment_group','assignment_group_json');};
+const sourceSupervisor=value=>sourceField(value,'supervisor_pool','subtask_supervisor_pool','supervisor_pool_json');
 const groupConfiguration=value=>value?{group_id:Number(value.group_id),start_mode:value.start_mode||'first',direction:value.direction||'first_to_last',
   ...(value.member_order?.length?{member_order:value.member_order}:{})}:null;
 
 function subtaskRow(subtask, skills, template, index, canCreateSkill = false, users = [], groups = [],canCreateGroup=false) {
-  const assigned = Number((template&&subtask.fixed_user_id)||subtask.assigned_to || subtask.assigned_user_ids?.[0] || subtask.assigned_users?.[0]?.id) || null;
   const source=subtaskSource(subtask),group=sourceGroup(subtask),supervisor=sourceSupervisor(subtask);
+  const assigned = Number((template&&subtask.fixed_user_id)||subtask.assigned_to || subtask.assigned_user_ids?.[0] || subtask.assigned_users?.[0]?.id
+    ||(source?.kind==='fixed'?source.user_ids?.[0]:null)) || null;
   const selectedGroup=groups.find(item=>Number(item.id)===Number(group?.group_id));
   const assignment = users.length ? `<span class="task-subtask-editor__assignment" data-task-subtask-assignment hidden>
     <button type="button" class="task-allocation__target task-allocation__target--empty" data-task-subtask-target aria-haspopup="dialog" aria-expanded="false"><span aria-hidden="true">?</span></button>
@@ -251,7 +253,7 @@ export function bindSubtaskEditor(root, { skills = [], template = false, dateKey
     const groupChanged=JSON.stringify(groupConfig)!==JSON.stringify(groupConfiguration(originalGroup));
     const selected=groupId&&!groupChanged?(Number(original.assigned_to||previous[0])||null)
       :Number(row.querySelector('[data-task-subtask-assignee]')?.value)||null;
-    const assignmentChanged = groupChanged || selected !== (Number(original.assigned_to || previous[0]) || null);
+    const assignmentChanged = groupChanged || selected !== (Number(original.assigned_to || previous[0] || (originalRule?.kind==='fixed'?originalRule.user_ids?.[0]:null)) || null);
     const includeAssignment = oldIds !== undefined || !original.id || assignmentChanged;
     const mode=row.querySelector('[data-task-subtask-mode]')?.value;
     const supervisorValue=row.querySelector('[data-task-subtask-supervisor]')?.value||'';
@@ -260,9 +262,11 @@ export function bindSubtaskEditor(root, { skills = [], template = false, dateKey
     const modeActive=!!originalRule||!originalGroup||!!row.dataset.modeTouched;
     const rule=originalRule?.kind==='group'&&!groupChanged&&!row.dataset.modeTouched?originalRule
       :groupId&&(mode&&modeActive||supervisor)?{kind:'group',...groupConfig,mode:mode||'synced'}
-      :originalRule?.kind==='fixed'&&!assignmentChanged?originalRule:supervisor&&selected?{kind:'fixed',user_ids:[selected]}:null;
+      :originalRule?.kind==='fixed'&&!assignmentChanged?originalRule:(supervisor||originalRule)&&selected?{kind:'fixed',user_ids:[selected]}:null;
+    const {subtask_assignment_rule:_savedRule,assignment_rule_json:_ruleJson,subtask_supervisor_pool:_savedPool,
+      supervisor_pool_json:_poolJson,assignment_group_json:_groupJson,...outputOriginal}=original;
     return ({
-    ...original,
+    ...outputOriginal,
     ...(row.dataset.subtaskId ? { id: Number(row.dataset.subtaskId) } : {}),
     title: row.querySelector('[data-task-subtask-title]').value,
     ...(template ? { title_template: row.querySelector('[data-task-subtask-title]').value } : {}),

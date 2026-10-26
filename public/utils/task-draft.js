@@ -1,5 +1,10 @@
 import { resolveActivityDueDate, deriveActivityDueOffset } from './activity-schedule.js';
 
+const subtaskPolicyValue=(row,...fields)=>{
+  for(const field of fields)if(Object.hasOwn(row,field))return typeof row[field]==='string'?JSON.parse(row[field]):row[field];
+  return undefined;
+};
+
 function instanceGroup(value) {
   if(!value)return null;
   const saved=typeof value==='string'?JSON.parse(value):value;
@@ -34,8 +39,8 @@ export function createManualTaskDraft({ template = null, places = [], defaultPoi
     additional_assignee_ids:[...(template?.additional_assignee_ids??JSON.parse(template?.additional_assignee_ids_json||'[]'))],
     skill_ids: [...(template?.skill_ids || [])],
     subtasks: (template?.checklist || []).map((step) => ({ title: step.title_template || step.title || '', skill_ids: [...(step.skill_ids || [])], is_optional: step.is_optional ? 1 : 0,
-      ...(step.assignment_rule||step.assignment_rule_json?{assignment_rule:structuredClone(typeof step.assignment_rule_json==='string'?JSON.parse(step.assignment_rule_json):step.assignment_rule),
-        supervisor_pool:structuredClone(typeof step.supervisor_pool_json==='string'?JSON.parse(step.supervisor_pool_json):step.supervisor_pool??null)}:{}),
+      ...(subtaskPolicyValue(step,'assignment_rule','assignment_rule_json')!==undefined?{assignment_rule:structuredClone(subtaskPolicyValue(step,'assignment_rule','assignment_rule_json')),
+        supervisor_pool:structuredClone(subtaskPolicyValue(step,'supervisor_pool','supervisor_pool_json')??null)}:{}),
       ...(step.fixed_user_id?{assigned_user_ids:[Number(step.fixed_user_id)]}:{}),
       ...(step.assignment_group_json||step.assignment_group
         ?{assignment_group:instanceGroup(step.assignment_group_json||step.assignment_group)}:{}),
@@ -79,13 +84,16 @@ export function taskDraftToActivity(draft, template = null) {
     recurrence_rule: draft.recurrence_rule || null,
     recurrence_from_completion: draft.recurrence_from_completion ? 1 : 0,
     rotation_bindings: structuredClone(draft.rotation_bindings || []),
-    checklist: (draft.subtasks || []).map((step) => ({ title_template: step.title, skill_ids: [...(step.skill_ids || [])], is_optional: step.is_optional ? 1 : 0,
-      ...(step.assignment_rule||step.subtask_assignment_rule?{assignment_rule:structuredClone(step.assignment_rule??step.subtask_assignment_rule),supervisor_pool:structuredClone(step.supervisor_pool??step.subtask_supervisor_pool??null)}:{}),
-      ...(!step.assignment_rule&&!step.subtask_assignment_rule&&!step.assignment_group&&!step.assignment_group_json&&step.assigned_user_ids?.length
+    checklist: (draft.subtasks || []).map((step) => {
+      const rule=subtaskPolicyValue(step,'assignment_rule','subtask_assignment_rule','assignment_rule_json');
+      const group=subtaskPolicyValue(step,'assignment_group','assignment_group_json');
+      return ({ title_template: step.title, skill_ids: [...(step.skill_ids || [])], is_optional: step.is_optional ? 1 : 0,
+      ...(rule!==undefined?{assignment_rule:structuredClone(rule),supervisor_pool:structuredClone(subtaskPolicyValue(step,'supervisor_pool','subtask_supervisor_pool','supervisor_pool_json')??null)}:{}),
+      ...(!rule&&!group&&step.assigned_user_ids?.length
         ?{fixed_user_id:Number(step.assigned_user_ids[0])}:{}),
       ...(Object.hasOwn(step,'assignment_group')||Object.hasOwn(step,'assignment_group_json')
-        ?{assignment_group:decodeGroup(Object.hasOwn(step,'assignment_group')?step.assignment_group:step.assignment_group_json)}:{}),
-      ...(step.points != null ? { points: Number(step.points) } : {}) })),
+        ?{assignment_group:group??null}:{}),
+      ...(step.points != null ? { points: Number(step.points) } : {}) });}),
     location_mode: location.kind === 'saved_place' ? 'fixed' : 'none',
     place_id: location.kind === 'saved_place' ? location.place_id : null,
     assignment_strategy: assignmentStrategy, assignment_group_json:assignmentGroup,

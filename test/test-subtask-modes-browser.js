@@ -142,3 +142,55 @@ test('a nested Workflow Activity exposes and executes unfinished assignment reco
 
   }finally{routeFixture=null;await page.close();}
 });
+
+test('canonical null survives editor output and stale source aliases are removed',async()=>{
+  const page=await browser.newPage();try{
+    await page.goto(origin+'/fixture');
+    const result=await page.evaluate(async()=>{
+      const c=await import('/components/task-requirements.js'),{taskDraftToActivity}=await import('/utils/task-draft.js');
+      const users=[{id:2,display_name:'Selected Person'},{id:3,display_name:'Other Person'}],groups=[{id:9,name:'Old Group',active:1,members:users}];
+      document.querySelector('#fixture').innerHTML=c.renderSubtaskEditor({users,groups,subtasks:[{id:11,title:'Person draft',
+        assignment_rule:null,subtask_assignment_rule:{kind:'group',group_id:9,mode:'smart'},assignment_group:null,
+        assignment_group_json:JSON.stringify({group_id:9}),assigned_user_ids:[2],supervisor_pool:null,subtask_supervisor_pool:{kind:'person',user_id:2}},
+        {id:12,title:'Unresolved fixed roster',subtask_assignment_rule:{kind:'fixed',user_ids:[2,3]}}]});
+      const editor=c.bindSubtaskEditor(document.querySelector('#fixture'),{users,groups,assignmentsEnabled:true}),row=editor.getValue()[0];
+      return {row,template:taskDraftToActivity({title:'Saved template',subtasks:[row]}).checklist[0],fixed:editor.getValue()[1].assignment_rule};
+    });
+    assert.equal(result.row.assignment_rule,null);assert.equal(Object.hasOwn(result.row,'subtask_assignment_rule'),false);
+    assert.equal(Object.hasOwn(result.row,'assignment_rule_json'),false);assert.equal(Object.hasOwn(result.row,'subtask_supervisor_pool'),false);
+    assert.equal(Object.hasOwn(result.row,'assignment_group_json'),false);assert.equal(result.template.fixed_user_id,2);
+    assert.deepEqual(result.fixed,{kind:'fixed',user_ids:[2,3]});
+  }finally{await page.close();}
+});
+
+test('choosing a Person replaces an unresolved Group rule through ordinary Save and survives reopen',async t=>{
+  const f=await scoringFixture(t);routeFixture=f;const page=await browser.newPage();
+  try{
+    const g=saveRotationGroup(f.d,{name:'Unresolved source workers',member_ids:[2]},{actorId:1});
+    const skill=Number(f.d.prepare("INSERT INTO skills(name,minimum_age,created_by) VALUES('Person correction skill',0,1)").run().lastInsertRowid);
+    f.d.prepare("INSERT INTO user_skill_proficiency(user_id,skill_id,proficiency) VALUES(2,?,'excluded')").run(skill);
+    f.d.prepare("INSERT INTO user_skill_proficiency(user_id,skill_id,proficiency) VALUES(3,?,'normal')").run(skill);
+    const made=await f.create({title:'Person correction',assigned_to:[1],subtask_candidate_pool:{person_ids:[3],group_ids:[g.id]},
+      subtasks:[{title:'Unresolved action',skill_ids:[skill],assignment_rule:{kind:'group',group_id:g.id,mode:'smart'}}]});
+    assert.equal(made.status,201,JSON.stringify(made));const child=made.data.subtasks[0];assert.equal(child.subtask_resolution.state,'unresolved');
+    await page.goto(origin+'/fixture');
+    await page.evaluate(async({g,child})=>{
+      const c=await import('/components/task-requirements.js');window.api=(await import('/api.js')).api;
+      const users=[{id:1,display_name:'Owner'},{id:2,display_name:'Ineligible member'},{id:3,display_name:'Chosen Person'}],groups=[g];
+      document.querySelector('#fixture').innerHTML=c.renderSubtaskEditor({users,groups,subtasks:[child]});
+      window.editor=c.bindSubtaskEditor(document.querySelector('#fixture'),{users,groups,assignmentsEnabled:true});
+      editor.setAssignmentCandidates({userIds:[2,3],groupIds:[g.id]});
+    },{g,child});
+    await page.click('[data-task-subtask-group-behavior] summary');await page.select('[data-task-subtask-group]','');
+    await page.click('[data-task-subtask-target]');await page.click('[data-acceptance-choice="3"]');
+    const draft=await page.evaluate(()=>editor.getValue()[0]);assert.deepEqual(draft.assignment_rule,{kind:'fixed',user_ids:[3]});
+    assert.equal(Object.hasOwn(draft,'subtask_assignment_rule'),false);
+    const saved=await page.evaluate(async root=>await api.put('/tasks/'+root,{subtasks:editor.getValue()}),made.data.id);
+    assert.equal(saved.data.subtasks[0].assigned_to,3,JSON.stringify(saved.data.subtasks[0]));assert.deepEqual(saved.data.subtasks[0].subtask_assignment_rule,{kind:'fixed',user_ids:[3]});
+    const reopened=await f.call('GET','/tasks/'+made.data.id);assert.deepEqual(reopened.data.subtasks[0].subtask_assignment_rule,{kind:'fixed',user_ids:[3]});
+    assert.equal(reopened.data.subtasks[0].assigned_to,3);
+    await page.evaluate(rows=>editor.setValue(rows),reopened.data.subtasks);
+    assert.equal(await page.$eval('[data-task-subtask-assignee]',node=>node.disabled),true);
+    assert.deepEqual(await page.evaluate(()=>editor.getValue()[0].assignment_rule),{kind:'fixed',user_ids:[3]});
+  }finally{routeFixture=null;await page.close();}
+});

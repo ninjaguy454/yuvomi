@@ -14,6 +14,14 @@ export function isNotificationDeliveryCurrent(database, notification) {
   const scope = /^task-supervision-scope:(\d+):[a-f0-9]+$/.exec(notification.source_key || '');
   if (scope) {
     const view = inspectTaskSupervision(database, Number(scope[1]));
+    if(view.supervisor_scope==='per_action'){
+      const source=database.prepare('SELECT created_by FROM tasks WHERE id=?').get(view.source_task_id);
+      const manager=Number(source?.created_by)===Number(notification.user_id)
+        ||database.prepare("SELECT role FROM users WHERE id=?").get(notification.user_id)?.role==='admin';
+      const relevant=view.actions.filter(action=>!action.completed&&action.state!=='not_required'
+        &&(Number(action.supervisor_user_id)===Number(notification.user_id)||manager&&action.state!=='assigned'));
+      return relevant.length>0&&notification.source_key===taskSupervisionNotificationKey(view,{userId:notification.user_id,manager});
+    }
     return notification.source_key === taskSupervisionNotificationKey(view)
       && (['needed','excluded'].includes(view.state)
         || (view.state === 'assigned' && Number(view.supervisor_user_id) === Number(notification.user_id)));

@@ -41,6 +41,8 @@ const templates = [
   { id: 18, name: 'Saved independent group', title_template: 'Independent group work', category: 'misc', points: 0,
     assignment_strategy: 'eligible_round_robin', assignment_policy:'group_rotation', assignment_group_json: JSON.stringify({group_id:31,start_mode:'first',direction:'first_to_last',member_order:[2,1]}),
     checklist:[{id:181,title_template:'Group action',assignment_group_json:JSON.stringify({group_id:31,start_mode:'first',direction:'first_to_last',member_order:[2,1]})}] },
+  { id: 19, name:'Two fixed people',title_template:'Two fixed people',category:'misc',points:0,
+    assignment_strategy:'fixed',fixed_user_id:1,fixed_assignee_ids:[1,2],allow_assignment_override:1,checklist:[{title_template:'Shared step',skill_ids:[]}] },
 ];
 const workflow = { id: 21, name: 'Evening reset', description: 'Two connected Tasks', subject_required: 0, input_schema: [], steps: [] };
 const preferenceValues = new Map(), requests = [];
@@ -53,7 +55,18 @@ app.use('/api/v1', (req, res) => {
   const userId = Number(req.headers.cookie?.match(/(?:^|;\s*)draft-user=(\d+)/)?.[1] || 1);
   requests.push({ method: req.method, path: req.path, userId, body: req.body });
   if(req.path==='/auth/me')return res.json({user:users.find(user=>user.id===userId),permissions:{admin:!req.headers.cookie?.includes('draft-role=member'),capabilities:Object.fromEntries(['tasks.create','tasks.change_priority','tasks.change_points','tasks.change_category_tags','tasks.change_dates','tasks.change_assignment','tasks.change_required_skills','activities.view','workflows.view','workflows.run'].map(key=>[key,'allow']))}});
-  if(req.path==='/tasks/70/scoring-preview')return res.json({data:{mode:'whole_task',mode_locked:false,review_required:false,valid:true,scope:req.body.edit_scope||'occurrence',earned:[],before:[],after:[],settlements:[],before_units:[],after_units:[]}});
+  if(req.path==='/tasks/70/scoring-preview'){
+    const response={mode:'whole_task',mode_locked:false,review_required:false,valid:true,scope:req.body.edit_scope||'occurrence',earned:[],before:[],after:[],settlements:[],before_units:[],after_units:[]};
+    if(req.body.include_edit_definition&&editFixture){
+      const roster=editFixture.direct_assignee_ids??(editFixture.assigned_to?[Number(editFixture.assigned_to)]:[]);
+      response.edit_definition={fields:{...editFixture,assigned_to:roster,direct_assignee_ids:roster,
+        owner_user_id:editFixture.assigned_to??null,scoring_mode:editFixture.scoring_mode||'whole_task',
+        skill_ids:editFixture.skill_ids||[],tags:editFixture.tags||[],rotation_user_ids:[],rotation_bindings:[],assignment_group:null},
+        actions:[],permissions:editFixture.permissions,
+        revisions:{expected_revision:editFixture.revision,expected_series_revision:editFixture.recurrence_series_revision}};
+    }
+    return res.json({data:response});
+  }
   if (req.path === '/reminders' && req.method === 'GET') return res.json({ data: null });
   if (req.path === '/tasks/70' && editFixture) {
     if (req.method === 'PUT') {
@@ -81,7 +94,14 @@ app.use('/api/v1', (req, res) => {
   }
   if (req.path === '/tasks/meta/options') return res.json({ users, categories: [{ key: 'misc', label: 'General' }], tags: [], default_points: 3 });
 if (req.path === '/automation/activity-options') return res.json({ data: { activities: templates, skills,rotation_groups:rotationGroups } });
-  if (req.path === '/automation/rotation-groups') return res.json({ data: [{id:31,name:'Kids',members:users}] });
+  if(req.path==='/automation/rotation-members')return res.json({data:users});
+  if(req.path==='/automation/rotation-groups/31'&&req.method==='GET')return res.json({data:{...rotationGroups[0],revision:1,tracks:[]}});
+  if(req.path==='/automation/rotation-groups'&&req.method==='POST'){
+    const group={id:req.body.name==='Template group'?35:34,name:req.body.name,active:1,usage_mode:'independent',members:req.body.member_ids.map(id=>({...users.find(user=>user.id===id),active:1}))};
+    const previous=rotationGroups.findIndex(item=>item.id===group.id);if(previous>=0)rotationGroups.splice(previous,1,group);else rotationGroups.push(group);
+    return res.status(201).json({data:group});
+  }
+if (req.path === '/automation/rotation-groups') return res.json({ data: rotationGroups });
   if (req.path === '/planning/places') return res.json({ data: places });
   if (req.path === '/planning/place-search/status') return res.json({ data: { configured: false } });
   if (req.path === '/automation/quick-add') return res.json({ data: [workflow], activities: templates, members: users, places });
@@ -118,11 +138,11 @@ test.after(async () => {
   await new Promise((resolve) => server?.close(resolve) || resolve());
 });
 
-async function mounted({ userId = 1, width = 1366, newTask = true, role = 'admin', editTask = null } = {}) {
+async function mounted({ userId = 1, width = 1366, newTask = true, role = 'admin', editTask = null,touch=false } = {}) {
   if (editTask) { editFixture = structuredClone(editTask); editFailure = null; }
   const context = await browser.createBrowserContext();
   const page = await context.newPage();
-  await page.setViewport({ width, height: 900 });
+  await page.setViewport({ width, height: 900,...(touch?{isMobile:true,hasTouch:true}:{}) });
   await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }]);
   page.setDefaultTimeout(6000);
   page.on('pageerror', (error) => { page.fixtureErrors ||= []; page.fixtureErrors.push(error.message); });
@@ -165,12 +185,18 @@ for(const width of [1366,390])test(`Group chips and subtask picker save first/ra
   const page=await mounted({width});
   try{
     await set(page,'#task-title','Shared cleanup');
+    assert.ok(await page.$('[data-task-create-group]'));
+    assert.ok(await page.$('[data-task-edit-group="31"]'));
+    assert.equal(await page.$('[data-task-manage-group]'),null);
     await page.focus('[data-task-group-choice="31"]');await page.keyboard.press('Enter');
     assert.equal(await value(page,'[data-task-assignment-group]'),'31');
+    assert.match(await page.$eval('#task-group-assignment strong',el=>el.textContent),/Owner: From Group/);
+    assert.equal(await page.$eval('#task-fixed-assignment',el=>el.hidden),true);
     await page.click('[data-task-subtask-add]');await set(page,'[data-task-subtask-title]','Take out bins');
     await page.click('[data-task-subtask-target]');
-    await page.waitForSelector('[aria-label="Assign Rotation Group Kids rotation"]');
-    await page.click('[aria-label="Assign Rotation Group Kids rotation"]');
+    await page.waitForSelector('[aria-label="Assign Group Kids rotation"]');
+    assert.equal(await page.$('[aria-label="Assign Group Shared household"]'),null);
+    await page.click('[aria-label="Assign Group Kids rotation"]');
     assert.equal(await value(page,'[data-task-subtask-group]'),'31');
     await page.click('[data-task-subtask-target]');
     assert.equal(await page.$eval('[data-task-subtask-group-behavior]',el=>el.open),true);
@@ -179,8 +205,53 @@ for(const width of [1366,390])test(`Group chips and subtask picker save first/ra
     await page.focus('#task-submit-btn');await page.keyboard.press('Enter');
     await page.waitForFunction(()=>!document.querySelector('#task-form'));
     const body=requests.find(row=>row.path==='/tasks'&&row.method==='POST').body;
+    assert.deepEqual(body.assigned_to,[]);
     assert.deepEqual(body.assignment_group,{group_id:31,start_mode:'first',direction:'first_to_last'});
     assert.deepEqual(body.subtasks[0].assignment_group,{group_id:31,start_mode:'random',direction:'last_to_first'});
+  }finally{await page.dispose();}
+});
+
+for(const width of [1366,390])test(`Group pencil opens its editor directly and preserves the Task draft at ${width}px`,async()=>{
+  const page=await mounted({width});
+  try{
+    await set(page,'#task-title','Unfinished cleanup');
+    await page.click('[data-task-edit-group="31"]');
+    await page.waitForSelector('[data-rotation-group-form]');
+    assert.equal(await value(page,'[data-rotation-group-form] [name="name"]'),'Kids rotation');
+    await page.click('[data-rotation-cancel]');
+    await page.waitForFunction(()=>!document.querySelector('[data-rotation-group-form]'));
+    assert.equal(await value(page,'#task-title'),'Unfinished cleanup');
+  }finally{await page.dispose();}
+});
+
+for(const width of [1366,390])test(`selected parent People drag onto a subtask at ${width}px`,async()=>{
+  const page=await mounted({width});
+  try{
+    await page.click('[data-ms-input="task_assigned"][value="1"]');
+    await page.click('[data-task-subtask-add]');
+    await set(page,'[data-task-subtask-title]','Put away tools');
+    await page.$eval('[data-ms-input="task_assigned"][value="1"]',el=>el.scrollIntoView({block:'center'}));
+    const source=await page.$('[data-ms-input="task_assigned"][value="1"]');
+    const target=await page.$('[data-task-subtask-target]');
+    const from=await source.boundingBox();
+    await page.mouse.move(from.x+from.width/2,from.y+from.height/2);
+    await page.mouse.down();
+    await page.$eval('[data-task-subtask-target]',el=>el.scrollIntoView({block:'center'}));
+    const to=await target.boundingBox();
+    await page.mouse.move(to.x+to.width/2,to.y+to.height/2,{steps:8});
+    await page.mouse.up();
+    assert.equal(await value(page,'[data-task-subtask-assignee]'),'1');
+  }finally{await page.dispose();}
+});
+
+test('touch tap on a selected parent Person toggles the fixed assignment without changing a subtask',async()=>{
+  const page=await mounted({width:390,touch:true});
+  try{
+    const source='[data-ms-input="task_assigned"][value="1"]';
+    await page.tap(source);
+    assert.equal(await page.$eval(source,el=>el.checked),true);
+    await page.tap(source);
+    assert.equal(await page.$eval(source,el=>el.checked),false);
   }finally{await page.dispose();}
 });
 
@@ -350,7 +421,7 @@ test('a future shared mode locks Task controls only on dates when that mode appl
     assert.equal(await page.$eval('[data-task-subtask-group-start]',node=>!node.disabled&&!node.closest('label').hidden),true);
     await page.click('[data-save-as-template]');await page.waitForSelector('#automation-activity-form');
     await page.select('[name="assignment_group_id"]','33');
-    assert.match(await page.$eval('[data-assignment-group-summary]',node=>node.textContent),/changes between independent and shared rotations/);
+    assert.equal(await page.$eval('[data-assignment-group-choice="33"]',node=>node.getAttribute('aria-pressed')),'true');
     assert.equal(await page.$eval('[name="assignment_group_start"]',node=>!node.disabled),true);
   }finally{await page.dispose();}
 });
@@ -366,8 +437,9 @@ test('shared Group settings are locked in subtask and Activity Template editors'
     assert.equal(await page.$eval('[data-task-subtask-group-direction]',node=>node.disabled&&node.closest('label').hidden),true);
     await page.click('[data-save-as-template]');await page.waitForSelector('#automation-activity-form');
     await page.select('#automation-assignment-strategy','group_rotation');
+    assert.match(await page.$eval('#automation-assignment-group strong',el=>el.textContent),/Owner: From Group/);
     await page.select('#automation-assignment-group [name="assignment_group_id"]','32');
-    assert.match(await page.$eval('[data-assignment-group-summary]',node=>node.textContent),/Rotating Order.*Random member.*Last to first/);
+    assert.equal(await page.$eval('[data-assignment-group-choice="32"]',node=>node.getAttribute('aria-pressed')),'true');
     assert.equal(await page.$eval('[name="assignment_group_start"]',node=>node.disabled&&node.closest('label').hidden),true);
     assert.equal(await page.$eval('[name="assignment_group_direction"]',node=>node.disabled&&node.closest('label').hidden),true);
   }finally{await page.dispose();}
@@ -654,7 +726,7 @@ test('nested Activity subtask Skill creation selects the saved Skill and returns
     await page.waitForFunction(() => !document.querySelector('#automation-activity-form'));
     assert.equal(await value(page, '#task-title'), 'Reusable preparation');
     const save = requests.find((request) => request.path === '/automation/admin/activity-templates' && request.method === 'POST');
-    assert.deepEqual(save.body.checklist, [{ title: 'Measure flour', title_template: 'Measure flour', skill_ids: [101], is_optional: 0, points: 0 }]);
+    assert.deepEqual(save.body.checklist, [{ title: 'Measure flour', title_template: 'Measure flour', skill_ids: [101], is_optional: 0, points: 0, fixed_user_id: null }]);
     assert.equal(await page.$eval('#task-form [data-task-subtask-row] [data-task-skill-id][value="101"]', (el) => el.checked), false,
       'saving a reusable template does not replace the current Task requirement selection');
     assert.deepEqual(page.fixtureErrors || [], []);
@@ -785,7 +857,7 @@ test('blank manual assignee is sent, server rejection focuses assignment, and co
     await set(page, '#task-title', 'Server validation fixture');
     await page.focus('#task-submit-btn'); await page.keyboard.press('Enter');
     await page.waitForSelector('#task-form-error:not([hidden])');
-    assert.equal(await page.evaluate(() => document.activeElement.dataset.msInput), 'task_assigned');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'task-owner-person');
     assert.match(await page.evaluate(() => window.toasts.at(-1)), /Choose an assignee/);
     await page.click('[data-ms-input="task_assigned"][value="2"]');
     await page.focus('#task-submit-btn'); await page.keyboard.press('Enter');
@@ -964,6 +1036,22 @@ const seriesEditFixture = () => ({ id: 70, title: 'Weekly homework', description
     { id: 72, title: 'Extra practice', status: 'open', skill_ids: [], is_optional: 1 }] });
 const mutations = () => requests.filter(request => !['GET', 'HEAD'].includes(request.method));
 async function saveEdit(page) { await page.focus('#task-submit-btn'); await page.keyboard.press('Enter'); }
+
+for(const [groupId,mode,dueDate] of [[31,'Rotate'],[32,'Global'],[33,'Rotate','2026-10-20'],[33,'Global','2026-11-10'],[999,'Group']])test(`existing subtask shows resolved Person and ${mode} Group ${groupId} source on ${dueDate||'current date'}`,async()=>{
+  const base=seriesEditFixture(),config={group_id:groupId,start_mode:'first',direction:'first_to_last'};
+  const fixture={...base,is_recurring:0,recurrence_series_id:null,recurrence_rule:null,...(dueDate?{due_date:dueDate}:{}),
+    subtasks:[{...base.subtasks[0],assigned_to:2,assigned_users:[users[1]],assigned_user_ids:[2],assignment_group_json:JSON.stringify(config)}]};
+  const page=await mounted({width:390,editTask:fixture});
+  try{
+    const target='[data-task-subtask-target]';
+    assert.equal(await page.$eval(`${target} .task-allocation__avatar`,el=>el.textContent.trim()),'E');
+    assert.equal(await page.$eval(`${target} [data-task-group-mode]`,el=>el.textContent.trim()),mode);
+    assert.match(await page.$eval(target,el=>el.getAttribute('aria-label')),/Eleanor.*Group/);
+    assert.equal(await value(page,'[data-task-subtask-assignee]'),'2');
+    await page.click(target);
+    assert.equal(await page.$eval('[data-task-subtask-group-behavior]',el=>el.open),true);
+  }finally{await page.dispose();}
+});
 
 // Real API responses include historical children and generated supervision
 // rows alongside authored actions. Only the visible source actions belong in
@@ -1187,6 +1275,38 @@ test('an existing series uses its frozen fixed-assignee override policy after th
   } finally { Object.assign(activity, previous); await page.dispose(); }
 });
 
+test('editing a Task bound to fixed multi-person People without reassignment permission preserves its roster',async()=>{
+  const base=seriesEditFixture();
+  const fixture={...base,is_recurring:0,recurrence_series_id:null,recurrence_rule:null,
+    activity_template_id:19,activity_assignment_strategy:'fixed',activity_assignment_override_allowed:0,
+    activity_fixed_assignee_ids:[1,2],assigned_to:1,assigned_users:users,
+    permissions:{...base.permissions,change_assignment:false}};
+  const page=await mounted({editTask:fixture});requests.length=0;
+  try{
+    await set(page,'#task-title','Edited shared activity');
+    await saveEdit(page);await page.waitForFunction(()=>!document.querySelector('#task-form'));
+    const body=requests.find(request=>request.path==='/tasks/70'&&request.method==='PUT').body;
+    assert.equal(body.title,'Edited shared activity');
+    assert.equal(Object.hasOwn(body,'assigned_to'),false);
+    assert.equal(Object.hasOwn(body,'direct_assignee_ids'),false);
+  }finally{await page.dispose();}
+});
+
+test('unrelated Template Task edit does not request an Owner reassignment',async()=>{
+  const base=seriesEditFixture(),fixture={...base,is_recurring:0,recurrence_series_id:null,recurrence_rule:null,
+    activity_template_id:19,activity_assignment_strategy:'fixed',activity_assignment_override_allowed:1,
+    activity_fixed_assignee_ids:[1,2],assigned_to:1,direct_assignee_ids:[1,2],assigned_users:users,
+    permissions:{...base.permissions,reassign:false}};
+  const page=await mounted({editTask:fixture});requests.length=0;
+  try{
+    await set(page,'#task-title','Only its title changed');await saveEdit(page);
+    await page.waitForFunction(()=>!document.querySelector('#task-form'));
+    const body=requests.find(row=>row.path==='/tasks/70'&&row.method==='PUT')?.body;
+    assert.equal(Object.hasOwn(body,'owner_user_id'),false);
+    assert.deepEqual(body.assigned_to,[1,2]);
+  }finally{await page.dispose();}
+});
+
 test('series template skills remain editable by an authorized user and archived actions stay absent', async () => {
   const fixture = { ...seriesEditFixture(), activity_template_id: 14, activity_subject_required: 0 };
   fixture.subtasks.push({ id: 73, title: 'Historical removed step', status: 'done', archived_at: '2026-09-20 00:00:00', skill_ids: [] });
@@ -1260,4 +1380,352 @@ for (const width of [1366, 390]) test(`Task People and subtask avatars submit co
     assert.deepEqual(body.subtasks.map(row => row.assigned_user_ids), [[2], []]);
     assert.deepEqual(body.rotation_bindings, []);
   } finally { await page.dispose(); }
+});
+
+for (const width of [1366, 390]) test(`fixed Activity Owner is explicit while added assignees remain distinct (${width}px)`, async () => {
+  const page=await mounted({width});requests.length=0;
+  try{
+    assert.match(await page.$eval('#task-people-heading',el=>el.textContent),/Owner/);
+    assert.equal(await value(page,'#task-owner-person'),'');
+    await set(page,'#task-title','Owner and helper');
+    await page.click('label:has([data-ms-input="task_assigned"][value="1"])');
+    await page.click('label:has([data-ms-input="task_assigned"][value="2"])');
+    await page.select('#task-owner-person','2');
+    assert.match(await page.$eval('#task-fixed-assignment',el=>el.textContent),/Additional activity assignees/);
+    await page.click('#task-submit-btn');await page.waitForFunction(()=>!document.querySelector('#task-form'));
+    assert.deepEqual(requests.find(row=>row.path==='/tasks'&&row.method==='POST')?.body.assigned_to,[2,1]);
+  }finally{await page.dispose();}
+});
+
+test('an old multi-assignee Task without a recorded primary keeps its roster on unrelated edit',async()=>{
+  const base=seriesEditFixture(),fixture={...base,is_recurring:0,recurrence_series_id:null,recurrence_rule:null,
+    assigned_to:null,direct_assignee_ids:[1,2],assigned_users:users};
+  const page=await mounted({editTask:fixture});requests.length=0;
+  try{
+    assert.equal(await value(page,'#task-owner-person'),'');
+    assert.match(await page.$eval('[data-task-owner-unresolved]',el=>el.textContent),/Choose an Owner/);
+    await set(page,'#task-title','Unrelated title change');await saveEdit(page);
+    await page.waitForFunction(()=>!document.querySelector('#task-form'));
+    const body=requests.find(row=>row.path==='/tasks/70'&&row.method==='PUT')?.body;
+    assert.equal(Object.hasOwn(body,'assigned_to'),false);
+  }finally{await page.dispose();}
+});
+
+test('future-only edit cannot extend an ambiguous old roster without choosing an Owner',async()=>{
+  const fixture={...seriesEditFixture(),assigned_to:null,direct_assignee_ids:[1,2],assigned_users:[...users]};
+  users.push({id:3,display_name:'Frank',role:'admin'});
+  let page;
+  try{
+    page=await mounted({editTask:fixture});requests.length=0;
+    await page.select('#task-scoring-scope','future_only');
+    await page.waitForFunction(()=>document.querySelector('#task-scoring-message')?.textContent!==''
+      &&!document.querySelector('#task-owner-person')?.disabled);
+    assert.equal(await value(page,'#task-owner-person'),'');
+    await page.click('label:has([data-ms-input="task_assigned"][value="3"])');
+    await saveEdit(page);
+    assert.ok(await page.$('#task-form'));
+    assert.equal(await page.$eval('#task-owner-person',node=>node===document.activeElement),true);
+    assert.equal(requests.some(row=>row.path==='/tasks/70'&&row.method==='PUT'),false);
+  }finally{await page?.dispose();users.pop();}
+});
+
+test('changing only the Owner saves an existing fixed Task with both assignees intact',async()=>{
+  const base=seriesEditFixture(),fixture={...base,is_recurring:0,recurrence_series_id:null,recurrence_rule:null,
+    assigned_to:1,direct_assignee_ids:[1,2],assigned_users:users};
+  const page=await mounted({editTask:fixture});requests.length=0;
+  try{
+    await page.select('#task-owner-person','2');await saveEdit(page);
+    await page.waitForSelector('#task-scoring-confirm');await page.click('#task-scoring-confirm');
+    await page.waitForFunction(()=>!document.querySelector('#task-form'));
+    const body=requests.find(row=>row.path==='/tasks/70'&&row.method==='PUT')?.body;
+    assert.deepEqual(body.assigned_to,[2,1]);
+    assert.deepEqual(body.direct_assignee_ids,[2,1]);
+    assert.equal(body.owner_user_id,2);
+  }finally{await page.dispose();}
+});
+
+test('Save as Template waits for an explicit Owner when two people are selected',async()=>{
+  const page=await mounted({});requests.length=0;
+  try{
+    await set(page,'#task-title','Two people without Owner');
+    await page.click('label:has([data-ms-input="task_assigned"][value="1"])');
+    await page.click('label:has([data-ms-input="task_assigned"][value="2"])');
+    await page.select('#task-owner-person','');
+    await page.click('[data-save-as-template]');
+    assert.equal(await page.$('#automation-activity-form'),null);
+    assert.ok(await page.$('#task-form'));
+    assert.equal(await page.$eval('#task-owner-person',node=>node===document.activeElement),true);
+  }finally{await page.dispose();}
+});
+
+test('fixed Template stores the chosen Owner before its additional assignee',async()=>{
+  const page=await mounted({});requests.length=0;
+  try{
+    await set(page,'#task-title','Reusable owner task');
+    await page.click('[data-save-as-template]');await page.waitForSelector('#automation-activity-form');
+    await page.select('#automation-assignment-strategy','fixed');
+    await page.click('#automation-fixed-user label:has([data-ms-input="template_fixed"][value="1"])');
+    await page.click('#automation-fixed-user label:has([data-ms-input="template_fixed"][value="2"])');
+    await page.select('#automation-fixed-owner-person','2');
+    await page.click('#shared-modal-overlay [type="submit"]');await page.waitForFunction(()=>!document.querySelector('#automation-activity-form'));
+    const body=requests.find(row=>row.path==='/automation/admin/activity-templates'&&row.method==='POST')?.body;
+    assert.equal(Number(body.fixed_user_id),2);
+    assert.deepEqual(body.fixed_assignee_ids,[2,1]);
+  }finally{await page.dispose();}
+});
+
+for (const width of [1366, 390]) test(`subtask choices follow selected People and preserve an out-of-pool saved choice (${width}px)`, async () => {
+  const page = await mounted({ width }); requests.length = 0;
+  try {
+    await set(page, '#task-title', 'Choice pool');
+    await page.click('label:has([data-ms-input="task_assigned"][value="1"])');
+    await page.click('[data-task-subtask-add]');
+    await set(page, '[data-task-subtask-title]', 'Only one person');
+    assert.equal(await page.$$eval('[data-task-subtask-person]', nodes => nodes.filter(node => !node.closest('.task-allocation__participant').hidden).length), 1);
+    await page.click('[data-task-subtask-target]');
+    assert.ok(await page.$('[data-acceptance-choice="1"]'));
+    assert.equal(await page.$('[data-acceptance-choice="2"]'), null);
+    await page.click('[data-acceptance-choice="1"]');
+    await page.click('label:has([data-ms-input="task_assigned"][value="2"])');
+    await page.click('label:has([data-ms-input="task_assigned"][value="1"])');
+    assert.equal(await page.$eval('[data-task-subtask-target]', node => node.classList.contains('task-allocation__target--outside-pool')), true);
+    assert.equal(await value(page, '[data-task-subtask-assignee]'), '1');
+    await page.click('[data-task-subtask-target]');
+    assert.equal(await page.$('[data-acceptance-choice="1"]'), null);
+    assert.ok(await page.$('[data-acceptance-choice="2"]'));
+    await page.keyboard.press('Escape');
+    await page.click('#task-submit-btn');
+    await page.waitForFunction(() => !document.querySelector('#task-form'));
+    const body = requests.find(request => request.path === '/tasks' && request.method === 'POST').body;
+    assert.deepEqual(body.assigned_to, [2]);
+    assert.deepEqual(body.subtasks[0].assigned_user_ids, [1]);
+  } finally { await page.dispose(); }
+});
+
+for(const width of [1366,390])test(`two subtask Groups retain separate choices and deduplicate their members (${width}px)`,async()=>{
+  const page=await mounted({width});requests.length=0;
+  try{
+    await set(page,'#task-title','Group choice pool');
+    await page.click('label:has([data-ms-input="task_assigned"][value="1"])');
+    await page.select('#task-owner-person','1');
+    await page.click('label:has([data-ms-input="subtask_pool_people"][value="1"])');
+    await page.focus('[data-subtask-pool-group="31"]');await page.keyboard.press('Enter');
+    await page.click('[data-subtask-pool-group="32"]');
+    assert.equal(await page.$eval('[data-subtask-pool-group="31"]',node=>node.getAttribute('aria-pressed')),'true');
+    assert.equal(await page.$eval('[data-subtask-pool-group="32"]',node=>node.getAttribute('aria-pressed')),'true');
+    await page.click('[data-task-subtask-add]');await set(page,'[data-task-subtask-title]','Shared choices');
+    assert.equal(await page.$$eval('[data-task-subtask-person]',nodes=>nodes.filter(node=>!node.closest('.task-allocation__participant').hidden).length),2);
+    await page.click('[data-task-subtask-target]');
+    assert.ok(await page.$('[aria-label="Assign Group Kids rotation"]'));
+    assert.ok(await page.$('[aria-label="Assign Group Shared household"]'));
+    await page.keyboard.press('Escape');
+    await page.click('#task-submit-btn');await page.waitForFunction(()=>!document.querySelector('#task-form'));
+    const body=requests.find(row=>row.path==='/tasks'&&row.method==='POST')?.body;
+    assert.deepEqual(body.assigned_to,[1]);
+    assert.deepEqual(body.subtask_candidate_pool,{person_ids:[],group_ids:[31,32]});
+    assert.deepEqual(body.subtasks[0].assigned_user_ids,[]);
+  }finally{await page.dispose();}
+});
+
+test('Save as Template retains separate Group choices and filters new subtask Group options',async()=>{
+  const page=await mounted({width:390});requests.length=0;
+  try{
+    await set(page,'#task-title','Reusable Group choices');
+    await page.click('label:has([data-ms-input="task_assigned"][value="1"])');
+    await page.select('#task-owner-person','1');
+    await page.click('[data-subtask-pool-group="31"]');
+    await page.click('[data-save-as-template]');await page.waitForSelector('#automation-activity-form');
+    assert.equal(await value(page,'#task-title'),'Reusable Group choices');
+    await page.click('#automation-activity-form [data-task-subtask-add]');
+    assert.equal(await page.$eval('#automation-activity-form [data-task-subtask-group] option[value="31"]',node=>node.disabled),false);
+    assert.equal(await page.$eval('#automation-activity-form [data-task-subtask-group] option[value="32"]',node=>node.disabled),true);
+    await page.click('#shared-modal-overlay [type="submit"]');await page.waitForFunction(()=>!document.querySelector('#automation-activity-form'));
+    const body=requests.find(row=>row.path==='/automation/admin/activity-templates'&&row.method==='POST')?.body;
+    assert.deepEqual(body.subtask_candidate_pool.group_ids,[31]);
+    assert.equal(await value(page,'#task-title'),'Reusable Group choices');
+  }finally{await page.dispose();}
+});
+
+for(const width of [1366,390])test(`Template subtask fixed Person picker saves the source rule and returns to the Task draft (${width}px)`,async()=>{
+  const page=await mounted({width});requests.length=0;
+  try{
+    await set(page,'#task-title','Person target template');
+    await page.click('label:has([data-ms-input="task_assigned"][value="1"])');
+    await page.select('#task-owner-person','1');
+    await page.click('[data-save-as-template]');await page.waitForSelector('#automation-activity-form');
+    await page.click('#automation-activity-form label:has([data-ms-input="subtask_pool_people"][value="2"])');
+    await page.click('#automation-activity-form [data-task-subtask-add]');
+    await set(page,'#automation-activity-form [data-task-subtask-title]','Person step');
+    assert.equal(await page.$eval('#automation-activity-form [data-task-subtask-assignment]',node=>node.hidden),false);
+    await page.click('#automation-activity-form [data-task-subtask-target]');
+    await page.waitForSelector('[data-acceptance-choice="2"]');
+    await page.click('[data-acceptance-choice="2"]');
+    await page.click('#shared-modal-overlay [type="submit"]');
+    await page.waitForFunction(()=>!document.querySelector('#automation-activity-form'));
+    const body=requests.find(row=>row.path==='/automation/admin/activity-templates'&&row.method==='POST')?.body;
+    assert.equal(body.checklist[0].fixed_user_id,2);
+    assert.equal(body.checklist[0].assignment_group?.group_id??null,null);
+    assert.equal(await value(page,'#task-title'),'Person target template');
+  }finally{await page.dispose();}
+});
+
+test('editing a Template keeps its fixed Person when adding an unassigned subtask',async()=>{
+  const fixture={id:80,name:'Existing Person step',title_template:'Existing Person step',category:'misc',
+    assignment_strategy:'fixed',fixed_user_id:1,
+    subtask_candidate_pool_json:JSON.stringify({person_ids:[2],group_ids:[]}),
+    checklist:[{id:801,title_template:'Original step',fixed_user_id:2,skill_ids:[]}]};
+  templates.push(fixture);requests.length=0;
+  const page=await mounted({width:390,newTask:false});
+  try{
+    await page.evaluate(async()=>{const root=document.createElement('div');document.body.append(root);
+      const {renderAutomationManager}=await import('/components/activity-automation.js');await renderAutomationManager(root,{tab:'activities'});});
+    await page.click('[data-edit-activity="80"]');await page.waitForSelector('#automation-activity-form');
+    assert.equal(await value(page,'#automation-activity-form [data-task-subtask-row] [data-task-subtask-assignee]'),'2');
+    await page.click('#automation-activity-form [data-task-subtask-add]');
+    await set(page,'#automation-activity-form [data-task-subtask-row]:last-child [data-task-subtask-title]','New plain step');
+    await page.click('#shared-modal-overlay [type="submit"]');
+    await page.waitForFunction(()=>!document.querySelector('#automation-activity-form'));
+    const saved=requests.find(row=>row.path==='/automation/admin/activity-templates/80'&&row.method==='PUT')?.body;
+    assert.equal(saved.checklist[0].fixed_user_id,2);
+    assert.equal(saved.checklist[1].fixed_user_id,null);
+    assert.equal(saved.checklist[1].assigned_user_ids,undefined);
+  }finally{await page.dispose();templates.splice(templates.indexOf(fixture),1);}
+});
+
+test('changing the parent pool keeps a saved subtask Group and its resolved person',async()=>{
+  const base=seriesEditFixture(),fixture={...base,is_recurring:0,recurrence_series_id:null,recurrence_rule:null,
+    subtask_candidate_pool_json:JSON.stringify({person_ids:[],group_ids:[31]}),
+    subtasks:[{...base.subtasks[0],assigned_to:2,assigned_user_ids:[2],
+      assignment_group_json:JSON.stringify({group_id:31,start_mode:'first',direction:'first_to_last'})}]};
+  const page=await mounted({editTask:fixture});requests.length=0;
+  try{
+    await page.click('[data-subtask-pool-group="31"]');
+    await page.click('[data-subtask-pool-group="32"]');
+    assert.equal(await value(page,'[data-task-subtask-group]'),'31');
+    assert.equal(await value(page,'[data-task-subtask-assignee]'),'2');
+    assert.equal(await page.$eval('[data-task-subtask-target]',node=>node.classList.contains('task-allocation__target--outside-pool')),true);
+    await set(page,'#task-title','Pool changed');await saveEdit(page);
+    await page.waitForFunction(()=>!document.querySelector('#task-form')||!!document.querySelector('#task-scoring-confirm'));
+    if(await page.$('#task-scoring-confirm'))await page.click('#task-scoring-confirm');
+    await page.waitForFunction(()=>!document.querySelector('#task-form'));
+    const body=requests.find(row=>row.path==='/tasks/70'&&row.method==='PUT')?.body;
+    assert.deepEqual(body.subtask_candidate_pool,{person_ids:[],group_ids:[32]});
+    assert.deepEqual(body.subtasks[0].assignment_group,{group_id:31,start_mode:'first',direction:'first_to_last'});
+    assert.deepEqual(body.subtasks[0].assigned_user_ids,[2]);
+  }finally{await page.dispose();}
+});
+
+test('subtask pool cannot be edited when reassignment is denied',async()=>{
+  const base=seriesEditFixture(),fixture={...base,is_recurring:0,recurrence_series_id:null,recurrence_rule:null,
+    permissions:{...base.permissions,change_assignment:true,reassign:false}};
+  const page=await mounted({editTask:fixture});requests.length=0;
+  try{
+    assert.equal(await page.$eval('[data-subtask-candidate-pool]',node=>node.disabled),true);
+    await set(page,'#task-title','Unrelated title edit');await saveEdit(page);
+    await page.waitForFunction(()=>!document.querySelector('#task-form')||!!document.querySelector('#task-scoring-confirm'));
+    if(await page.$('#task-scoring-confirm'))await page.click('#task-scoring-confirm');
+    await page.waitForFunction(()=>!document.querySelector('#task-form'));
+    const body=requests.find(row=>row.path==='/tasks/70'&&row.method==='PUT')?.body;
+    assert.equal(body.subtask_candidate_pool,undefined);
+  }finally{await page.dispose();}
+});
+
+for (const width of [1366, 390]) test(`Template fixed People multi-select saves both people and retains the parent draft (${width}px)`, async () => {
+  const page=await mounted({width});requests.length=0;
+  try {
+    await set(page,'#task-title','Shared template draft');
+    await page.click('[data-save-as-template]');await page.waitForSelector('#automation-activity-form');
+    await page.waitForFunction(()=>!!document.querySelector('[data-activity-title-preview]')?.textContent);
+    assert.ok(await page.$('[data-assignment-create-group]'));
+    assert.ok(await page.$('[data-assignment-edit-group="31"]'));
+    assert.equal(await page.$('#automation-assignment-group [data-assignment-manage-group]'),null);
+    await page.select('#automation-assignment-strategy','group_rotation');
+    const pencil=await page.$eval('[data-assignment-edit-group="31"]',el=>{el.scrollIntoView({block:'center'});const rect=el.getBoundingClientRect();return {x:rect.x+rect.width/2,y:rect.y+rect.height/2};});
+    await page.mouse.click(pencil.x,pencil.y);
+    await page.waitForSelector('[data-rotation-group-form]');
+    assert.equal(await value(page,'[data-rotation-group-form] [name="name"]'),'Kids rotation');
+    await page.click('[data-rotation-cancel]');
+    await page.waitForFunction(()=>!document.querySelector('[data-rotation-group-form]'));
+    assert.equal(await value(page,'#task-title'),'Shared template draft');
+    await page.select('#automation-assignment-strategy','fixed');
+    await page.click('#automation-fixed-user label:has([data-ms-input="template_fixed"][value="1"])');
+    await page.click('#automation-fixed-user label:has([data-ms-input="template_fixed"][value="2"])');
+    assert.equal(await page.$eval('#automation-fixed-user',node=>node.hidden),false);
+    await page.click('#shared-modal-overlay [type="submit"]');
+    await page.waitForFunction(()=>!document.querySelector('#automation-activity-form'));
+    const payload=requests.find(row=>row.path==='/automation/admin/activity-templates'&&row.method==='POST')?.body;
+    assert.deepEqual(payload?.fixed_assignee_ids,[1,2]);
+    assert.equal(Number(payload?.fixed_user_id),1);
+    assert.equal(await value(page,'#task-title'),'Shared template draft');
+  }finally{await page.dispose();}
+});
+
+for (const width of [1366, 390]) test(`Task from a fixed multi-person Template shows and submits both people (${width}px)`,async()=>{
+  const page=await mounted({width});requests.length=0;
+  try{
+    await selectTemplate(page,19,'Two fixed people');
+    assert.deepEqual(await page.$$eval('[data-ms-input="task_assigned"]:checked:not(.user-ms__none)',nodes=>nodes.map(node=>Number(node.value))),[1,2]);
+    assert.equal(await page.$$eval('[data-task-subtask-person]',nodes=>nodes.filter(node=>!node.closest('.task-allocation__participant').hidden).length),2);
+    await page.click('#task-submit-btn');await page.waitForFunction(()=>!document.querySelector('#task-form'));
+    assert.deepEqual(requests.find(row=>row.path==='/tasks'&&row.method==='POST')?.body.assigned_to,[1,2]);
+  }finally{await page.dispose();}
+});
+
+test('Task from fixed multi-person Template sends explicit Owner intent',async()=>{
+  const page=await mounted({});requests.length=0;
+  try{
+    await selectTemplate(page,19,'Two fixed people');
+    await page.select('#task-owner-person','2');
+    await page.click('#task-submit-btn');await page.waitForFunction(()=>!document.querySelector('#task-form'));
+    const body=requests.find(row=>row.path==='/tasks'&&row.method==='POST')?.body;
+    assert.deepEqual(body.assigned_to,[2,1]);
+    assert.equal(body.owner_user_id,2);
+  }finally{await page.dispose();}
+});
+
+for(const width of [1366,390])test(`creating a Group returns to the same Task draft (${width}px)`,async()=>{
+  const page=await mounted({width});requests.length=0;
+  try{
+    await set(page,'#task-title','Keep this draft');
+    await page.click('[data-task-subtask-add]');await set(page,'[data-task-subtask-title]','Keep this step');
+    await page.click('[data-task-create-group]');await page.waitForSelector('[data-rotation-group-form]');
+    await page.click('[data-rotation-cancel]');await page.waitForFunction(()=>!document.querySelector('[data-rotation-group-form]'));
+    assert.equal(await value(page,'#task-title'),'Keep this draft');
+    assert.equal(await value(page,'[data-task-subtask-title]'),'Keep this step');
+    await page.click('[data-task-create-group]');await page.waitForSelector('[data-rotation-group-form]');
+    await set(page,'[data-rotation-group-form] [name="name"]','New family group');
+    await page.select('[data-rotation-add-member]','1');
+    await page.$eval('[data-rotation-group-form]',form=>form.closest('.modal-panel').querySelector('[type="submit"]').click());
+    await page.waitForFunction(()=>!document.querySelector('[data-rotation-group-form]'));
+    assert.equal(await value(page,'[data-task-assignment-group]'),'34');
+    assert.equal(await value(page,'#task-title'),'Keep this draft');
+    assert.equal(await value(page,'[data-task-subtask-title]'),'Keep this step');
+    assert.ok(await page.$('[data-task-edit-group="34"]'));
+  }finally{await page.dispose();}
+});
+
+for(const width of [1366,390])test(`creating a Group in a Template returns to its draft and keeps the source Task (${width}px)`,async()=>{
+  const page=await mounted({width});requests.length=0;
+  try{
+    await set(page,'#task-title','Source Task stays');
+    await page.click('[data-save-as-template]');await page.waitForSelector('#automation-activity-form');
+    await page.waitForFunction(()=>!!document.querySelector('[data-activity-title-preview]')?.textContent);
+    await page.select('#automation-assignment-strategy','group_rotation');
+    await set(page,'#automation-activity-form [name="description"]','Unsaved template instructions');
+    const clickCreate=async()=>{const point=await page.$eval('[data-assignment-create-group]',el=>{el.scrollIntoView({block:'center'});const rect=el.getBoundingClientRect();return{x:rect.x+rect.width/2,y:rect.y+rect.height/2};});await page.mouse.click(point.x,point.y);};
+    await clickCreate();await page.waitForSelector('[data-rotation-group-form]');
+    await page.click('[data-rotation-cancel]');await page.waitForFunction(()=>!document.querySelector('[data-rotation-group-form]'));
+    assert.equal(await value(page,'#automation-activity-form [name="description"]'),'Unsaved template instructions');
+    await clickCreate();await page.waitForSelector('[data-rotation-group-form]');
+    await set(page,'[data-rotation-group-form] [name="name"]','Template group');
+    await page.select('[data-rotation-add-member]','1');
+    await page.$eval('[data-rotation-group-form]',form=>form.closest('.modal-panel').querySelector('[type="submit"]').click());
+    await page.waitForFunction(()=>!document.querySelector('[data-rotation-group-form]'));
+    assert.equal(await value(page,'[name="assignment_group_id"]'),'35');
+    assert.equal(await value(page,'#automation-activity-form [name="description"]'),'Unsaved template instructions');
+    await page.click('#shared-modal-overlay [type="submit"]');await page.waitForFunction(()=>!document.querySelector('#automation-activity-form'));
+    const payload=requests.find(row=>row.path==='/automation/admin/activity-templates'&&row.method==='POST')?.body;
+    assert.equal(payload?.assignment_group?.group_id,35);
+    assert.equal(await value(page,'#task-title'),'Source Task stays');
+  }finally{await page.dispose();}
 });

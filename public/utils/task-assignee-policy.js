@@ -1,5 +1,6 @@
 /** Count direct performers; existing visibility participants remain independent. */
-export function taskDirectAssigneeIds(task){return Array.isArray(task?.direct_assignee_ids)?[...task.direct_assignee_ids]:task?.assigned_users?.map(member=>Number(member.id))??(task?.assigned_to?[Number(task.assigned_to)]:[]);}
+export function taskDirectAssigneeIds(task){return Array.isArray(task?.direct_assignee_ids)?[...task.direct_assignee_ids]:task?.assigned_users?.map(member=>Number(member.id))
+  ??(Array.isArray(task?.assigned_to)?task.assigned_to.map(Number):task?.assigned_to?[Number(task.assigned_to)]:[]);}
 const same=(a,b)=>a.length===b.length&&a.every(id=>b.includes(id));
 export function taskDraftAssigneePolicy(task,category,categories,ids){
   if(task&&task.category===category&&same(taskDirectAssigneeIds(task),ids))return task.assignee_policy??null;

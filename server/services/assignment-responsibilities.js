@@ -435,8 +435,11 @@ export function respondToTaskObligation(d, obligationId, action, actorUserId, no
       const supervision = inspectTaskSupervision(d, obligation.task_id);
       if (obligation.role === 'supervisor') {
         const pending = supervision.actions.filter(row => !row.completed && row.state !== 'not_required');
-        if (Number(supervision.supervisor_user_id) !== Number(actorUserId) || !pending.length
-          || pending.some(row => row.state !== 'assigned' || Number(row.supervisor_user_id) !== Number(actorUserId))) {
+        const current=supervision.supervisor_scope==='per_action'
+          ?pending.some(row=>row.state==='assigned'&&Number(row.supervisor_user_id)===Number(actorUserId))
+          :Number(supervision.supervisor_user_id)===Number(actorUserId)&&pending.length
+            &&pending.every(row=>row.state==='assigned'&&Number(row.supervisor_user_id)===Number(actorUserId));
+        if (!current) {
           throw new TaskSupervisionError('This supervision assignment is no longer current. Open the Task to review its supervision requirements.');
         }
       } else assertTaskSupervisionAssignee(d, obligation.task_id, obligation.responsible_user_id || actorUserId);
@@ -467,6 +470,19 @@ export function respondToTaskObligation(d, obligationId, action, actorUserId, no
       // One refusal applies to the entire remaining supervised scope. Never
       // select independent fallbacks that split a Task across several helpers.
       const supervision = inspectTaskSupervision(d, obligation.task_id);
+      if(supervision.supervisor_scope==='per_action'){
+        const affected=supervision.actions.filter(row=>!row.completed&&row.state==='assigned'
+          &&Number(row.supervisor_user_id)===Number(obligation.responsible_user_id));
+        if(!affected.length)return {...d.prepare('SELECT * FROM planning_obligations WHERE id=?').get(obligation.id),fallback:null};
+        // An action's authored supervisor pool can be narrower than household
+        // skill eligibility. A refusal clears only that person's unfinished
+        // actions; choosing a new helper requires the saved pool to be checked.
+        const choices=Object.fromEntries(affected.map(row=>[row.action_task_id,null]));
+        reconcileTaskSupervision(d,obligation.task_id,{actorId:actorUserId,
+          supervisorAssignments:choices,perActionPlanning:true});
+        return {...d.prepare('SELECT * FROM planning_obligations WHERE id=?').get(obligation.id),
+          fallback:null};
+      }
       if (supervision.supervisor_user_id && Number(supervision.supervisor_user_id) !== Number(obligation.responsible_user_id)) {
         // A delayed response to an older request cannot replace the current
         // Task supervisor. Reconciliation retires any legacy duplicate role.

@@ -131,7 +131,7 @@ test('location groups and location sort match current browser projection',()=>{
   assert.deepEqual(actual.map(g=>({id:g.id,ids:g.ids})),JSON.parse(JSON.stringify(expected)));
 });
 
-test('active status groups retain browser order without Archive cards',()=>{
+test('status groups retain browser status order and archive placement',()=>{
   const rows=[
     {id:1,title:'Done',status:'done'},
     {id:2,title:'Open',status:'open'},
@@ -146,9 +146,9 @@ test('active status groups retain browser order without Archive cards',()=>{
     kanbanColumnOf:row=>row.archived_at?'archived':row.status,
     t:key=>key==='tasks.statusArchived'?'Archived':key,
   });
-  vm.runInContext(bucket+'\n'+due+'\n'+order,context);context.rows=rows.filter(row=>!row.archived_at);
+  vm.runInContext(bucket+'\n'+due+'\n'+order,context);context.rows=rows;
   const expected=vm.runInContext("taskBuckets(rows,'status').map(g=>({id:g.id,ids:sortedTasks(g.tasks).map(row=>row.id)}))",context);
-  const actual=orderTaskWindow(rows.filter(row=>!row.archived_at),{groupMode:'status',statusOrder:statuses,sort:{field:'title',direction:'asc'}});
+  const actual=orderTaskWindow(rows,{groupMode:'status',statusOrder:[...statuses,'archived'],sort:{field:'title',direction:'asc'}});
   assert.deepEqual(actual.map(g=>({id:g.id,ids:g.ids})),JSON.parse(JSON.stringify(expected)));
 });
 

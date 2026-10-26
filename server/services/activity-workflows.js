@@ -53,6 +53,7 @@ export function getActivityTemplate(d, id) {
   row.skills = loadSkillRequirements(d, row.id);
   row.checklist = loadActivityChecklist(d, row.id);
   row.tags = parseJson(row.tags_json, []);
+  row.fixed_assignee_ids = parseJson(row.fixed_assignee_ids_json, null);
   row.rotation_bindings = parseRotationBindings(row.rotation_bindings_json);
   return row;
 }
@@ -68,6 +69,7 @@ export function listActivityTemplates(d, { activeOnly = false } = {}) {
     skills: loadSkillRequirements(d, row.id),
     checklist: loadActivityChecklist(d, row.id),
     tags: parseJson(row.tags_json, []),
+    fixed_assignee_ids: parseJson(row.fixed_assignee_ids_json, null),
     rotation_bindings: parseRotationBindings(row.rotation_bindings_json),
   }));
 }
@@ -678,6 +680,12 @@ function instantiateWorkflowTasks(d, workflowId, {
         INSERT INTO task_activity_bindings (task_id, activity_template_id, subject_user_id)
         VALUES (?, ?, ?)
       `).run(primaryTaskId, activity.id, activitySubject?.id ?? null);
+      if (planning.place_id || planning.presence_policy !== 'ignore') {
+        d.prepare(`
+          INSERT INTO task_planning_context (task_id, place_id, presence_policy, presence_window, source)
+          VALUES (?, ?, ?, ?, 'workflow')
+        `).run(primaryTaskId, planning.place_id, planning.presence_policy, planning.presence_window);
+      }
       const checklistTaskIds = materializeActivityChecklist(d, {
         activity,
         parentTaskId: primaryTaskId,
@@ -709,13 +717,6 @@ function instantiateWorkflowTasks(d, workflowId, {
       checklistTaskIds.filter(id=>!taskOptionalContext(d,id).is_optional)
         .forEach((checklistTaskId) => requireChecklistItem.run(primaryTaskId, checklistTaskId));
       if (resolution.primary) assertTaskSupervisionAssignee(d, primaryTaskId, resolution.primary.id);
-      if (planning.place_id || planning.presence_policy !== 'ignore') {
-        d.prepare(`
-          INSERT INTO task_planning_context (task_id, place_id, presence_policy, presence_window, source)
-          VALUES (?, ?, ?, ?, 'workflow')
-        `).run(primaryTaskId, planning.place_id, planning.presence_policy, planning.presence_window);
-      }
-
       const stepTaskIds = [primaryTaskId];
       recordTaskAssignment(d, primaryTaskId, activity, resolution, {
         source: 'workflow',

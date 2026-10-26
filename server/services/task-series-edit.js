@@ -5,7 +5,7 @@ import {assignNewTaskCardColor} from './task-card-colors.js';
 import {validateCardColorChoice} from '../../public/utils/card-colors.js';
 import { planSeriesOccurrence, recordOccurrenceDefinition, registerSeriesAction, normalizeSeriesDefinition, seriesActionAuthorization, definitionEqual, seriesRotationAssignment } from './task-series.js';
 import { assertTaskScoringMutation, taskScoringIdentity } from './task-scoring.js';
-import { assertTaskMutation, taskCapabilities } from './task-access.js';
+import { assertTaskMutation, taskCapabilities, taskSupervisionManagementAllowed } from './task-access.js';
 import { actorPermissions } from '../permissions.js';
 import { TaskStateError } from './task-lifecycle.js';
 import { setTaskSkills, assertTaskSkillAssignments } from './task-skills.js';
@@ -18,10 +18,12 @@ import { setTaskLocation } from './task-locations.js';
 import { bindTaskRotations, assertRotationBindingsChange } from './task-rotation.js';
 import { applyTaskRotationRendering } from './task-rotation-rendering.js';
 import {normalizeGroupAssignment} from './group-assignment.js';
+import {normalizeSubtaskCandidatePool} from './subtask-candidate-pool.js';
+import {normalizeSubtaskRule,normalizeSupervisorPool,assertSubtaskCandidatePool} from './subtask-assignment-rules.js';
 
 const ROOT_FIELDS = ['title','description','category','priority','start_date','start_time','due_date','due_time',
   'due_date_offset_days','is_recurring','recurrence_rule','recurrence_from_completion','assignment_mode',
-  'rotation_group','rotation_slot','rotation_bindings_json','assignment_group_json','points','visibility','countdown','locked','expiration_policy','scoring_mode','scoring_review_required'];
+  'rotation_group','rotation_slot','rotation_bindings_json','assignment_group_json','subtask_candidate_pool_json','points','visibility','countdown','locked','expiration_policy','scoring_mode','scoring_review_required'];
 const ACTION_FIELDS = ['title','description','category','priority','start_date','start_time','due_date','due_time',
   'points','visibility','locked','expiration_policy','is_optional','sort_order','assignment_group_json'];
 const actorId = actor => typeof actor === 'number' ? actor : actor.authUserId || actor.session?.userId;
@@ -63,12 +65,21 @@ export function proposedFutureSeriesDefinition(d,actor,root,before,patch,{valida
   if(!object(patch)||Object.keys(patch).some(key=>!['fields','actions'].includes(key)))bad();
   const after=clone(before),fields=patch.fields??{},operations=patch.actions??{};
   if(!object(fields)||!object(operations)||Object.keys(operations).some(key=>!['update','add','remove','order'].includes(key)))bad();
-  const rootAllowed=ROOT_FIELDS.filter(key=>!['scoring_review_required','rotation_bindings_json','assignment_group_json'].includes(key)).concat(['assigned_to','rotation_user_ids','skill_ids','tags','location','rotation_bindings','card_color_choice','assignment_group']);
-  const actionAllowed=ACTION_FIELDS.filter(key=>!['sort_order','assignment_group_json'].includes(key)).concat(['assigned_user_ids','skill_ids','tags','assignment_group']);
+  const rootAllowed=ROOT_FIELDS.filter(key=>!['scoring_review_required','rotation_bindings_json','assignment_group_json','subtask_candidate_pool_json'].includes(key)).concat(['assigned_to','owner_user_id','rotation_user_ids','skill_ids','tags','location','rotation_bindings','card_color_choice','assignment_group','subtask_candidate_pool']);
+  const actionAllowed=ACTION_FIELDS.filter(key=>!['sort_order','assignment_group_json'].includes(key)).concat(['assigned_user_ids','skill_ids','tags','assignment_group','assignment_rule','supervisor_pool']);
   const apply=(target,input,allowed)=>{
     if(!object(input)||Object.keys(input).some(key=>!allowed.includes(key)))bad();input=validateFields(input)||input;
     for(const [key,value] of Object.entries(input)) {
-      if(key==='assigned_to'||key==='assigned_user_ids'){target.assigned_user_ids=[...value];target.authorization={...target.authorization,assigned_user_ids:[...value]};}
+      if(key==='assigned_to'||key==='assigned_user_ids'){
+        target.assigned_user_ids=[...value];target.authorization={...target.authorization,assigned_user_ids:[...value]};
+        if(target!==after){delete target.assignment_rule;delete target.supervisor_pool;}
+      }
+      else if(key==='owner_user_id'){
+        if(target!==after||!Array.isArray(input.assigned_to)||!input.assigned_to.includes(value))bad('Choose an Owner from the selected assignees.');
+        target.assigned_user_ids=[value,...target.assigned_user_ids.filter(id=>id!==value)];
+        target.authorization={...target.authorization,assigned_user_ids:[...target.assigned_user_ids]};
+        target.owner_user_id=value;
+      }
       else if(['rotation_user_ids','skill_ids','tags','location'].includes(key))target[key]=clone(value);
       else if(key==='card_color_choice')target.task.card_color_policy=validateCardColorChoice(value);
       else if(key==='rotation_bindings')target.task.rotation_bindings_json=JSON.stringify(value);
@@ -82,12 +93,41 @@ export function proposedFutureSeriesDefinition(d,actor,root,before,patch,{valida
           after.binding.snapshot.assignment_group_json=JSON.stringify(group);
         }
         target.task.assignment_group_json=group?JSON.stringify(group):null;
+        if(target!==after&&group){delete target.assignment_rule;delete target.supervisor_pool;}
+      }
+      else if(key==='assignment_rule'){
+        if(target===after)bad('Choose a future subtask for this rule.');
+        if(value==null){delete target.assignment_rule;delete target.supervisor_pool;}
+        else{
+          // A future rule is checked against the planned successor date after
+          // sparse schedule edits have been applied, not this occurrence's date.
+          target.assignment_rule=normalizeSubtaskRule(d,value,{deferUsageCheck:true});
+          target.assigned_user_ids=[];
+          target.authorization={...target.authorization,assigned_user_ids:[]};
+          target.task.assignment_group_json=null;
+          if(target.assignee_policy)target.assignee_policy={...target.assignee_policy,direct_assignee_ids:[]};
+        }
+      }
+      else if(key==='supervisor_pool'){
+        if(target===after)bad('Choose a future subtask for this supervisor.');
+        target.supervisor_pool=normalizeSupervisorPool(d,value);
+      }
+      else if(key==='subtask_candidate_pool'){
+        const prior=target.task.subtask_candidate_pool_json?JSON.parse(target.task.subtask_candidate_pool_json):null;
+        const pool=normalizeSubtaskCandidatePool(d,value,{previous:prior});
+        target.task.subtask_candidate_pool_json=pool?JSON.stringify(pool):null;
       }
       else target.task[key]=key==='title'?value.trim():key==='points'?Number(value):value;
     }
     if(Object.hasOwn(input,'scoring_mode'))target.task.scoring_review_required=0;
   };
   apply(after,fields,rootAllowed);
+  if(Object.hasOwn(fields,'assigned_to')&&!Object.hasOwn(fields,'owner_user_id')&&after.owner_user_id){
+    if(after.assigned_user_ids.includes(after.owner_user_id))
+      after.assigned_user_ids=[after.owner_user_id,...after.assigned_user_ids.filter(id=>id!==after.owner_user_id)];
+    else delete after.owner_user_id;
+    after.authorization={...after.authorization,assigned_user_ids:[...after.assigned_user_ids]};
+  }
   if(Object.hasOwn(fields,'skill_ids')&&after.binding?.snapshot)
     after.binding.snapshot.required_skill_ids=[...after.skill_ids];
   const seen=new Set(),available=new Map(before.subtasks.map(a=>[a.action_key,a]));
@@ -107,6 +147,9 @@ export function proposedFutureSeriesDefinition(d,actor,root,before,patch,{valida
     const old=requireAction(update.action_key);if(seen.has(update.action_key))bad();seen.add(update.action_key);
     if(!futureActionCapabilities(d,actor,root,old).edit)bad('Your permissions do not allow editing this future action.',403);
     apply(after.subtasks.find(a=>a.action_key===old.action_key),update.fields,actionAllowed);
+    if(Object.hasOwn(update.fields,'assignment_rule')
+      &&(Object.hasOwn(update.fields,'assigned_user_ids')||Object.hasOwn(update.fields,'assignment_group')))
+      bad('Choose either a subtask rule or a direct Person or Group assignment.');
   }
   for(const added of operations.add||[]) {
     if(!object(added)||Object.keys(added).some(key=>!['client_key','fields'].includes(key))||typeof added.client_key!=='string'||!/^[A-Za-z0-9_-]{1,80}$/.test(added.client_key))bad();
@@ -115,6 +158,14 @@ export function proposedFutureSeriesDefinition(d,actor,root,before,patch,{valida
     const row={action_key:key,source_task_id:null,task:{...after.task,title:'',points:0,visibility:after.task.visibility,is_optional:0,locked:0},assigned_user_ids:[],skill_ids:[],tags:[],authorization:{created_by:actorId(actor),assigned_user_ids:[]}};
     row.task=Object.fromEntries(ACTION_FIELDS.map(key=>[key,row.task[key]??null]));
     apply(row,added.fields,actionAllowed);if(!row.task.title)bad('Give each future action a title.');after.subtasks.push(row);
+    if(Object.hasOwn(added.fields,'assignment_rule')
+      &&(Object.hasOwn(added.fields,'assigned_user_ids')||Object.hasOwn(added.fields,'assignment_group')))
+      bad('Choose either a subtask rule or a direct Person or Group assignment.');
+  }
+  for(const action of after.subtasks){
+    if(action.supervisor_pool&&!action.assignment_rule)bad('Choose a subtask rule before choosing a supervisor.');
+    if(action.assignment_rule)assertSubtaskCandidatePool(d,after.task.subtask_candidate_pool_json,
+      action.assignment_rule,available.get(action.action_key)?.assignment_rule);
   }
   if(after.subtasks.length>50)bad('A Task can contain at most 50 subtasks.');
   if(operations.order) {
@@ -168,7 +219,17 @@ export function proposedSeriesDefinition(before, { fields, editedSubtasks, assig
       assigned_user_ids:[],tags:[],authorization:{created_by:authorId,assigned_user_ids:[]}};
     Object.assign(row.task,{title:step.title,sort_order:order,is_optional:step.isOptional,points:step.points,
       assignment_group_json:step.assignmentGroup?JSON.stringify(step.assignmentGroup):null});
-    if(step.assignedUsers!==undefined){row.assigned_user_ids=[...step.assignedUsers];row.authorization={...(row.authorization||{created_by:null}),assigned_user_ids:[...step.assignedUsers]};}
+    if(existing?.assignment_rule){
+      // A full-form edit may echo the current occurrence's resolved person.
+      // That person is never the future rule or future access roster. The
+      // sparse future editor carries an explicit replacement operation.
+      row.assigned_user_ids=[];
+      row.authorization={...(row.authorization||{created_by:null}),assigned_user_ids:[]};
+      row.task.assignment_group_json=null;
+    }else if(step.assignedUsers!==undefined){
+      row.assigned_user_ids=[...step.assignedUsers];
+      row.authorization={...(row.authorization||{created_by:null}),assigned_user_ids:[...step.assignedUsers]};
+    }
     row.skill_ids=[...step.skillIds];return row;
   });
   if(after.rotation_rendering)after.rotation_rendering.targets=after.rotation_rendering.targets.filter(target=>{
@@ -213,20 +274,38 @@ export function assertSeriesDefinitionMutation(d,actor,task,before,after,{future
     throw new TaskStateError('You cannot use Rotation Groups.',{reason:'series_definition_permission',capability:'rotations.view'},403);};
   const fields={change_points:['points','scoring_mode'],change_priority:['priority'],change_category_tags:['category'],
     change_dates:['calendar_lead_days','due_date_offset_days','start_time','due_time','expiration_policy','is_recurring','recurrence_rule','recurrence_from_completion'],
-    change_assignment:['assignment_mode','rotation_group','rotation_slot','assignment_group_json']};
+    change_assignment:['assignment_mode','rotation_group','rotation_slot','assignment_group_json','subtask_candidate_pool_json']};
   const assertConfiguration=(old,newValue,capabilities)=>{
     if(!same(old.task?.card_color_policy,newValue.task?.card_color_policy))requireCapability(capabilities,'edit');
+    if(!same(old.assignment_rule,newValue.assignment_rule)){
+      requireCapability(capabilities,'change_assignment');requireCapability(capabilities,'reassign');
+      if(newValue.assignment_rule?.kind==='group')requireGroupView();
+    }
+    if(!same(old.supervisor_pool,newValue.supervisor_pool)){
+      if(!taskSupervisionManagementAllowed(d,actor,task.id))
+        throw new TaskStateError('This actor cannot choose the Activity supervisor.',{},403);
+      if(newValue.supervisor_pool?.kind==='group')requireGroupView();
+    }
     for(const [permission,names] of Object.entries(fields))if(names.some(name=>!same(old.task?.[name],newValue.task?.[name]))) {
       requireCapability(capabilities,permission);
       if(permission==='change_assignment')requireCapability(capabilities,'reassign');
       if(permission==='change_assignment'&&nameGroupChanged(old,newValue)&&newValue.task?.assignment_group_json)requireGroupView();
+      if(permission==='change_assignment'&&old.task?.subtask_candidate_pool_json!==newValue.task?.subtask_candidate_pool_json
+          &&JSON.parse(newValue.task?.subtask_candidate_pool_json||'null')?.group_ids?.length){
+        const templateId=newValue.binding?.activity_template_id;
+        const inherited=templateId!==old.binding?.activity_template_id&&templateId
+          &&d.prepare('SELECT subtask_candidate_pool_json FROM activity_templates WHERE id=?').get(templateId)?.subtask_candidate_pool_json
+            ===newValue.task.subtask_candidate_pool_json;
+        if(!inherited)requireGroupView();
+      }
     }
     if(!same(old.binding?.snapshot?.required_skill_ids??old.skill_ids,newValue.binding?.snapshot?.required_skill_ids??newValue.skill_ids))
       requireCapability(capabilities,'change_required_skills');
     if(!same(old.tags,newValue.tags))requireCapability(capabilities,'change_category_tags');
     const dynamicAssignment=old.binding&&newValue.binding||old.task?.assignment_mode==='round_robin'&&newValue.task?.assignment_mode==='round_robin';
     const directChanged=!same(old.assignee_policy?.direct_assignee_ids??old.assigned_user_ids,newValue.assignee_policy?.direct_assignee_ids??newValue.assigned_user_ids);
-    if(!dynamicAssignment&&(!same(old.assigned_user_ids,newValue.assigned_user_ids)||directChanged)||!same(old.rotation_user_ids,newValue.rotation_user_ids)) {
+    if(!dynamicAssignment&&(!same(old.assigned_user_ids,newValue.assigned_user_ids)||directChanged)
+        ||!same(old.rotation_user_ids,newValue.rotation_user_ids)||!same(old.owner_user_id,newValue.owner_user_id)) {
       requireCapability(capabilities,'change_assignment');requireCapability(capabilities,'reassign');
     }
   };
@@ -255,8 +334,13 @@ export function assertSeriesDefinitionMutation(d,actor,task,before,after,{future
     if(!old) {
       requireCapability(rootCapabilities,'create');
       if(action.skill_ids?.length)requireCapability(rootCapabilities,'change_required_skills');
-      if(action.assigned_user_ids?.length||action.task.assignment_group_json){requireCapability(rootCapabilities,'change_assignment');requireCapability(rootCapabilities,'reassign');}
-      if(action.task.assignment_group_json)requireGroupView();
+      if(action.assigned_user_ids?.length||action.task.assignment_group_json||action.assignment_rule){requireCapability(rootCapabilities,'change_assignment');requireCapability(rootCapabilities,'reassign');}
+      if(action.task.assignment_group_json||action.assignment_rule?.kind==='group')requireGroupView();
+      if(action.supervisor_pool){
+        if(!taskSupervisionManagementAllowed(d,actor,task.id))
+          throw new TaskStateError('This actor cannot choose the Activity supervisor.',{},403);
+        if(action.supervisor_pool.kind==='group')requireGroupView();
+      }
       if(action.task.points)requireCapability(rootCapabilities,'change_points');
       continue;
     }
@@ -338,6 +422,7 @@ function reconcileOccurrence(d,task,definition,window,actor) {
       throw new TaskStateError('This future subtask has a different Group assignment plan. Preserve it and apply the new plan to later occurrences.',{reason:'rotation_snapshot'},409);}
   const actionAssignments=action=>{
     const existing=children.find(row=>row.action_key===action.action_key&&!row.archived_at);
+    if(action.assignment_rule)return [];
     return action.task.assignment_group_json&&existing
       ?[existing.assigned_to,...d.prepare('SELECT user_id FROM task_assignments WHERE task_id=?').all(existing.id).map(row=>row.user_id).filter(id=>id!==existing.assigned_to)].filter(Boolean)
       :action.assigned_user_ids;
@@ -375,6 +460,11 @@ function reconcileOccurrence(d,task,definition,window,actor) {
     registerSeriesAction(d,id,task.id,action.action_key);
     assignments(d,id,actionAssigned);setTaskSkills(d,id,action.skill_ids);setTags(d,id,action.tags);
     persistCapturedTaskAssignees(d,id,action.assignee_policy,actionAssigned);
+    if(action.assignment_rule)d.prepare(`INSERT INTO task_subtask_assignment_rules(task_id,source_json,supervisor_pool_json)
+      VALUES(?,?,?) ON CONFLICT(task_id) DO UPDATE SET source_json=excluded.source_json,
+      supervisor_pool_json=excluded.supervisor_pool_json`).run(id,JSON.stringify(action.assignment_rule),
+        action.supervisor_pool?JSON.stringify(action.supervisor_pool):null);
+    else d.prepare('DELETE FROM task_subtask_assignment_rules WHERE task_id=?').run(id);
   }
   // A pristine bound target already consumed its turn. Preserve that actual
   // assignment when its policy is unchanged, then re-evaluate supervision

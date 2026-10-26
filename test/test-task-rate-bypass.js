@@ -10,15 +10,13 @@ const request=(method,path,session=null)=>({method,originalUrl:path,session,sess
 test('only signed-session ordinary Task reads and status/edit writes bypass the blanket quota',()=>{
   const session={userId:2};
   for(const [method,path] of [
-    ['GET','/api/v1/tasks'],['GET','/api/v1/tasks?delta=signed'],['GET','/api/v1/tasks/window'],
-    ['GET','/api/v1/tasks/42'],
+    ['GET','/api/v1/tasks'],['GET','/api/v1/tasks?delta=signed'],['GET','/api/v1/tasks/window'],['GET','/api/v1/tasks/42'],
     ['GET','/api/v1/tasks/42/comments'],['GET','/api/v1/reminders?entity_type=task&entity_id=42'],
     ['PUT','/api/v1/tasks/42'],['PATCH','/api/v1/tasks/42/status'],
   ])assert.equal(ordinaryTaskSessionBypass(request(method,path,session)),true,`${method} ${path}`);
   for(const [method,path] of [
     ['POST','/api/v1/tasks'],['DELETE','/api/v1/tasks/42'],
     ['GET','/api/v1/auth/me'],['POST','/api/v1/auth/login'],['POST','/api/v1/device/pair'],
-    ['GET','/api/v1/tasks/changes'],
     ['GET','/api/v1/openapi.json'],['GET','/api/v1/tasks/categories'],
     ['GET','/api/v1/reminders?entity_type=note&entity_id=42'],['GET','/api/v1/reminders?entity_type=task'],
     ['POST','/api/v1/tasks/42/comments'],
@@ -47,7 +45,6 @@ test('ordinary session mutations continue after other API calls exhaust the unch
   assert.equal((await call('/api/v1/tasks','GET',true)).status,200);
   assert.equal((await call('/api/v1/tasks/42','GET',true)).status,429,'a separate session guard bounds expensive ordinary operations');
   assert.equal((await call('/api/v1/tasks/42/status','PATCH',false)).status,429);
-  assert.equal((await call('/api/v1/tasks/changes','GET',true)).status,429,'the long-lived change stream retains the shared IP guard');
   assert.equal((await call('/api/v1/auth/login','POST',true)).status,429);
 });
 

@@ -41,7 +41,7 @@ export const TASK_SERIES_SCHEMA_SQL = `
 
 const TASK_FIELDS = ['title','description','category','priority','start_date','start_time','due_date','due_time',
   'due_date_offset_days','is_recurring','recurrence_rule','recurrence_from_completion','assignment_mode',
-  'rotation_group','rotation_slot','rotation_bindings_json','assignment_group_json','points','visibility','countdown','locked','expiration_policy','is_optional','sort_order','activity_template_checklist_item_id','scoring_mode','scoring_review_required'];
+  'rotation_group','rotation_slot','rotation_bindings_json','assignment_group_json','subtask_candidate_pool_json','points','visibility','countdown','locked','expiration_policy','is_optional','sort_order','activity_template_checklist_item_id','scoring_mode','scoring_review_required'];
 const selectedTask = row => ({...Object.fromEntries(TASK_FIELDS.map(key => [key, row[key] ?? (key==='rotation_bindings_json'?'[]':null)])),card_color_policy:Object.hasOwn(row,'card_color_policy')?normalizeCardColorChoice(row.card_color_policy):taskCardColorPolicy(row)});
 const parseDefinition = row => row ? { ...row, data: JSON.parse(row.definition_json) } : null;
 const occurrenceRow = (d,taskId) => d.prepare('SELECT * FROM task_recurrence_occurrences WHERE task_id=?').get(taskId) || null;
@@ -155,14 +155,20 @@ export function registerSeriesAction(d,taskId,occurrenceTaskId,actionKey) {
 }
 
 function extras(d,id) {
-  const assignee_policy=readTaskAssigneePolicy(d,id);
-  const assignments=d.prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(id).map(row=>row.user_id);
-  const primary=d.prepare('SELECT assigned_to FROM tasks WHERE id=?').get(id)?.assigned_to;
+  const assignmentRule=d.prepare('SELECT source_json,supervisor_pool_json FROM task_subtask_assignment_rules WHERE task_id=?').get(id);
+  const savedPolicy=readTaskAssigneePolicy(d,id);
+  // A materialized Group worker is this occurrence's result, never the next
+  // definition's fixed person or authorization roster.
+  const assignee_policy=assignmentRule&&savedPolicy?{...savedPolicy,direct_assignee_ids:[]}:savedPolicy;
+  const assignments=assignmentRule?[]:d.prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(id).map(row=>row.user_id);
+  const primary=assignmentRule?null:d.prepare('SELECT assigned_to FROM tasks WHERE id=?').get(id)?.assigned_to;
   return {
     ...(assignee_policy?{assignee_policy}:{}),
     assigned_user_ids:primary?[primary,...assignments.filter(userId=>userId!==primary)]:assignments,
     skill_ids:d.prepare('SELECT skill_id FROM task_skill_requirements WHERE task_id=? ORDER BY sort_order,skill_id').all(id).map(row=>row.skill_id),
     tags:d.prepare('SELECT tag FROM task_tags WHERE task_id=? ORDER BY tag COLLATE NOCASE').all(id).map(row=>row.tag),
+    ...(assignmentRule?{assignment_rule:JSON.parse(assignmentRule.source_json),
+      supervisor_pool:assignmentRule.supervisor_pool_json?JSON.parse(assignmentRule.supervisor_pool_json):null}:{}),
   };
 }
 
@@ -184,9 +190,14 @@ export function captureSeriesDefinition(d,taskId,{registerActions=true}={}) {
     rotation_rendering:captureTaskRotationRendering(d,root,binding,children),
     location:location?Object.fromEntries(Object.entries(location).filter(([key])=>!['task_id','created_at','updated_at','created_by'].includes(key))):null,
     planning:planning||null,
-    subtasks:children.map(child=>({action_key:registerActions?registerRecurrenceAction(d,child.id)?.action_key||`action:${child.id}`
-      : (()=>{const identity=JSON.parse(peekRewardOccurrenceProvenance(d,child.id).logicalKey);return identity[0]==='recurrence'?identity[3]:`action:${child.id}`;})(),
-      source_task_id:child.id,task:selectedTask(child),...extras(d,child.id),authorization:seriesActionAuthorization(d,{source_task_id:child.id})})),
+    subtasks:children.map(child=>{
+      const extra=extras(d,child.id);
+      return {action_key:registerActions?registerRecurrenceAction(d,child.id)?.action_key||`action:${child.id}`
+        : (()=>{const identity=JSON.parse(peekRewardOccurrenceProvenance(d,child.id).logicalKey);return identity[0]==='recurrence'?identity[3]:`action:${child.id}`;})(),
+        source_task_id:child.id,task:selectedTask(child),...extra,
+        authorization:extra.assignment_rule?{created_by:child.created_by,assigned_user_ids:[]}
+          :seriesActionAuthorization(d,{source_task_id:child.id})};
+    }),
   };
 }
 

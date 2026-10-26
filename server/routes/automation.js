@@ -50,6 +50,7 @@ import { normalizeRotationBindings, assertRotationBindingsChange, taskRotationCo
 import { listRotationGroups, finalizeRotation, getRotationTrack } from '../services/rotation.js';
 import { rotationGroupUsage } from '../services/rotation-shared.js';
 import {normalizeGroupAssignment} from '../services/group-assignment.js';
+import {normalizeSubtaskCandidatePool} from '../services/subtask-candidate-pool.js';
 import { rotationOccurrenceOptions } from '../services/rotation-access.js';
 import { normalizeWorkflowRotationOperations, executeWorkflowRotationOperation } from '../services/workflow-rotation-operations.js';
 import {
@@ -166,14 +167,26 @@ function normalizeActivityInput(d, body, existing = null) {
   const incomingAssignmentGroup=body.assignment_group===undefined?oldAssignmentGroup:body.assignment_group;
   const assignmentGroup=normalizeGroupAssignment(d,incomingAssignmentGroup,
     {allowInactive:!!oldAssignmentGroup&&Number((typeof incomingAssignmentGroup==='string'?JSON.parse(incomingAssignmentGroup):incomingAssignmentGroup)?.group_id)===Number(oldAssignmentGroup.group_id)});
+  const previousPool=existing?.subtask_candidate_pool_json?JSON.parse(existing.subtask_candidate_pool_json):null;
+  const subtaskCandidatePool=normalizeSubtaskCandidatePool(d,body.subtask_candidate_pool,{previous:previousPool});
   if(assignmentStrategy==='group_rotation'&&!assignmentGroup)throw new Error('Choose a Rotation Group for assignment.');
   const subjectRequired = assignmentStrategy === 'subject_skill'
     ? 1
     : bool(body.subject_required, !!existing?.subject_required);
-  const fixedUserId = intOrNull(body.fixed_user_id ?? existing?.fixed_user_id, { min: 1 });
-  if (assignmentStrategy === 'fixed' && !validHouseholdUser(d, fixedUserId)) {
-    throw new Error('Choose a valid fixed household member.');
-  }
+  const oldFixedIds=existing?.fixed_assignee_ids||
+    (existing?.fixed_assignee_ids_json?JSON.parse(existing.fixed_assignee_ids_json):null);
+  const requestedFixedIds=body.fixed_assignee_ids==null
+    ?body.fixed_user_id!=null&&Number(body.fixed_user_id)!==Number(existing?.fixed_user_id)
+      ?[body.fixed_user_id]:oldFixedIds||[body.fixed_user_id??existing?.fixed_user_id]
+    :body.fixed_assignee_ids;
+  if(assignmentStrategy==='fixed'&&(!Array.isArray(requestedFixedIds)||requestedFixedIds.length>50||requestedFixedIds.some(id=>!Number.isSafeInteger(Number(id))||Number(id)<1)
+    ||new Set(requestedFixedIds.map(Number)).size!==requestedFixedIds.length))
+    throw new Error('Choose distinct valid fixed household members.');
+  const fixedAssigneeIds=assignmentStrategy==='fixed'?requestedFixedIds.map(Number):[];
+  const fixedUserId=intOrNull(body.fixed_user_id??fixedAssigneeIds[0]??existing?.fixed_user_id,{min:1});
+  if(assignmentStrategy==='fixed'&&(!fixedAssigneeIds.length||fixedAssigneeIds[0]!==fixedUserId
+    ||fixedAssigneeIds.some(id=>!validHouseholdUser(d,id))))
+    throw new Error('Choose valid fixed household members.');
   const skillIds = normalizeSkillIds(d, body.skill_ids, (existing?.skills ?? []).map((skill) => Number(skill.id)));
   const priority = body.priority ?? existing?.priority ?? 'none';
   if (!['none', 'low', 'medium', 'high', 'urgent'].includes(priority)) throw new Error('Choose a valid priority.');
@@ -244,12 +257,23 @@ function normalizeActivityInput(d, body, existing = null) {
     if (item?.is_optional !== undefined && ![true, false, 0, 1].includes(item.is_optional)) throw new Error('Subtask optional must be true or false.');
     if(item?.points===undefined&&!prior&&existing?.checklist?.some(row=>row.points>0))
       throw new Error('Reload the Activity Template editor to preserve its subtask points.');
+    if(item?.fixed_user_id===undefined&&!prior&&existing?.checklist?.some(row=>row.fixed_user_id))
+      throw new Error('Reload the Activity Template editor to preserve its fixed subtask people.');
+    const fixedUserId=item?.fixed_user_id===undefined?prior?.fixed_user_id??null:item.fixed_user_id==null?null:Number(item.fixed_user_id);
+    if(fixedUserId!=null&&(!Number.isSafeInteger(fixedUserId)||fixedUserId<1
+      ||!d.prepare(`SELECT 1 FROM users u WHERE u.id=?
+        AND NOT EXISTS(SELECT 1 FROM split_expense_guest_users g WHERE g.user_id=u.id)
+        AND NOT EXISTS(SELECT 1 FROM housekeeping_workers h WHERE h.user_id=u.id)`).get(fixedUserId)))
+      throw new Error('Choose an available household person for this subtask.');
+    const assignmentGroup=normalizeGroupAssignment(d,item?.assignment_group===undefined?prior?.assignment_group_json:item.assignment_group,
+      {allowInactive:!!prior?.assignment_group_json&&Number((typeof item?.assignment_group==='string'?JSON.parse(item.assignment_group):item?.assignment_group)?.group_id??JSON.parse(prior.assignment_group_json).group_id)===Number(JSON.parse(prior.assignment_group_json).group_id)});
+    if(fixedUserId&&assignmentGroup)throw new Error('Choose either a fixed Person or a Group for this subtask.');
     return {
       id:retainedId,
       titleTemplate,
       sortOrder: index,
-      assignmentGroup: normalizeGroupAssignment(d,item?.assignment_group===undefined?prior?.assignment_group_json:item.assignment_group,
-        {allowInactive:!!prior?.assignment_group_json&&Number((typeof item?.assignment_group==='string'?JSON.parse(item.assignment_group):item?.assignment_group)?.group_id??JSON.parse(prior.assignment_group_json).group_id)===Number(JSON.parse(prior.assignment_group_json).group_id)}),
+      assignmentGroup,
+      fixedUserId,
       isOptional: item?.is_optional === undefined ? prior?.is_optional ?? 0 : item.is_optional ? 1 : 0,
       points: pointAmount(item?.points===undefined?prior?.points??0:item.points),
       skillIds: normalizeSkillIds(d, item?.skill_ids,
@@ -261,8 +285,11 @@ function normalizeActivityInput(d, body, existing = null) {
   const participantCount=intOrNull(body.participant_count ?? existing?.participant_count ?? 1,{min:1,max:50});
   if(!existing||category!==existing.category||assignmentStrategy!==(existing.assignment_policy||existing.assignment_strategy)||participantCount!==existing.participant_count)
     assertActivityAssigneePolicy(categoryAssigneePolicy(d,category),{participant_count:participantCount},{strategy:assignmentStrategy});
+  if(assignmentStrategy==='fixed'&&(!existing||category!==existing.category||JSON.stringify(fixedAssigneeIds)!==JSON.stringify(oldFixedIds||[existing.fixed_user_id])))
+    assertActivityAssigneePolicy(categoryAssigneePolicy(d,category),{}, {strategy:'fixed',participants:fixedAssigneeIds.map(id=>({id}))});
   return {
     assignmentGroup:assignmentStrategy==='group_rotation'?assignmentGroup:null,
+    subtaskCandidatePool,
     rotationBindings: normalizeRotationBindings(d, body.rotation_bindings ?? existing?.rotation_bindings ?? []),
     name,
     titleTemplate,
@@ -282,6 +309,7 @@ function normalizeActivityInput(d, body, existing = null) {
     rotationGroup: text(body.rotation_group ?? existing?.rotation_group, { max: 100 }),
     subjectRequired,
     fixedUserId: assignmentStrategy === 'fixed' ? fixedUserId : null,
+    fixedAssigneeIds: assignmentStrategy === 'fixed' && fixedAssigneeIds.length>1 ? fixedAssigneeIds : null,
     supervisionTitleTemplate: text(
       body.supervision_title_template ?? existing?.supervision_title_template ?? 'Supervise {subject}: {activity}',
       { max: 200 },
@@ -429,18 +457,24 @@ function saveActivityChecklist(d, activityId, checklist) {
   // table enforces a unique (template, sort_order) pair on every UPDATE.
   d.prepare('UPDATE activity_template_checklist_items SET sort_order=sort_order+1000 WHERE activity_template_id=?').run(activityId);
   const insert = d.prepare(`
-    INSERT INTO activity_template_checklist_items (activity_template_id, title_template, sort_order, is_optional, points, assignment_group_json)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO activity_template_checklist_items (activity_template_id, title_template, sort_order, is_optional, points, assignment_group_json, fixed_user_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
   const insertSkill = d.prepare('INSERT INTO activity_template_checklist_skills(checklist_item_id,skill_id,sort_order) VALUES (?,?,?)');
   checklist.forEach((item) => {
     const groupJson=item.assignmentGroup?JSON.stringify(item.assignmentGroup):null;
     let itemId;
     if(item.id){
-      d.prepare(`UPDATE activity_template_checklist_items SET title_template=?,sort_order=?,is_optional=?,points=?,assignment_group_json=? WHERE id=? AND activity_template_id=?`)
-        .run(item.titleTemplate,item.sortOrder,item.isOptional,item.points,groupJson,item.id,activityId);
+      // A deliberate legacy Person/Group choice supersedes a saved internal
+      // rule. Title/skill/ordering edits with no choice preserve that rule.
+      const replaceRule=!!(item.fixedUserId||item.assignmentGroup);
+      d.prepare(`UPDATE activity_template_checklist_items SET title_template=?,sort_order=?,is_optional=?,points=?,assignment_group_json=?,fixed_user_id=?,
+        assignment_rule_json=CASE WHEN ? THEN NULL ELSE assignment_rule_json END,
+        supervisor_pool_json=CASE WHEN ? THEN NULL ELSE supervisor_pool_json END WHERE id=? AND activity_template_id=?`)
+        .run(item.titleTemplate,item.sortOrder,item.isOptional,item.points,groupJson,item.fixedUserId,
+          replaceRule?1:0,replaceRule?1:0,item.id,activityId);
       itemId=item.id;
-    }else itemId=insert.run(activityId,item.titleTemplate,item.sortOrder,item.isOptional,item.points,groupJson).lastInsertRowid;
+    }else itemId=insert.run(activityId,item.titleTemplate,item.sortOrder,item.isOptional,item.points,groupJson,item.fixedUserId).lastInsertRowid;
     d.prepare('DELETE FROM activity_template_checklist_skills WHERE checklist_item_id=?').run(itemId);
     item.skillIds.forEach((skillId, order) => insertSkill.run(itemId, skillId, order));
   });
@@ -1489,7 +1523,7 @@ router.post('/admin/activity-templates', requireCapability('activities.create'),
   try {
     const d = db.get();
     const input = normalizeActivityInput(d, req.body);
-if(input.assignmentGroup||input.checklist.some(item=>item.assignmentGroup))assertCapability(d,req,'rotations.view');
+if(input.assignmentGroup||input.checklist.some(item=>item.assignmentGroup)||input.subtaskCandidatePool?.group_ids.length)assertCapability(d,req,'rotations.view');
     assertRotationBindingsChange(d, req, [], input.rotationBindings);
     const id = d.transaction(() => {
       const result = d.prepare(`
@@ -1512,7 +1546,7 @@ if(input.assignmentGroup||input.checklist.some(item=>item.assignmentGroup))asser
         input.dueDateOffsetDays,
       );
       saveActivitySkills(d, result.lastInsertRowid, input.skillIds);
-      d.prepare('UPDATE activity_templates SET rotation_bindings_json=?,scoring_mode=?,assignment_group_json=? WHERE id=?').run(JSON.stringify(input.rotationBindings),input.scoringMode,input.assignmentGroup?JSON.stringify(input.assignmentGroup):null,result.lastInsertRowid);
+      d.prepare('UPDATE activity_templates SET rotation_bindings_json=?,scoring_mode=?,assignment_group_json=?,fixed_assignee_ids_json=?,subtask_candidate_pool_json=? WHERE id=?').run(JSON.stringify(input.rotationBindings),input.scoringMode,input.assignmentGroup?JSON.stringify(input.assignmentGroup):null,input.fixedAssigneeIds?JSON.stringify(input.fixedAssigneeIds):null,input.subtaskCandidatePool?JSON.stringify(input.subtaskCandidatePool):null,result.lastInsertRowid);
       saveActivityChecklist(d, result.lastInsertRowid, input.checklist);
       return Number(result.lastInsertRowid);
     })();
@@ -1531,6 +1565,8 @@ router.put('/admin/activity-templates/:id', requireCapability('activities.edit')
       const changedGroup=JSON.stringify(input.assignmentGroup)!==(existing.assignment_group_json||'null')
         ||input.checklist.some(item=>JSON.stringify(item.assignmentGroup)!==(existing.checklist.find(old=>old.id===item.id)?.assignment_group_json||'null'));
       if(changedGroup&&(input.assignmentGroup||input.checklist.some(item=>item.assignmentGroup)))assertCapability(d,req,'rotations.view');
+      if(JSON.stringify(input.subtaskCandidatePool)!==(existing.subtask_candidate_pool_json||'null')&&input.subtaskCandidatePool?.group_ids.length)
+        assertCapability(d,req,'rotations.view');
     assertRotationBindingsChange(d, req, existing.rotation_bindings, input.rotationBindings);
     d.transaction(() => {
       d.prepare(`
@@ -1555,7 +1591,7 @@ router.put('/admin/activity-templates/:id', requireCapability('activities.edit')
         input.startTime, input.dueTime, input.recurrenceRule, input.recurrenceFromCompletion, input.dueDateOffsetDays, existing.id,
       );
       saveActivitySkills(d, existing.id, input.skillIds);
-      d.prepare('UPDATE activity_templates SET rotation_bindings_json=?,scoring_mode=?,assignment_group_json=? WHERE id=?').run(JSON.stringify(input.rotationBindings),input.scoringMode,input.assignmentGroup?JSON.stringify(input.assignmentGroup):null,existing.id);
+      d.prepare('UPDATE activity_templates SET rotation_bindings_json=?,scoring_mode=?,assignment_group_json=?,fixed_assignee_ids_json=?,subtask_candidate_pool_json=? WHERE id=?').run(JSON.stringify(input.rotationBindings),input.scoringMode,input.assignmentGroup?JSON.stringify(input.assignmentGroup):null,input.fixedAssigneeIds?JSON.stringify(input.fixedAssigneeIds):null,input.subtaskCandidatePool?JSON.stringify(input.subtaskCandidatePool):null,existing.id);
       saveActivityChecklist(d, existing.id, input.checklist);
     })();
     res.json({ data: getActivityTemplate(d, existing.id) });

@@ -39,6 +39,7 @@ export function trackableTaskListRoot(d,taskId){
       OR EXISTS(SELECT 1 FROM task_rotation_occurrences x WHERE x.task_id=t.id OR x.owner_task_id=t.id)
       OR EXISTS(SELECT 1 FROM task_rotation_periods x WHERE x.task_id=t.id)
       OR EXISTS(SELECT 1 FROM task_incomplete_closures x WHERE x.task_id=t.id)
+      OR EXISTS(SELECT 1 FROM task_subtask_assignment_rules x WHERE x.task_id=t.id)
     LIMIT 1`).get(row.id);
   return excluded?null:row.id;
 }

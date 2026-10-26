@@ -32,6 +32,7 @@ import { ensureSeriesDefinition, seriesMaterializationPlan, recordOccurrenceDefi
   normalizeSeriesSchedule, effectiveSeriesScoringDefinition, seriesActionAuthorization, planSeriesOccurrence,
   prepareSeriesOccurrenceWork, seriesRotationAssignment, translatedSeriesDate } from '../services/task-series.js';
 import { proposedSeriesDefinition, proposedFutureSeriesDefinition, resolveSeriesDraftClientKeys, sameSeriesBindingPolicy, futureActionCapabilities, futureRootCapabilities, assertSeriesEdit, assertSeriesDefinitionMutation, reconcileSeriesFuture, seriesOccurrencePreservationReason } from '../services/task-series-edit.js';
+import {normalizeSubtaskRule} from '../services/subtask-assignment-rules.js';
 import {taskScoringSummary,previewTaskScoring,assertTaskScoringMutation,taskScoringRoot,taskScoringRows,taskScoringIdentity} from '../services/task-scoring.js';
 import { readTaskActivityDefinition, updateTaskActivitySnapshotSkills, captureActivityTemplateDefinition } from '../services/task-activity-snapshot.js';
 import { syncTaskRewards } from '../services/rewards.js';
@@ -57,6 +58,8 @@ import { taskWindowQueryKey } from '../services/task-window-order.js';
 import { normalizeRotationBindings, parseRotationBindings, rotationBindingsEqual, assertRotationBindingsChange, bindTaskRotations, taskRotationContexts } from '../services/task-rotation.js';
 import { householdMembers } from '../services/activity-eligibility.js';
 import {normalizeGroupAssignment,recordGroupAssignment} from '../services/group-assignment.js';
+import {normalizeSubtaskCandidatePool} from '../services/subtask-candidate-pool.js';
+import {previewSubtaskReassignment,applySubtaskReassignment} from '../services/task-occurrence-reassignment.js';
 import {mappedLegacyRotationGroups,refreshLegacyRotationGroupMapping,convertedLegacyFutureDefinition} from '../services/legacy-rotation-conversion.js';
 import {selectTaskGroupMember as selectTaskGroupMemberForDatabase} from '../services/task-group-assignment.js';
 import { initializeTaskRotationRendering, applyTaskRotationRendering, refreshTaskRotationRendering } from '../services/task-rotation-rendering.js';
@@ -93,7 +96,8 @@ import { TaskSkillError, normalizeSkillIds, loadTaskSkillIds, setTaskSkills, cop
 import { assertTaskAssignmentAvailability, TaskAssignmentAvailabilityError } from '../services/assignment-responsibilities.js';
 import { assertTaskMutation, attachTaskCapabilities, taskCapabilities, taskVisibilityWhere, taskSupervisionManagementAllowed, withTaskReadProjection, withTaskReadSnapshot,taskReadRecord,taskReadStatement } from '../services/task-access.js';
 import { assertTaskRevision, changeTaskStatus, reopenExpiredTask, assertTaskWindowAction, configureTaskRecurrence, recordTaskActivity, taskActivity, TaskStateError } from '../services/task-lifecycle.js';
-import { attachTaskSupervision, reconcileTaskSupervision, assertTaskSupervisionAssignee, deleteTaskSupervisionProjections, taskSupervisionRootId, prepareProspectiveTaskExecution } from '../services/task-supervision.js';
+import { attachTaskSupervision, inspectTaskSupervision, reconcileTaskSupervision, assertTaskSupervisionAssignee, deleteTaskSupervisionProjections, taskSupervisionRootId, prepareProspectiveTaskExecution } from '../services/task-supervision.js';
+import { configuredSubtaskSupervisorIds } from '../services/subtask-supervisor-pool.js';
 import { EXPIRATION_POLICIES, taskDeadlineMs, taskStartMs, taskWindowAncestors } from '../services/task-window.js';
 import { createTaskOptionalContextReader } from '../services/task-optional.js';
 import { taskChangesStream } from '../services/task-changes.js';
@@ -279,6 +283,19 @@ function futureEditContext(req,task) {
   const futurePermissions=futureRootCapabilities(db.get(),req,task,before);
   if(!futurePermissions.view)throw new TaskStateError('This future definition is unavailable.',{},404);
   if(!futurePermissions.edit)throw new TaskStateError('Your permissions do not allow editing this future definition.',{},403);
+  for(const patch of [...(req.body.future_patch?.actions?.update||[]),...(req.body.future_patch?.actions?.add||[])]){
+    const fields=patch?.fields||{};
+    if(!Object.hasOwn(fields,'assignment_rule')&&!Object.hasOwn(fields,'supervisor_pool'))continue;
+    const prior=before.subtasks.find(action=>action.action_key===patch.action_key);
+    const rights=prior?futureActionCapabilities(db.get(),req,task,prior):futurePermissions;
+    if(!rights.view||!rights.change_assignment||!rights.reassign)
+      throw new TaskStateError('This actor cannot change this future subtask rule.',{},403);
+    if(Object.hasOwn(fields,'supervisor_pool')&&!taskSupervisionManagementAllowed(db.get(),req,task.id))
+      throw new TaskStateError('This actor cannot choose supervisors for this Activity.',{},403);
+    if((fields.assignment_rule?.kind==='group'||fields.supervisor_pool?.kind==='group')
+      &&!hasCapability(db.get(),req,'rotations.view'))
+      throw new TaskStateError('This actor cannot choose Groups.',{},403);
+  }
   const validateFields=fields=>{
     fields={...fields};
     validateScoringInput(fields);
@@ -288,6 +305,9 @@ function futureEditContext(req,task) {
       if(!Array.isArray(fields[name])||fields[name].some(id=>!Number.isSafeInteger(id)||id<1)||new Set(fields[name]).size!==fields[name].length
         ||fields[name].some(id=>!householdMembers(db.get()).some(member=>member.id===id)))throw new TaskStateError('Choose valid household members.',{reason:'invalid_assignment'},400);
     }
+    if (fields.owner_user_id !== undefined && (!Number.isSafeInteger(fields.owner_user_id) || fields.owner_user_id < 1
+      || !fields.assigned_to?.includes(fields.owner_user_id)))
+      throw new TaskStateError('Choose an Owner from the selected assignees.',{reason:'invalid_assignment'},400);
     if(fields.skill_ids!==undefined)fields.skill_ids=normalizeSkillIds(db.get(),fields.skill_ids);
     if(fields.rotation_bindings!==undefined)fields.rotation_bindings=normalizeRotationBindings(db.get(),fields.rotation_bindings);
     if(fields.tags!==undefined)fields.tags=normalizeTags(fields.tags);
@@ -300,6 +320,26 @@ function futureEditContext(req,task) {
     return fields;
   };
   const definition=proposedFutureSeriesDefinition(db.get(),req,task,before,req.body.future_patch??{}, {validateFields});
+  const authoredGroupRules=[...(req.body.future_patch?.actions?.update||[]),
+    ...(req.body.future_patch?.actions?.add||[])].map(action=>action.fields?.assignment_rule)
+    .filter(rule=>rule?.kind==='group');
+  const scheduleKeys=new Set(['start_date','due_date','due_date_offset_days','recurrence_rule','recurrence_from_completion']);
+  const scheduleChanged=Object.keys(req.body.future_patch?.fields||{}).some(key=>scheduleKeys.has(key))
+    ||[...(req.body.future_patch?.actions?.update||[]),...(req.body.future_patch?.actions?.add||[])]
+      .some(action=>Object.keys(action.fields||{}).some(key=>key==='start_date'||key==='due_date'));
+  if(authoredGroupRules.length||scheduleChanged&&definition.subtasks.some(action=>action.assignment_rule?.kind==='group')){
+    const next=planSeriesOccurrence(db.get(),{...stored,id:null,data:definition},state.occurrence);
+    if(!next?.due_date){
+      if(authoredGroupRules.length)throw new TaskStateError('The next occurrence date must be known before choosing a Group subtask mode.',{},409);
+    }else for(const action of definition.subtasks)if(action.assignment_rule?.kind==='group'){
+      const relative=definition.task.due_date_offset_days!=null;
+      const oldAnchor=relative?definition.task.start_date:definition.task.due_date;
+      const newAnchor=relative?next.start_date:next.due_date;
+      const childDue=action.task.due_date&&oldAnchor&&newAnchor
+        ?translatedSeriesDate(action.task.due_date,oldAnchor,newAnchor):action.task.due_date;
+      normalizeSubtaskRule(db.get(),action.assignment_rule,{dateKey:childDue||next.due_date});
+    }
+  }
   if (before.binding?.snapshot?.fixed_assignee_ids && Object.hasOwn(req.body.future_patch?.fields ?? {}, 'assigned_to')) {
     // Future-only authoring starts from its frozen definition, independently
     // of any assignment exception on the selected occurrence.
@@ -592,6 +632,13 @@ function compatibleFutureDefinition(req,task,series,before,edited,{normalizeSche
   const existing=getTaskActivityBinding(db.get(),task.id),request=parseTaskActivityBinding(body,existing);
   if(request.error)throw new TaskStateError(request.error,{},400);
   const desired=request.binding,skills=taskSkillInput(body,task.id,desired?.activityTemplateId);
+  const oldPool=before.task.subtask_candidate_pool_json?JSON.parse(before.task.subtask_candidate_pool_json):null;
+  const templatePool=!oldPool&&desired?.activityTemplateId&&desired.activityTemplateId!==existing?.activity_template_id
+    ?db.get().prepare('SELECT subtask_candidate_pool_json FROM activity_templates WHERE id=?')
+      .get(desired.activityTemplateId)?.subtask_candidate_pool_json:null;
+  const pool=normalizeSubtaskCandidatePool(db.get(),body.subtask_candidate_pool,
+    {previous:oldPool??(templatePool?JSON.parse(templatePool):null)});
+  fields.subtask_candidate_pool_json=pool?JSON.stringify(pool):null;
   let binding=null;
   if(desired)binding={activity_template_id:desired.activityTemplateId,subject_user_id:desired.subjectUserId,
     assignment_override_user_id:desired.assignmentOverrideUserId,snapshot:overrideTaskActivityAssignees(before.binding?.activity_template_id===desired.activityTemplateId
@@ -637,6 +684,11 @@ function compatibleFutureDefinition(req,task,series,before,edited,{normalizeSche
       external_provider:location.provider??null,external_place_id:location.externalPlaceId??null,user_label:location.userLabel??null,
       manual_address:location.manualAddress??null,latitude:location.latitude??null,longitude:location.longitude??null}:null,
     authorId:req.authUserId||req.session.userId,assignmentExplicit:body.assigned_to!==undefined&&!desired});
+  if(body.owner_user_id!==undefined){
+    if(fields.assignment_mode!=='fixed'||!assigned.includes(Number(body.owner_user_id)))
+      throw new TaskStateError('Choose an Owner from the selected assignees.',{},400);
+    proposed.owner_user_id=Number(body.owner_user_id);
+  }
   preserveFutureCardColorPolicies(proposed,colorBase,body.card_color_choice);
   return normalizeSchedule?normalizeSeriesSchedule(proposed,series.occurrence):proposed;
 }
@@ -865,9 +917,12 @@ function futureEditProjection(req,task,definition,state) {
   const fields=Object.fromEntries(['title','description','points','scoring_mode','visibility','priority','category','start_date','start_time','due_date','due_time','due_date_offset_days','is_recurring','recurrence_rule','recurrence_from_completion','expiration_policy','locked','countdown','assignment_mode','rotation_group','rotation_slot'].map(key=>[key,definition.task[key]]));
   fields.card_color_choice=definition.task.card_color_policy;
   fields.assigned_to=definition.assigned_user_ids;fields.skill_ids=definition.skill_ids;fields.tags=definition.tags;
+  fields.owner_user_id=definition.owner_user_id??definition.binding?.snapshot?.fixed_user_id
+    ?? (task.assigned_to ? definition.assigned_user_ids[0]??null : null);
   fields.assignee_policy=definition.assignee_policy??null;fields.direct_assignee_ids=definition.assignee_policy?.direct_assignee_ids??null;
   fields.rotation_user_ids=definition.rotation_user_ids;fields.rotation_bindings=parseRotationBindings(definition.task.rotation_bindings_json);
   fields.assignment_group=definition.task.assignment_group_json?JSON.parse(definition.task.assignment_group_json):null;
+  fields.subtask_candidate_pool=definition.task.subtask_candidate_pool_json?JSON.parse(definition.task.subtask_candidate_pool_json):null;
   return {task_id:task.id,effective_generation:state.occurrence.generation+1,review_required:!!definition.task.scoring_review_required,permissions:futureRootCapabilities(db.get(),req,task,definition),fields,
     actions:definition.subtasks.filter(a=>futureActionCapabilities(db.get(),req,task,a).view).map(action=>({action_key:action.action_key,
     fields:{...Object.fromEntries(['title','description','category','priority','start_date','start_time','due_date','due_time','points','visibility','locked','expiration_policy','is_optional'].map(key=>[key,action.task[key]])),assignment_group:action.task.assignment_group_json?JSON.parse(action.task.assignment_group_json):null,
@@ -1296,9 +1351,13 @@ function parseAssignedTo(val) {
 function parseTaskActivityBinding(body, existing = null) {
   const hasTemplate = Object.prototype.hasOwnProperty.call(body, 'activity_template_id');
   const hasSubject = Object.prototype.hasOwnProperty.call(body, 'activity_subject_user_id');
+  const hasOwner = Object.prototype.hasOwnProperty.call(body, 'owner_user_id');
+  const ownerId = hasOwner ? Number(body.owner_user_id) : null;
+  if (hasOwner && (!Number.isSafeInteger(ownerId) || ownerId < 1))
+    return { specified: true, error: 'Choose a valid Activity Owner.' };
   const existingSnapshot = existing?.definition_snapshot_json ? JSON.parse(existing.definition_snapshot_json) : null;
   const existingRoster = Array.isArray(existingSnapshot?.fixed_assignee_ids) ? existingSnapshot.fixed_assignee_ids : null;
-  if (!hasTemplate && !hasSubject && body.assigned_to === undefined && body.direct_assignee_ids === undefined) {
+  if (!hasTemplate && !hasSubject && !hasOwner && body.assigned_to === undefined && body.direct_assignee_ids === undefined) {
     return {
       specified: false,
       binding: existing ? {
@@ -1312,6 +1371,8 @@ function parseTaskActivityBinding(body, existing = null) {
 
   const rawTemplate = hasTemplate ? body.activity_template_id : existing?.activity_template_id;
   if (rawTemplate === null || rawTemplate === undefined || rawTemplate === '') {
+    if(hasOwner&&(!Array.isArray(body.assigned_to)||!body.assigned_to.map(Number).includes(ownerId)))
+      return { specified: true, error: 'The Activity Owner must be one of its assignees.' };
     return { specified: true, binding: null };
   }
   const activityTemplateId = Number(rawTemplate);
@@ -1332,8 +1393,8 @@ function parseTaskActivityBinding(body, existing = null) {
   if (sameTemplate && existingRoster) {
     const raw = Object.hasOwn(body, 'direct_assignee_ids') ? body.direct_assignee_ids : body.assigned_to;
     let roster = [...existingRoster];
-    if (raw !== undefined) {
-      let requested = (Array.isArray(raw) ? raw : [raw]).map(id => typeof id === 'number' || typeof id === 'string' && id.trim() ? Number(id) : NaN);
+    if (raw !== undefined || hasOwner) {
+      let requested = (raw === undefined ? existingRoster : Array.isArray(raw) ? raw : [raw]).map(id => typeof id === 'number' || typeof id === 'string' && id.trim() ? Number(id) : NaN);
       if (!requested.length || requested.some(id => !Number.isSafeInteger(id) || id < 1) || new Set(requested).size !== requested.length)
         return { specified: true, error: 'Choose valid distinct Activity Template assignees.' };
       const currentTask = existing.task_id ? db.get().prepare('SELECT * FROM tasks WHERE id=?').get(existing.task_id) : null;
@@ -1342,7 +1403,8 @@ function parseTaskActivityBinding(body, existing = null) {
       if (currentTask && !Object.hasOwn(body, 'direct_assignee_ids'))
         requested = taskDirectAssignmentSelection(db.get(), currentTask, { ...body, assigned_to: requested }).selected;
       const current = currentTask?.assigned_to ?? existingSnapshot.fixed_user_id;
-      const primary = requested.includes(Number(current)) ? Number(current) : requested[0];
+      if (hasOwner && !requested.includes(ownerId)) return { specified: true, error: 'The Activity Owner must be one of its assignees.' };
+      const primary = hasOwner ? ownerId : requested.includes(Number(current)) ? Number(current) : requested[0];
       roster = [primary, ...existingRoster.filter(id => id !== primary && requested.includes(id)), ...requested.filter(id => id !== primary && !existingRoster.includes(id))];
       try { overrideTaskActivityAssignees(existingSnapshot, roster); } catch (error) { return { specified: true, error: error.message }; }
       if (primary !== Number(existingSnapshot.fixed_user_id)) assignmentOverrideUserId = primary;
@@ -1350,6 +1412,22 @@ function parseTaskActivityBinding(body, existing = null) {
     return { specified: true, binding: { activityTemplateId, subjectUserId, assignmentOverrideUserId, assignmentOverrideUserIds: roster } };
   }
   const requested = parseAssignedTo(body.assigned_to);
+  if(!sameTemplate){
+    const source=db.get().prepare('SELECT fixed_user_id,fixed_assignee_ids_json,assignment_policy,assignment_strategy,allow_assignment_override FROM activity_templates WHERE id=?').get(activityTemplateId);
+    const templateRoster=source?.fixed_assignee_ids_json?JSON.parse(source.fixed_assignee_ids_json):null;
+    if(Array.isArray(templateRoster)&&templateRoster.length>1){
+      const selected=requested.length?requested:templateRoster;
+      if(hasOwner&&!selected.includes(ownerId))return {specified:true,error:'The Activity Owner must be one of its assignees.'};
+      if(requested.length&&!sameIdOrder([...requested].sort((a,b)=>a-b),[...templateRoster].sort((a,b)=>a-b)) || hasOwner && ownerId!==Number(source.fixed_user_id)){
+        if(new Set(selected).size!==selected.length)return {specified:true,error:'Choose distinct Activity Template assignees.'};
+        if(!source.allow_assignment_override)return {specified:true,error:'This Activity Template does not allow changing its assignees.'};
+        const primary=hasOwner?ownerId:selected.includes(Number(source.fixed_user_id))?Number(source.fixed_user_id):selected[0];
+        return {specified:true,binding:{activityTemplateId,subjectUserId,assignmentOverrideUserId:primary===Number(source.fixed_user_id)?null:primary,
+          assignmentOverrideUserIds:[primary,...selected.filter(id=>id!==primary)]}};
+      }
+      return {specified:true,binding:{activityTemplateId,subjectUserId,assignmentOverrideUserId:null}};
+    }
+  }
   const currentAssignment = sameTemplate && existing?.task_id ? db.get().prepare(`
     SELECT user_id FROM task_assignments WHERE task_id=?
     UNION SELECT assigned_to AS user_id FROM tasks WHERE id=? AND assigned_to IS NOT NULL
@@ -1683,6 +1761,20 @@ function loadSubtasks(taskId, me, supervisionViews) {
   const parentRevision = db.get().prepare('SELECT revision FROM tasks WHERE id=?').get(taskId)?.revision;
   for (const row of rows) row.parent_revision = parentRevision;
   attachTaskCapabilities(db.get(),me,rows);
+  const assignable=rows.filter(row=>row.permissions?.change_assignment&&row.permissions?.reassign);
+  if(assignable.length){
+    const marks=assignable.map(()=>'?').join(','),allowed=new Map(assignable.map(row=>[row.id,row]));
+    const maySeeGroups=hasCapability(db.get(),me,'rotations.view');
+    for(const rule of db.get().prepare(`SELECT task_id,source_json FROM task_subtask_assignment_rules
+      WHERE task_id IN (${marks})`).all(...assignable.map(row=>row.id))){
+      const source=JSON.parse(rule.source_json);
+      if(source.kind!=='group'||maySeeGroups)allowed.get(rule.task_id).subtask_assignment_rule=source;
+    }
+    for(const override of db.get().prepare(`SELECT task_id,mode,after_user_ids_json FROM task_subtask_occurrence_overrides
+      WHERE task_id IN (${marks}) ORDER BY id`).all(...assignable.map(row=>row.id)))
+      allowed.get(override.task_id).occurrence_assignment_override={mode:override.mode,
+        after_user_ids:JSON.parse(override.after_user_ids_json)};
+  }
   attachTaskLocations(db.get(),rows);
   for(const row of rows)attachTripTaskProjection(db.get(),row,me);
   attachTaskSupervision(db.get(),rows,me,supervisionViews);
@@ -1747,7 +1839,7 @@ export function hydrateTask(task, me, supervisionViews = new Map(), starts = nul
     if(hiddenScope) actions=actions.map(action=>({...action,
       reason:action.completed ? 'Historical supervision is recorded for this completed action.'
         : action.state==='not_required' ? 'This action does not currently require supervision.'
-        : `This action ${action.execution_mode==='delegated'?'must be performed by the helper':'requires supervision'} for ${action.required_skills.map(skill=>skill.name).join(', ')}. One supervisor must cover the Task’s entire remaining helper scope.`,
+        : `This action ${action.execution_mode==='delegated'?'must be performed by the helper':'requires supervision'} for ${action.required_skills.map(skill=>skill.name).join(', ')}. ${row.supervision.supervisor_scope==='per_action'?'Its assigned helper must cover this action.':'One supervisor must cover the Task\'s entire remaining helper scope.'}`,
       supervisor_explanations:[],blocked_requirements:[]}));
     const active=actions.filter(action=>!action.completed&&action.state!=='not_required');
     row.supervision={...row.supervision,actions,can_view_support:!!row.supervision.support_task_id&&mayAccessTask(
@@ -1755,8 +1847,11 @@ export function hydrateTask(task, me, supervisionViews = new Map(), starts = nul
       state:active.some(action=>action.state==='excluded')?'excluded'
       :active.some(action=>action.state==='unresolved')?'needed':active.length?'assigned':'none'};
     if(hiddenScope) {
-      const reason=active.length ? 'One supervisor must cover the Task’s entire remaining supervised scope. Some requirements are not visible to you; ask the creator or a household administrator for help.' : null;
-      row.supervision={...row.supervision,blocked_requirements:[],supervisor_explanations:[],reason,display_reason:reason};
+      const reason=active.length ? row.supervision.supervisor_scope==='per_action'
+        ? 'Some supervision requirements are not visible to you; ask the creator or a household administrator for help.'
+        : 'One supervisor must cover the Task\'s entire remaining supervised scope. Some requirements are not visible to you; ask the creator or a household administrator for help.' : null;
+      row.supervision={...row.supervision,supervisor_user_id:null,supervisor_user_ids:[],supervisor_name:null,
+        blocked_requirements:[],supervisor_explanations:[],reason,display_reason:reason};
     }
     if(actions.length===0)row.supervision={...row.supervision,state:'none',reason:null,display_reason:null};
     // The convenience projection must use the same sanitized objects; keeping
@@ -2620,6 +2715,14 @@ export function createTaskDefinition(req, res) {
           return res.status(400).json({error:'This shared Group uses its Group-owned order.',code:400});}
       if(req.body.assignment_group)assertCapability(db.get(),req,'rotations.view');
     }
+    const templatePool=activitySkillSnapshot?.subtask_candidate_pool_json
+      ?JSON.parse(activitySkillSnapshot.subtask_candidate_pool_json):null;
+    const subtaskPool=normalizeSubtaskCandidatePool(db.get(),req.body.subtask_candidate_pool,
+      {previous:templatePool});
+    if(parent_task_id&&req.body.subtask_candidate_pool!==undefined)
+      return res.status(400).json({error:'Choose subtask People and Groups on the parent Activity.',code:400});
+    if(subtaskPool?.group_ids.length&&JSON.stringify(subtaskPool)!==JSON.stringify(templatePool))
+      assertCapability(db.get(),req,'rotations.view');
     const initialSubtasks = initialSubtasksInput(req.body);
     if(initialSubtasks?.some(child=>child.assignmentGroup))assertCapability(db.get(),req,'rotations.view');
     for (const child of initialSubtasks || []) assertTaskMutation(db.get(), req, null, {points:child.points}, {operation:'create'});
@@ -2738,6 +2841,8 @@ export function createTaskDefinition(req, res) {
         assignmentMode, rotationIndex, rotationGroup, rotationSlot || 0, rotationCycle,
         points, visibility, countdown ? 1 : 0, req.body.locked ? 1 : 0, start_time, expiration_policy, is_optional ? 1 : 0, due_date_offset_days
       );
+      if(subtaskPool)db.get().prepare('UPDATE tasks SET subtask_candidate_pool_json=? WHERE id=?')
+        .run(JSON.stringify(subtaskPool),result.lastInsertRowid);
       const groupSeriesId=is_recurring&&!parent_task_id?registerRecurrenceOccurrence(db.get(),Number(result.lastInsertRowid))?.series_id:null;
       assignNewTaskCardColor(db.get(),result.lastInsertRowid,req.body.card_color_choice?{choice:req.body.card_color_choice}:parent_task_id?{inheritFrom:parent_task_id}:{});
       setAssignments(db.get(), result.lastInsertRowid, userIds);
@@ -2754,6 +2859,7 @@ export function createTaskDefinition(req, res) {
           activityTemplateId: activityBinding.activityTemplateId,
           subjectUserId: activityBinding.subjectUserId,
           assignmentOverrideUserId: activityBinding.assignmentOverrideUserId,
+          assignmentOverrideUserIds: activityBinding.assignmentOverrideUserIds,
           adoptAssigneePolicy: true,
           commitRotation: true,
           activitySnapshot:(activitySkillSnapshot.assignment_policy||activitySkillSnapshot.assignment_strategy)==='group_rotation'
@@ -2771,13 +2877,20 @@ export function createTaskDefinition(req, res) {
         for (const child of initialSubtasks) {
           const childId = Number(insertChild.run(child.title, category, req.authUserId || req.session.userId,
             result.lastInsertRowid, start_date, due_date, due_time, visibility, start_time, child.isOptional ?? 0, child.points ?? 0).lastInsertRowid);
+          if(activityBinding)db.get().prepare(`INSERT INTO task_planning_context
+            (task_id,place_id,presence_policy,presence_window,source)
+            SELECT ?,place_id,presence_policy,presence_window,'activity_template'
+            FROM task_planning_context WHERE task_id=?`).run(childId,result.lastInsertRowid);
           assignNewTaskCardColor(db.get(),childId,{inheritFrom:result.lastInsertRowid});
           persistNewTaskAssignees(db.get(),childId,child.assignedUsers??[]);
           authoredRotationFields.set(childId,{title:child.title});
           setTaskSkills(db.get(), childId, child.skillIds);
+          const fixedTemplateTarget=child.templateItemId&&db.get().prepare(
+            'SELECT fixed_user_id FROM activity_template_checklist_items WHERE id=?').get(child.templateItemId)?.fixed_user_id;
           if(child.assignmentGroup){
             const selected=selectTaskGroupMember(childId,child.assignmentGroup,child.skillIds,
-              {consumerKey:groupSeriesId?`series:${groupSeriesId}:action:${childId}`:`subtask:${result.lastInsertRowid}:${child.templateItemId||childId}`});
+              {consumerKey:groupSeriesId?`series:${groupSeriesId}:action:${childId}`:`subtask:${result.lastInsertRowid}:${child.templateItemId||childId}`,
+                allowDelegation:!fixedTemplateTarget});
             assertTaskMutation(db.get(),req,null,{parent_task_id:Number(result.lastInsertRowid),assigned_to:[selected],skill_ids:child.skillIds},{operation:'create'});
             child.assignedUsers=[selected];recordGroupAssignment(db.get(),childId,child.assignmentGroup,selected);
             persistNewTaskAssignees(db.get(),childId,[selected]);
@@ -2785,7 +2898,8 @@ export function createTaskDefinition(req, res) {
           if(child.templateItemId)db.get().prepare('UPDATE tasks SET activity_template_checklist_item_id=? WHERE id=?').run(child.templateItemId,childId);
           if(child.assignedUsers!==undefined) {
             assertTaskMutation(db.get(),req,null,{parent_task_id:Number(result.lastInsertRowid),assigned_to:child.assignedUsers,skill_ids:child.skillIds},{operation:'create'});
-            assertTaskSkillAssignments(db.get(),child.skillIds,child.assignedUsers,due_date||todayInHouseholdZone(),{allowDelegation:true});
+            assertTaskSkillAssignments(db.get(),child.skillIds,child.assignedUsers,due_date||todayInHouseholdZone(),
+              {allowDelegation:!fixedTemplateTarget});
             assertTaskAssignmentAvailability(db.get(),childId,child.assignedUsers);
             db.get().prepare('UPDATE tasks SET assigned_to=? WHERE id=?').run(child.assignedUsers[0]??null,childId);
             setAssignments(db.get(),childId,child.assignedUsers);
@@ -3035,6 +3149,20 @@ export function updateTaskDefinition(req, res) {
         ?readTaskActivityDefinition(db.get(),task.id):null):null;
     const editedSubtasks = editedSubtasksInput(task,req.body,req,{definitionOnly:historicalSeriesOnly});
     const bindingChanged = !sameTaskActivityBinding(desiredActivityBinding, existingActivityBinding);
+    const priorPool=task.subtask_candidate_pool_json?JSON.parse(task.subtask_candidate_pool_json):null;
+    const templatePool=bindingChanged&&activitySkillSnapshot?.subtask_candidate_pool_json
+      ?JSON.parse(activitySkillSnapshot.subtask_candidate_pool_json):null;
+    const subtaskPool=normalizeSubtaskCandidatePool(db.get(),req.body.subtask_candidate_pool,
+      {previous:priorPool??templatePool});
+    const subtaskPoolChanged=JSON.stringify(subtaskPool)!==(task.subtask_candidate_pool_json||'null');
+    if(task.parent_task_id&&req.body.subtask_candidate_pool!==undefined)
+      return res.status(400).json({error:'Choose subtask People and Groups on the parent Activity.',code:400});
+    if(subtaskPoolChanged){
+      const permissions=taskCapabilities(db.get(),req,task);
+      if(!permissions.change_assignment||!permissions.reassign)
+        return res.status(403).json({error:'Your permissions do not allow changing subtask choices.',code:403});
+      if(subtaskPool?.group_ids.length)assertCapability(db.get(),req,'rotations.view');
+    }
     const incomingGroup=req.body.assignment_group===undefined?task.assignment_group_json:req.body.assignment_group;
     const priorGroup=task.assignment_group_json?JSON.parse(task.assignment_group_json):null;
     const incomingGroupId=(typeof incomingGroup==='string'?JSON.parse(incomingGroup):incomingGroup)?.group_id;
@@ -3221,6 +3349,7 @@ export function updateTaskDefinition(req, res) {
       if (!sameIdOrder(skillIds, skillsBefore)) touchesDefinition = true;
       if (bindingChanged) touchesDefinition = true;
       if(groupConfigurationChanged)touchesDefinition=true;
+      if(subtaskPoolChanged)touchesDefinition=true;
       if (taskLocation !== undefined
           && JSON.stringify(taskLocation) !== JSON.stringify(storedTaskLocation(db.get(), task.id))) {
         touchesDefinition = true;
@@ -3257,6 +3386,7 @@ export function updateTaskDefinition(req, res) {
       recurrence_from_completion:recurrence_from_completion?1:0,assignment_mode:assignmentMode,
       rotation_group:rotationGroup,rotation_slot:rotationSlot||0,rotation_bindings_json:rotationBindingsJson,points,scoring_mode:scoringMode,
       assignment_group_json:assignmentGroup?JSON.stringify(assignmentGroup):null,
+      subtask_candidate_pool_json:subtaskPool?JSON.stringify(subtaskPool):null,
       scoring_review_required:req.body.scoring_mode===undefined?task.scoring_review_required:0,visibility,countdown:countdown?1:0,locked,expiration_policy,is_optional:is_optional?1:0};
     const currentChildren=editedSubtasks?ordinaryActivitySubtasks(db.get(),task.id).filter(row=>!row.archived_at):null;
     const childrenChanged=editedSubtasks&&(editedSubtasks.remove.length||editedSubtasks.next.length!==currentChildren.length
@@ -3354,6 +3484,8 @@ export function updateTaskDefinition(req, res) {
              assignmentMode, rotationIndex, rotationGroup, rotationSlot || 0, rotationCycle,
              points, visibility, countdown ? 1 : 0, locked, start_time, expiration_policy, is_optional ? 1 : 0, dueDateOffset, req.params.id);
       if(req.body.card_color_choice!==undefined)setTaskCardColor(db.get(),current.id,req.body.card_color_choice);
+      if(subtaskPoolChanged)db.get().prepare('UPDATE tasks SET subtask_candidate_pool_json=? WHERE id=?')
+        .run(subtaskPool?JSON.stringify(subtaskPool):null,current.id);
       if(req.body.scoring_mode!==undefined)db.get().prepare('UPDATE tasks SET scoring_mode=?,scoring_review_required=0 WHERE id=?').run(scoringMode,current.id);
       applyEditedSubtasks({...task,start_date,start_time,due_date,due_time},editedSubtasks,req.authUserId||req.session.userId);
       if(rotationsChanged)db.get().prepare('UPDATE tasks SET rotation_bindings_json=? WHERE id=?').run(rotationBindingsJson,task.id);
@@ -3842,6 +3974,8 @@ function spawnRecurrenceFollowupSingle(task, {expirationAnchor=false}={}) {
       .run(task.scoring_mode,Number(!!task.scoring_review_required),newTask.lastInsertRowid);
     registerRecurrenceOccurrence(db.get(),Number(newTask.lastInsertRowid),{predecessorId:task.id});
     db.get().prepare('UPDATE tasks SET rotation_bindings_json=? WHERE id=?').run(task.rotation_bindings_json||'[]',newTask.lastInsertRowid);
+    if(definition.task.subtask_candidate_pool_json)db.get().prepare('UPDATE tasks SET subtask_candidate_pool_json=? WHERE id=?')
+      .run(definition.task.subtask_candidate_pool_json,newTask.lastInsertRowid);
     setAssignments(db.get(), newTask.lastInsertRowid, followupAssignments);
     if(definition.task.assignment_group_json&&!definition.binding){
       if(nextAssignedTo)recordGroupAssignment(db.get(),Number(newTask.lastInsertRowid),definition.task.assignment_group_json,nextAssignedTo);
@@ -3882,6 +4016,9 @@ function spawnRecurrenceFollowupSingle(task, {expirationAnchor=false}={}) {
       assignNewTaskCardColor(db.get(),newSub.lastInsertRowid,childColor?{choice:childColor}:{inheritFrom:newTask.lastInsertRowid});
       registerSeriesAction(db.get(),Number(newSub.lastInsertRowid),Number(newTask.lastInsertRowid),savedSub.action_key);
       setAssignments(db.get(), newSub.lastInsertRowid, subAssignments);
+      if(savedSub.assignment_rule)db.get().prepare(`INSERT INTO task_subtask_assignment_rules
+        (task_id,source_json,supervisor_pool_json) VALUES(?,?,?)`).run(newSub.lastInsertRowid,
+          JSON.stringify(savedSub.assignment_rule),savedSub.supervisor_pool?JSON.stringify(savedSub.supervisor_pool):null);
       if(sub.assignment_group_json)
         recordGroupAssignment(db.get(),Number(newSub.lastInsertRowid),sub.assignment_group_json,subAssignedTo);
       persistCapturedTaskAssignees(db.get(),newSub.lastInsertRowid,savedSub.assignee_policy,subAssignments);
@@ -4344,6 +4481,17 @@ function loadTaskDocuments(taskId, me) {
 // Titel der Aufgabe, und eine geratene ID darf darüber nichts verraten - 404
 // statt 403, weil die bloße Existenz schon eine Auskunft ist (Muster aus #769).
 // --------------------------------------------------------
+for(const [path,run] of [['preview',previewSubtaskReassignment],['apply',applySubtaskReassignment]])
+  router.post(`/:id/subtasks/reassign/${path}`,(req,res)=>{
+    try{
+      const request={rootTaskId:Number(req.params.id),actorId:req.authUserId||req.session.userId,
+        mode:req.body.mode,taskIds:req.body.task_ids,fromUserId:req.body.from_user_id,
+        replacementUserId:req.body.replacement_user_id,
+        idempotencyKey:req.body.idempotency_key,previewHash:req.body.preview_hash};
+      res.json({data:run(db.get(),request)});
+    }catch(error){res.status(error.status||500).json({error:error.status?error.message:'Could not reassign this occurrence.',code:error.status||500});}
+  });
+
 router.post('/:id/supervisor',(req,res)=>{
   try {
     const me=req.authUserId||req.session.userId;
@@ -4362,11 +4510,52 @@ router.post('/:id/supervisor',(req,res)=>{
     if(supervisor!==null && (!Number.isSafeInteger(supervisor)||supervisor<1))
       return res.status(400).json({error:'Choose a household supervisor.',code:400});
     db.get().transaction(()=>{
-      assertTaskRevision(db.get(),task,req.body,{required:true});
+      const currentTask=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(task.id);
+      const currentSource=source.id===task.id?currentTask:db.get().prepare('SELECT * FROM tasks WHERE id=?').get(source.id);
+      const view=inspectTaskSupervision(db.get(),source.id);
+      if(view.supervisor_scope==='per_action'){
+        if(task.id!==source.id||req.body.action_task_id===undefined)
+          throw new TaskStateError('Choose an individual supervised action from its Activity.',{},400);
+        if(req.body.expected_revision===undefined)
+          throw new TaskStateError('Refresh this Activity before choosing its helper.',{},428);
+        if(!Number.isSafeInteger(req.body.expected_revision)||req.body.expected_revision<1)
+          throw new TaskStateError('Invalid Activity revision.',{},400);
+        const action=view.actions.find(row=>row.action_task_id===req.body.action_task_id);
+        const actionTask=action&&db.get().prepare('SELECT * FROM tasks WHERE id=?').get(action.action_task_id);
+        if(!actionTask||!mayAccessTask(actionTask,me))
+          throw new TaskStateError('Task not found.',{},404);
+        const actionRights=taskCapabilities(db.get(),req,actionTask);
+        if(!actionRights.change_assignment||!actionRights.reassign)
+          throw new TaskStateError('Your household permissions do not allow reassigning this supervised action.',{},403);
+        if(action.completed||action.archived||action.state==='not_required'||action.expired||action.closed_optional
+          ||['done','expired','skipped','closed_incomplete'].includes(currentSource.status))
+          throw new TaskStateError('Only unfinished supervision work can be reassigned.');
+        if(req.body.expected_action_revision===undefined)
+          throw new TaskStateError('Refresh this supervision action before choosing its helper.',{},428);
+        if(!Number.isSafeInteger(req.body.expected_action_revision)||req.body.expected_action_revision<0)
+          throw new TaskStateError('Invalid supervision action revision.',{},400);
+        if(supervisor===null||!action.eligible_supervisors.some(person=>person.id===supervisor))
+          throw new TaskStateError('Choose a qualified and available supervisor for this action.');
+        if(action.action_task_id!==source.id
+          &&!configuredSubtaskSupervisorIds(db.get(),source.id,action.action_task_id).includes(supervisor))
+          throw new TaskStateError('Choose a supervisor from this action’s configured Person or Group.');
+        if(action.state==='assigned'&&action.supervisor_user_id===supervisor
+          &&req.body.expected_revision<=currentSource.revision
+          &&req.body.expected_action_revision<=action.revision)return;
+        assertTaskRevision(db.get(),currentSource,req.body,{required:true});
+        if(action.revision!==req.body.expected_action_revision){
+          throw new TaskStateError('This supervision action changed on another device. Reload it before choosing a helper.',
+            {reason:'stale_revision',action_task_id:action.action_task_id,revision:action.revision});
+        }
+        reconcileTaskSupervision(db.get(),source.id,{actorId:me,
+          supervisorAssignments:{[action.action_task_id]:supervisor}});
+        return;
+      }
+      assertTaskRevision(db.get(),currentTask,req.body,{required:true});
       if(source.id!==task.id)
-        assertTaskRevision(db.get(),source,{expected_revision:req.body.expected_source_revision},{required:true});
+        assertTaskRevision(db.get(),currentSource,{expected_revision:req.body.expected_source_revision},{required:true});
       reconcileTaskSupervision(db.get(),source.id,{actorId:me,supervisorUserId:supervisor});
-    })();
+    }).immediate();
     res.json({data:hydrateTask(task,me)});
   }catch(error){res.status(error.status||400).json({error:error.message,code:error.status||400,...error.details});}
 });

@@ -18,7 +18,7 @@
 const APP_RELEASE   = '2.54.0-kitchen.5';
 
 // Archive and bounded Task windows require a new shell/page cache generation.
-const CACHE_VERSION = `${APP_RELEASE}-vidamia.94`;
+const CACHE_VERSION = `${APP_RELEASE}-vidamia.95`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;
@@ -214,6 +214,9 @@ const APP_SHELL = [
   '/components/task-requirements.js',
   '/components/task-subtask-people.js',
   '/utils/task-draft.js',
+  '/components/subtask-candidate-pool.js',
+  '/utils/group-candidate-pool.js',
+  '/utils/task-owner-selection.js',
   '/utils/task-list-delta.js',
   '/utils/task-status-feedback.js',
   '/utils/branding.js',

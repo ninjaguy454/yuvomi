@@ -22,6 +22,13 @@
 .rotation-bindings [data-rotation-load-status]:empty { display: none; }
 .rotation-group-choices { display: flex; flex-wrap: wrap; gap: var(--space-3); }
 .rotation-group-choice { display: flex; flex: 0 0 88px; flex-direction: column; align-items: center; gap: var(--space-2); min-width: 88px; padding: var(--space-2); border: 1px solid transparent; border-radius: var(--radius-md); background: transparent; color: var(--color-text-primary); font: inherit; cursor: pointer; }
+.rotation-group-choice-wrap { position: relative; display: inline-flex; }
+.rotation-group-choice-wrap[hidden] { display: none; }
+.rotation-group-choice[aria-pressed="true"] { background: var(--color-fill-well); border-color: var(--color-accent); }
+.rotation-group-choice__edit { position: absolute; inset-block-start: 0; inset-inline-end: 0; display: grid; place-items: center; width: 28px; height: 28px; border: 1px solid var(--color-border); border-radius: 50%; background: var(--color-surface); color: var(--color-text-primary); cursor: pointer; }
+.rotation-group-choice__edit svg { width: 15px; height: 15px; }
+.rotation-group-choice__edit:focus-visible { outline: 3px solid var(--color-accent); outline-offset: 2px; }
+.rotation-group-choice--create .rotation-group-choice__avatar { border-style: dashed; }
 .rotation-group-choice:hover { background: var(--color-fill-well); border-color: var(--color-border); }
 .rotation-group-choice:focus-visible { outline: 3px solid var(--color-accent); outline-offset: 2px; }
 .rotation-group-choice__avatar { display: grid; place-items: center; width: 48px; height: 48px; border: 2px solid var(--color-border); border-radius: 50%; background: var(--color-surface); }

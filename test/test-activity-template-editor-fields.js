@@ -4,6 +4,7 @@ import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 import { parseTimeInput, parseDateInput, isDateInputValid } from '../public/i18n.js';
 import { esc } from '../public/utils/html-escape.js';
+import { memberLabel } from '../public/utils/member-label.js';
 
 const read = path => readFileSync(new URL(`../public/${path}`, import.meta.url), 'utf8');
 const plain = source => source.replace(/^import[\s\S]*?;\r?\n/gm, '').replace(/^export /gm, '');
@@ -11,7 +12,7 @@ const result = value => JSON.parse(JSON.stringify(value));
 const rruleContext = vm.createContext({ t: key => key, formatDateInput: value => value, parseDateInput: value => value,
   isDateInputValid: value => /^\d{4}-\d{2}-\d{2}$/.test(value), formatDate: value => value });
 vm.runInContext(`${plain(read('rrule-ui.js'))}\nthis.subject={renderRRuleFields,getRRuleValues};`, rruleContext);
-const context = vm.createContext({ ...rruleContext.subject, esc, parseTimeInput, parseDateInput, isDateInputValid, formatDateInput: value => value, formatTimeInput: value => value });
+const context = vm.createContext({ ...rruleContext.subject, esc, memberLabel, parseTimeInput, parseDateInput, isDateInputValid, formatDateInput: value => value, formatTimeInput: value => value });
 vm.runInContext(`${plain(read('components/activity-automation.js'))}\nthis.subject={activityTimingFields,activityTimingPayload,activityChecklistPayload,memberOptions};`, context);
 const ui = context.subject;
 function formFixture(overrides = {}) {

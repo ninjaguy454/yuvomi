@@ -52,7 +52,7 @@ import { parseRemindAtAsUtc } from '/utils/reminder-offset.js';
 import { canTask, canCapability, moduleAccess } from '/permissions.js';
 import { actionableSubtasks, changeTaskStatus, reopenExpiredTask, skipTaskOccurrence, closeIncompleteTask, reopenIncompleteTask, taskRevision } from '/utils/task-state.js';
 import {closedOccurrenceLabel} from '/utils/task-fields.js';
-import { helperWaitingLabel } from '/utils/task-progress.js';
+import { helperWaitingLabel, structuralSubtasks } from '/utils/task-progress.js';
 import { watchTaskChanges, latestTaskLoader } from '/utils/task-live.js';
 import { createSubtaskQueue } from '/utils/task-subtask-queue.js';
 import {captureCompletionSound} from '/utils/ui-sounds.js';
@@ -1396,6 +1396,8 @@ function supervisionNode(task, ctx) {
     const summary = document.createElement('p');
     summary.textContent = remaining.some(requirement => requirement.state === 'excluded' && requirement.execution_mode !== 'delegated')
       ? 'A supervisor cannot override these skill restrictions.'
+      : supervision?.supervisor_scope === 'per_action'
+      ? 'Each supervised action has its own qualified helper.'
       : supervision?.state === 'assigned' && supervision.supervisor_name
       ? `${supervision.supervisor_name} · Covers all remaining ${hasDelegated ? 'supervised actions and direct responsibilities' : 'supervised actions'}.`
       : hasDelegated ? 'One supervisor must cover every remaining supervised action and every action they perform for the learner.'
@@ -1404,7 +1406,32 @@ function supervisionNode(task, ctx) {
   }
   // Candidates and permission belong to the source Task's complete scope. Never
   // reconstruct a picker from one action's candidate list or historical helper.
-  if (remaining.length && supervision?.may_assign === true && supervision.source_task_id && supervision.eligible_supervisors?.length) {
+  if (remaining.length && supervision?.supervisor_scope === 'per_action' && supervision.may_assign === true && supervision.source_task_id) {
+    for (const requirement of remaining) {
+      if (!requirement.action_task_id || requirement.may_assign !== true || !requirement.eligible_supervisors?.length
+        || requirement.state === 'excluded') continue;
+      const controls = document.createElement('div'); controls.className = 'task-detail-supervision__controls';
+      const label = document.createElement('label');
+      label.textContent = `Helper for ${requirement.action_title || 'this action'}`;
+      const select = document.createElement('select'); select.className = 'input input--sm';
+      select.dataset.immediateAction = '';
+      select.dataset.focusKey = `task-supervisor-${requirement.action_task_id}`;
+      for (const person of requirement.eligible_supervisors) {
+        const option = document.createElement('option'); option.value = person.id; option.textContent = memberLabel(person);
+        option.selected = Number(person.id) === Number(requirement.supervisor_user_id); select.appendChild(option);
+      }
+      label.appendChild(select);
+      const assign = document.createElement('button'); assign.type = 'button'; assign.className = 'btn btn--secondary btn--sm';
+      assign.textContent = 'Assign helper'; assign.dataset.taskOperation = '';
+      assign.dataset.focusKey = `assign-task-supervisor-${requirement.action_task_id}`;
+      assign.addEventListener('click', () => ctx.runMutation(assign, () => api.post(`/tasks/${supervision.source_task_id}/supervisor`, {
+        action_task_id: Number(requirement.action_task_id), supervisor_user_id: Number(select.value),
+        expected_revision: Number(supervision.source_revision),
+        expected_action_revision: Number(requirement.revision || 0),
+      })));
+      controls.append(label, assign); wrap.appendChild(controls);
+    }
+  } else if (remaining.length && supervision?.may_assign === true && supervision.source_task_id && supervision.eligible_supervisors?.length) {
     const controls = document.createElement('div'); controls.className = 'task-detail-supervision__controls';
     const select = document.createElement('select'); select.className = 'input input--sm';
     select.dataset.immediateAction = '';
@@ -1901,6 +1928,17 @@ export function openTaskDetail({
         const result=await reopenIncompleteTask(task);if(!result)return null;
         ctx.acceptSnapshot(result.data,'ack');toast('Activity reopened. Saved progress, earned points and future occurrences are preserved.','success');return result;
       })});
+  }
+
+  if(!canEdit && !task.parent_task_id && !archived && ['open','unavailable','in_progress'].includes(task.status)
+    && canTask(task,'change_assignment') && canTask(task,'reassign')
+    && structuralSubtasks(task).some(child=>canTask(child,'change_assignment')&&canTask(child,'reassign')
+      && ['open','unavailable','in_progress'].includes(child.status) && subtaskParticipants(child).length)) {
+    actions.push({id:'task-detail-reassign-work',label:'Reassign subtask work',variant:'secondary',icon:'user-round-pen',
+      onClick:async()=>{
+        const {openOccurrenceReassignmentModal}=await import('/pages/tasks.js');
+        openOccurrenceReassignmentModal(task,{users,onChanged:async()=>{await ctx.refresh();await onChanged();}});
+      }});
   }
 
   // Ablegen und Zurückholen sind derselbe Schalter - was er tut, hängt daran, wo

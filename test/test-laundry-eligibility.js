@@ -13,6 +13,7 @@ const { householdMembers, effectiveActivityProficiency, effectiveSkillProficienc
   resolveActivityAssignment } = await import('../server/services/activity-eligibility.js');
 const { getActivityTemplate } = await import('../server/services/activity-workflows.js');
 const { evaluatePresence } = await import('../server/services/presence.js');
+const { inspectTaskSupervision } = await import('../server/services/task-supervision.js');
 const d = get();
 const addMember = (name, role) => Number(d.prepare(`INSERT INTO users
   (username,display_name,password_hash,role,family_role) VALUES (?,?,'test',?,'parent')`)
@@ -133,6 +134,38 @@ test('copied Laundry subtask allows manual Normal and still rejects a supervised
     assert.equal(d.prepare('SELECT assigned_to FROM tasks WHERE id=?').get(child.id).assigned_to, subjectId);
     assert.deepEqual(d.prepare('SELECT skill_id FROM task_skill_requirements WHERE task_id=? ORDER BY sort_order')
       .all(child.id).map(row => row.skill_id), child.skill_ids);
+  }
+});
+
+test('fixed Template learner receives one linked supervised action and no duplicate helper',async()=>{
+  const activity=await laundry({assignment_strategy:'fixed',fixed_user_id:subjectId,subject_required:false,
+    location_mode:'none',place_id:null,presence_policy:'ignore',
+    checklist:[{title_template:'Supervised laundry step',fixed_user_id:learnerId,skill_ids:[skillIds[0]]}]});
+  const result=await call('POST','/tasks',taskBody(activity));
+  assert.equal(result.status,201,JSON.stringify(result.body));
+  const root=result.body.data.id,child=d.prepare('SELECT * FROM tasks WHERE parent_task_id=? AND activity_template_checklist_item_id IS NOT NULL').get(root);
+  assert.equal(child.assigned_to,learnerId);
+  const view=inspectTaskSupervision(d,root);
+  assert.equal(view.actions.length,1);
+  assert.equal(view.actions[0].state,'assigned');
+  assert.equal(view.actions[0].supervisor_user_id,subjectId);
+  assert.equal(d.prepare('SELECT COUNT(*) AS n FROM task_activity_support_tasks WHERE source_task_id=?').get(root).n,1);
+  const editorBody=taskBody(activity,{subtasks:[{title:'Supervised laundry step',
+    activity_template_checklist_item_id:activity.checklist[0].id,
+    assigned_user_ids:[learnerId],skill_ids:[skillIds[0]]}]});
+  const editorLaunch=await call('POST','/tasks',editorBody);
+  assert.equal(editorLaunch.status,201,JSON.stringify(editorLaunch.body));
+  assert.equal(inspectTaskSupervision(d,editorLaunch.body.data.id).actions.length,1);
+  const before=d.prepare('SELECT COUNT(*) n FROM tasks').get().n;
+  d.prepare("UPDATE user_skill_proficiency SET proficiency='excluded' WHERE user_id=? AND skill_id=?").run(learnerId,skillIds[0]);
+  try{
+    const blocked=await call('POST','/tasks',taskBody(activity));
+    assert.equal(blocked.status,400,JSON.stringify(blocked.body));
+    const blockedEditor=await call('POST','/tasks',editorBody);
+    assert.equal(blockedEditor.status,400,JSON.stringify(blockedEditor.body));
+    assert.equal(d.prepare('SELECT COUNT(*) n FROM tasks').get().n,before,'an ineligible fixed Person never leaves a partial Task');
+  }finally{
+    d.prepare("UPDATE user_skill_proficiency SET proficiency='supervised' WHERE user_id=? AND skill_id=?").run(learnerId,skillIds[0]);
   }
 });
 

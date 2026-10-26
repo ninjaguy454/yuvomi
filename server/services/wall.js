@@ -94,7 +94,19 @@ export function publicTaskProjection(d,task,hostId,actorId=null) {
   const out=pick(task,taskKeys);
   out.assigned_users=(task.assigned_users||[]).map(publicMember);
   out.tags=task.tags||[];
-  out.subtasks=(task.subtasks||[]).filter(row=>wallTaskVisible(d,row.id,hostId,actorId)).map(row=>publicTaskProjection(d,row,hostId,actorId));
+  const visibleChildren=(task.subtasks||[]).filter(row=>wallTaskVisible(d,row.id,hostId,actorId));
+  out.subtasks=visibleChildren.map(row=>publicTaskProjection(d,row,hostId,actorId));
+  if(visibleChildren.length!==(task.subtasks||[]).length) {
+    const isSupport=task.supervision?.support_task_id===task.id;
+    const structural=visibleChildren.filter(child=>!child.archived_at&&(isSupport||!child.is_supervision_projection));
+    const operational=structural.filter(child=>!child.is_optional&&(isSupport||!child.is_delegated_action));
+    out.subtask_total=operational.length;
+    out.subtask_done=operational.filter(child=>child.status==='done').length;
+    out.waiting_on_helper=!isSupport&&!['done','expired','skipped','closed_incomplete'].includes(task.status)
+      &&operational.every(child=>child.status==='done')
+      &&(structural.some(child=>!child.is_optional&&child.is_delegated_action&&child.status!=='done')
+        ||task.supervision_action?.action_task_id===task.id&&task.supervision_action?.state!=='not_required');
+  }
   const authority=actorId?taskCapabilities(d,actorId,task):null;
   out.permissions={complete:!!authority?.complete,claim:!!authority?.claim};
   const action=task.supervision_action;
@@ -104,8 +116,13 @@ export function publicTaskProjection(d,task,hostId,actorId=null) {
   out.required_skills=skillRows.length?skillRows:(action?.required_skills||[]).map(skill=>pick(skill,['id','name']));
   if(task.supervision) {
     const actions=(task.supervision.actions||[]).filter(a=>wallTaskVisible(d,a.action_task_id,hostId,actorId));
-    out.supervision={state:task.supervision.state,supervisor_user_id:task.supervision.supervisor_user_id,
-      supervisor_name:task.supervision.supervisor_name,
+    const hidden=actions.length!==(task.supervision.actions||[]).length;
+    const visiblePending=actions.filter(a=>!a.completed&&a.state!=='not_required');
+    const visibleState=visiblePending.some(a=>a.state==='excluded')?'excluded'
+      :visiblePending.some(a=>a.state==='unresolved')?'needed'
+        :visiblePending.length?'assigned':'none';
+    out.supervision={state:hidden?visibleState:task.supervision.state,supervisor_user_id:hidden?null:task.supervision.supervisor_user_id,
+      supervisor_name:hidden?null:task.supervision.supervisor_name,
       actions:actions.map(a=>({...pick(a,['action_task_id','counterpart_task_id','supervisor_user_id','execution_mode','state','completed']),
         required_skills:(a.required_skills||[]).map(s=>pick(s,['id','name']))}))};
     // Build concise explanations from this visible action only. Canonical scope
@@ -115,8 +132,10 @@ export function publicTaskProjection(d,task,hostId,actorId=null) {
       ? action.execution_mode==='delegated'
         ? `${name||'A qualified helper'} performs this step for the learner.${action.state==='unresolved'?' A single eligible helper is still needed.':''}`
         : `${name?`Complete this step with ${name}`:'This step requires a qualified supervisor'}.${action.state==='unresolved'?' A single eligible supervisor is still needed.':''}`
-      : task.supervision.state==='needed'?'A single qualified helper is still needed for the remaining helper work.'
-        : task.supervision.supervisor_name?`${task.supervision.supervisor_name} covers the remaining helper work.`:null;
+      : hidden?'Some helper work is not visible here.'
+        : task.supervision.state==='needed'?task.supervision.supervisor_scope==='per_action'
+          ?'A qualified helper is needed for an unfinished action.':'A single qualified helper is still needed for the remaining helper work.'
+          : task.supervision.supervisor_name?`${task.supervision.supervisor_name} covers the remaining helper work.`:null;
   }
   return out;
 }

@@ -62,8 +62,14 @@ function requirement(id, skill, proficiency, mode, patch = {}) {
     display_reason: reasons[proficiency], skill_eligibility: [{ skill_id: skill, skill_name: skills[skill - 1].name,
       proficiency: proficiency === 'delegated' ? 'excluded' : proficiency, reason: reasons[proficiency] }], ...patch };
 }
-function taskFixture({ helper = false, unresolved = false, restricted = false, parentOnly = false } = {}) {
+function taskFixture({ helper = false, unresolved = false, restricted = false, parentOnly = false, perAction = false } = {}) {
   const actions = [requirement(12, 2, 'supervised', 'supervised'), requirement(13, 3, 'delegated', 'delegated')];
+  if (perAction) {
+    actions[0].revision = 6; actions[0].eligible_supervisors = [supervisor]; actions[0].may_assign = !restricted;
+    actions[1].revision = 7; actions[1].state = 'unresolved';
+    actions[1].supervisor_user_id = null; actions[1].supervisor_name = null;
+    actions[1].eligible_supervisors = [alternate]; actions[1].may_assign = !restricted;
+  }
   if (parentOnly) actions.push(requirement(10, 4, 'supervised', 'supervised', { action_title: 'Whole Laundry safety requirement' }));
   if (unresolved) for (const action of actions) { action.state = 'unresolved'; action.supervisor_user_id = null; action.supervisor_name = null; }
   const task = { id: 10, revision: 9, title: 'Eleanor’s laundry and weekly bedding', status: 'open', priority: 'medium',
@@ -74,7 +80,8 @@ function taskFixture({ helper = false, unresolved = false, restricted = false, p
     activity_template_name: 'Household Laundry Template', activity_subject_name: learner.display_name,
     activity_assignment_policy: 'fixed', activity_assignment_state: 'assigned',
     permissions: { view: true, complete: !restricted, edit: false, delete_archive: false, comment: !restricted },
-    supervision: { state: unresolved ? 'needed' : 'assigned', source_task_id: 10, source_revision: 9, support_task_id: 20,
+    supervision: { state: unresolved || perAction ? 'needed' : 'assigned', supervisor_scope: perAction ? 'per_action' : 'single',
+      source_task_id: 10, source_revision: 9, support_task_id: 20,
       supervisor_user_id: unresolved ? null : supervisor.id, supervisor_name: unresolved ? null : supervisor.display_name,
       may_assign: !restricted, can_view_support: !restricted, eligible_supervisors: unresolved ? [] : [supervisor, alternate],
       display_reason: unresolved ? reasons.unresolved : '', supervisor_explanations: unresolved ? [{ user_id: 42, name: supervisor.display_name,
@@ -279,6 +286,25 @@ test('one canonical supervisor selector is permission-gated and only contains co
     assert.ok((await restricted.$$eval('.detail-subtask__toggle', nodes => nodes.map(node => node.disabled))).every(Boolean));
     assert.deepEqual(fixture.writes, []);
   } finally { await restricted.close(); }
+});
+
+for (const width of [390, 1280]) test(`${width}px split helpers expose only their own eligible action picker`, async () => {
+  const page = await mounted({ perAction: true, width });
+  try {
+    assert.equal(await page.$('[data-focus-key="task-supervisor"]'), null);
+    assert.deepEqual(await page.$$eval('[data-focus-key="task-supervisor-12"] option', nodes => nodes.map(node => Number(node.value))), [42]);
+    assert.deepEqual(await page.$$eval('[data-focus-key="task-supervisor-13"] option', nodes => nodes.map(node => Number(node.value))), [43]);
+    await page.focus('[data-focus-key="assign-task-supervisor-13"]');
+    const written=page.waitForResponse(response=>response.request().method()==='POST'&&response.url().endsWith('/supervisor'));
+    await page.keyboard.press('Enter');
+    await written;
+    assert.deepEqual(fixture.writes.filter(row => row.path.endsWith('/supervisor')).map(row => row.body), [{
+      action_task_id: 13, supervisor_user_id: 43, expected_revision: 9, expected_action_revision: 7,
+    }]);
+  } finally { await page.close(); }
+  const restricted = await mounted({ perAction: true, restricted: true, width });
+  try { assert.equal(await restricted.$('[data-focus-key="task-supervisor-13"]'), null); }
+  finally { await restricted.close(); }
 });
 
 test('unresolved scope explanation stays immediately visible when no qualified available supervisor exists', async () => {

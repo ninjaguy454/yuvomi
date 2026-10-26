@@ -2,6 +2,16 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createManualTaskDraft, taskDraftSnapshot, taskDraftToActivity } from '../public/utils/task-draft.js';
 
+test('fixed multi-person Template drafts and Save as Template retain the complete roster',()=>{
+  const source={assignment_strategy:'fixed',fixed_user_id:7,fixed_assignee_ids:[7,9],checklist:[]};
+  assert.deepEqual(createManualTaskDraft({template:source}).assigned_to,[7,9]);
+  const saved=taskDraftToActivity({title:'Shared work',assigned_users:[7,9],subtasks:[]},source);
+  assert.equal(saved.assignment_strategy,'fixed');
+  assert.equal(saved.fixed_user_id,7);
+  assert.deepEqual(saved.fixed_assignee_ids,[7,9]);
+  assert.deepEqual(createManualTaskDraft({template:saved}).assigned_to,[7,9]);
+});
+
 const places = [{ id: 1, type: 'home', active: 1 }, { id: 2, type: 'other', active: 1 }];
 test('manual blank defaults use active Home, household points and independent empty collections', () => {
   const first = createManualTaskDraft({ places, defaultPoints: 5 });
@@ -57,9 +67,10 @@ test('Save as Template copies reusable fields and excludes occurrence-only setti
   assert.equal(result.due_date_offset_days, null, 'one date is insufficient to derive an interval');
   for (const key of ['start_date', 'due_date', 'countdown', 'documents', 'reminder']) assert.equal(Object.hasOwn(result, key), false);
 });
-test('template conversion retains existing strategy; multiple manual assignees do not become a rotation', () => {
+test('template conversion retains an existing strategy and saves multiple manual assignees as fixed', () => {
   const draft = { title: 'Prep', assigned_users: [1, 2], location: { kind: 'manual', user_label: 'Temporary' } };
-  assert.equal(taskDraftToActivity(draft).assignment_strategy, 'open_claimable');
+  assert.equal(taskDraftToActivity(draft).assignment_strategy, 'fixed');
+  assert.deepEqual(taskDraftToActivity(draft).fixed_assignee_ids,[1,2]);
   assert.equal(taskDraftToActivity(draft).location_mode, 'none');
   const result = taskDraftToActivity(draft, { id: 4, assignment_strategy: 'eligible_round_robin', rotation_group: 'Kitchen', subject_required: 1 });
   assert.equal(result.id, undefined); assert.equal(result.assignment_strategy, 'eligible_round_robin');

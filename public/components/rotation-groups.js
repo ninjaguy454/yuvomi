@@ -424,7 +424,13 @@ function sharedState(group) {
 }
 
 /** Open management above a consumer draft, without replacing that draft. */
-export async function openRotationGroup(groupId,{onChanged}={}) {
+export async function openRotationGroup(groupId,{onChanged,edit=false}={}) {
+  if(edit){
+    if(!canCapability('rotations.manage'))throw new Error('You cannot manage Rotation Groups.');
+    const {data:group}=await api.get(`/automation/rotation-groups/${groupId}`);
+    const modal=await editGroup(group,async()=>{await onChanged?.();},{active:()=>true});
+    return modal?.result;
+  }
   let closed=false,source;const views=new Set();
   const live={active:()=>!closed,refresh:async()=>{await Promise.all([...views].map(refresh=>refresh()));await onChanged?.();},
     watch(refresh){views.add(refresh);return ()=>{views.delete(refresh);if(!views.size){closed=true;source?.close();}};}};

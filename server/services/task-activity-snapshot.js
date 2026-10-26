@@ -16,10 +16,11 @@ export function captureActivityTemplateDefinition(d, activityTemplateId) {
   if (!activity) throw new Error('Activity template not found.');
   const required_skill_ids = d.prepare('SELECT skill_id FROM activity_template_skills WHERE activity_template_id=? ORDER BY sort_order,skill_id')
     .all(activity.id).map(row => row.skill_id);
-  const checklist = d.prepare('SELECT id,title_template,sort_order,is_optional,points,assignment_group_json FROM activity_template_checklist_items WHERE activity_template_id=? ORDER BY sort_order,id')
+  const checklist = d.prepare('SELECT id,title_template,sort_order,is_optional,points,assignment_group_json,fixed_user_id,assignment_rule_json,supervisor_pool_json FROM activity_template_checklist_items WHERE activity_template_id=? ORDER BY sort_order,id')
     .all(activity.id).map(item => ({ ...item, skill_ids: d.prepare('SELECT skill_id FROM activity_template_checklist_skills WHERE checklist_item_id=? ORDER BY sort_order,skill_id')
       .all(item.id).map(row => row.skill_id) }));
-  return { ...activity, required_skill_ids, checklist };
+  return { ...activity, fixed_assignee_ids:activity.fixed_assignee_ids_json?JSON.parse(activity.fixed_assignee_ids_json):null,
+    required_skill_ids, checklist };
 }
 
 export function readTaskActivityDefinition(d, taskId) {
@@ -27,7 +28,9 @@ export function readTaskActivityDefinition(d, taskId) {
   if (!binding) return null;
   const activity = taskActivitySnapshot(d, taskId, binding)
     || d.prepare('SELECT * FROM activity_templates WHERE id=?').get(binding.activity_template_id);
-  return activity ? { ...activity, subject_user_id: binding.subject_user_id } : null;
+  return activity ? { ...activity,
+    fixed_assignee_ids:activity.fixed_assignee_ids??(activity.fixed_assignee_ids_json?JSON.parse(activity.fixed_assignee_ids_json):null),
+    subject_user_id: binding.subject_user_id } : null;
 }
 
 export function taskActivitySnapshot(d, taskId, binding = undefined) {

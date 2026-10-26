@@ -15,6 +15,7 @@ const { default: tasksRouter } = await import('../server/routes/tasks.js');
 const { changeTaskStatus, expireTask } = await import('../server/services/task-lifecycle.js');
 const { taskStartMs, taskDeadlineMs } = await import('../server/services/task-window.js');
 const {saveRotationGroup}=await import('../server/services/rotation.js');
+const {saveTemplateSubtaskRule}=await import('../server/services/subtask-assignment-rules.js');
 
 function buildTestDb() {
   const database = new Database(':memory:');
@@ -105,6 +106,232 @@ test('Activity Template Group choices persist through create and edit without ch
   assert.deepEqual(JSON.parse(db.prepare('SELECT assignment_group_json FROM activity_templates WHERE id=?').get(id).assignment_group_json),assignment);
   const options=await call('GET','/automation/activity-options');
   assert.deepEqual(JSON.parse(options.body.data.activities.find(item=>item.id===id).assignment_group_json),assignment);
+});
+
+test('an ordinary Template edit preserves an internal rule and an explicit Person replaces it',async()=>{
+  const group=saveRotationGroup(db,{name:'Internal rule roster',member_ids:[grace,frank]},{actorId:admin});
+  const created=await call('POST','/automation/admin/activity-templates',{
+    name:'Internal rule source',subject_required:false,checklist:[{title_template:'One action',skill_ids:[]}],
+  });
+  assert.equal(created.status,201,JSON.stringify(created.body));
+  const template=created.body.data.id,item=created.body.data.checklist[0].id;
+  saveTemplateSubtaskRule(db,{checklistItemId:item,
+    source:{kind:'group',group_id:group.id,mode:'smart'},actorId:admin});
+  const incidental=await call('PUT',`/automation/admin/activity-templates/${template}`,{description:'Only text changed'});
+  assert.equal(incidental.status,200,JSON.stringify(incidental.body));
+  assert.equal(JSON.parse(db.prepare('SELECT assignment_rule_json FROM activity_template_checklist_items WHERE id=?').get(item).assignment_rule_json).mode,'smart');
+  const changed=await call('PUT',`/automation/admin/activity-templates/${template}`,{
+    checklist:[{id:item,title_template:'One action',skill_ids:[],fixed_user_id:grace}],
+  });
+  assert.equal(changed.status,200,JSON.stringify(changed.body));
+  const row=db.prepare('SELECT fixed_user_id,assignment_rule_json FROM activity_template_checklist_items WHERE id=?').get(item);
+  assert.equal(row.fixed_user_id,grace);
+  assert.equal(row.assignment_rule_json,null);
+});
+
+test('fixed Template People persist as an ordered roster and existing Task instances keep their snapshot',async()=>{
+  const created=await call('POST','/automation/admin/activity-templates',{
+    name:'Shared fixed routine',assignment_strategy:'fixed',subject_required:false,
+    fixed_user_id:admin,fixed_assignee_ids:[admin,grace],allow_assignment_override:false,skill_ids:[],
+  });
+  assert.equal(created.status,201,JSON.stringify(created.body));
+  const id=created.body.data.id;
+  assert.deepEqual(created.body.data.fixed_assignee_ids,[admin,grace]);
+  const first=await call('POST','/tasks',{title:'Shared fixed routine',category:'misc',activity_template_id:id,assigned_to:[]});
+  assert.equal(first.status,201,JSON.stringify(first.body));
+  const firstSnapshot=JSON.parse(db.prepare('SELECT definition_snapshot_json FROM task_activity_bindings WHERE task_id=?').get(first.body.data.id).definition_snapshot_json);
+  assert.deepEqual(firstSnapshot.fixed_assignee_ids,[admin,grace]);
+  const edited=await call('PUT',`/tasks/${first.body.data.id}`,{
+    title:'Shared fixed routine edited',activity_template_id:id,
+  });
+  assert.equal(edited.status,200,JSON.stringify(edited.body));
+  assert.deepEqual(JSON.parse(db.prepare('SELECT definition_snapshot_json FROM task_activity_bindings WHERE task_id=?').get(first.body.data.id).definition_snapshot_json).fixed_assignee_ids,[admin,grace],
+    'ordinary edits retain the bound roster when assignment override is disabled');
+  const changed=await call('PUT',`/automation/admin/activity-templates/${id}`,{fixed_user_id:admin,fixed_assignee_ids:[admin,frank]});
+  assert.equal(changed.status,200,JSON.stringify(changed.body));
+  assert.deepEqual(changed.body.data.fixed_assignee_ids,[admin,frank]);
+  assert.deepEqual(JSON.parse(db.prepare('SELECT definition_snapshot_json FROM task_activity_bindings WHERE task_id=?').get(first.body.data.id).definition_snapshot_json).fixed_assignee_ids,[admin,grace]);
+  const second=await call('POST','/tasks',{title:'Shared fixed routine later',category:'misc',activity_template_id:id,assigned_to:[]});
+  assert.equal(second.status,201,JSON.stringify(second.body));
+  assert.deepEqual(JSON.parse(db.prepare('SELECT definition_snapshot_json FROM task_activity_bindings WHERE task_id=?').get(second.body.data.id).definition_snapshot_json).fixed_assignee_ids,[admin,frank]);
+  const rejected=await call('PUT',`/automation/admin/activity-templates/${id}`,{fixed_assignee_ids:[admin,admin]});
+  assert.equal(rejected.status,400);
+  assert.deepEqual(JSON.parse(db.prepare('SELECT fixed_assignee_ids_json FROM activity_templates WHERE id=?').get(id).fixed_assignee_ids_json),[admin,frank]);
+  db.prepare("INSERT INTO task_categories(key,name,max_assignees) VALUES('solo-fixed','Solo fixed',1)").run();
+  const capped=await call('POST','/automation/admin/activity-templates',{
+    name:'Too many fixed people',category:'solo-fixed',assignment_strategy:'fixed',fixed_assignee_ids:[admin,grace],fixed_user_id:admin,
+  });
+  assert.equal(capped.status,400);
+  assert.equal(capped.body.reason,'category_assignee_limit');
+});
+
+test('subtask candidate Groups stay distinct while their members remain unassigned',async()=>{
+  const first=saveRotationGroup(db,{name:'Pool kids',member_ids:[grace,frank]},{actorId:admin});
+  const second=saveRotationGroup(db,{name:'Pool overlap',member_ids:[grace,admin]},{actorId:admin});
+  const pool={person_ids:[frank],group_ids:[first.id,second.id]};
+  const template=await call('POST','/automation/admin/activity-templates',{
+    name:'Candidate pool routine',assignment_strategy:'fixed',fixed_user_id:admin,
+    subtask_candidate_pool:pool,skill_ids:[],subject_required:false,
+  });
+  assert.equal(template.status,201,JSON.stringify(template.body));
+  const templateId=template.body.data.id;
+  assert.deepEqual(JSON.parse(template.body.data.subtask_candidate_pool_json),pool);
+  const created=await call('POST','/tasks',{
+    title:'Candidate pool occurrence',category:'misc',activity_template_id:templateId,
+    assigned_to:[],visibility:'assignees',
+  });
+  assert.equal(created.status,201,JSON.stringify(created.body));
+  const id=created.body.data.id;
+  const stored=()=>JSON.parse(db.prepare('SELECT subtask_candidate_pool_json FROM tasks WHERE id=?').get(id).subtask_candidate_pool_json);
+  assert.deepEqual(stored(),pool);
+  assert.deepEqual(db.prepare('SELECT user_id FROM task_assignments WHERE task_id=?').all(id).map(row=>row.user_id),[admin]);
+  const inaccessible=await call('GET',`/tasks/${id}`,undefined,grace);
+  assert.notEqual(inaccessible.status,200,'candidate membership cannot grant private Task access');
+  const edited=await call('PUT',`/tasks/${id}`,{
+    title:'Candidate pool occurrence',activity_template_id:templateId,
+    subtask_candidate_pool:{person_ids:[frank],group_ids:[second.id,first.id]},
+  });
+  assert.equal(edited.status,200,JSON.stringify(edited.body));
+  assert.deepEqual(stored().group_ids,[second.id,first.id]);
+  assert.deepEqual(db.prepare('SELECT user_id FROM task_assignments WHERE task_id=?').all(id).map(row=>row.user_id),[admin]);
+  const invalid=await call('PUT',`/tasks/${id}`,{
+    title:'Candidate pool occurrence',activity_template_id:templateId,
+    subtask_candidate_pool:{person_ids:[],group_ids:[first.id,first.id]},
+  });
+  assert.equal(invalid.status,400);
+  assert.deepEqual(stored().group_ids,[second.id,first.id]);
+  const changedTemplate=await call('PUT',`/automation/admin/activity-templates/${templateId}`,{
+    subtask_candidate_pool:{person_ids:[grace],group_ids:[first.id]},
+  });
+  assert.equal(changedTemplate.status,200,JSON.stringify(changedTemplate.body));
+  assert.deepEqual(stored().group_ids,[second.id,first.id],'template changes do not rewrite existing occurrences');
+});
+
+test('Template checklist fixed Person stays separate from Owner and is snapshotted into Tasks',async()=>{
+  const template=await call('POST','/automation/admin/activity-templates',{
+    name:'Person step routine',assignment_strategy:'fixed',fixed_user_id:admin,
+    subtask_candidate_pool:{person_ids:[grace,frank],group_ids:[]},
+    checklist:[{title_template:'Assigned step',fixed_user_id:grace,skill_ids:[]}],
+  });
+  assert.equal(template.status,201,JSON.stringify(template.body));
+  const templateId=template.body.data.id,item=template.body.data.checklist[0];
+  assert.equal(item.fixed_user_id,grace);
+  const created=await call('POST','/tasks',{title:'Person step instance',category:'misc',activity_template_id:templateId});
+  assert.equal(created.status,201,JSON.stringify(created.body));
+  const root=created.body.data.id,child=db.prepare('SELECT * FROM tasks WHERE parent_task_id=?').get(root);
+  assert.equal(db.prepare('SELECT assigned_to FROM tasks WHERE id=?').get(root).assigned_to,admin);
+  assert.equal(child.assigned_to,grace);
+  assert.deepEqual(db.prepare('SELECT user_id FROM task_assignments WHERE task_id=?').all(child.id).map(row=>row.user_id),[grace]);
+  const changed=await call('PUT',`/automation/admin/activity-templates/${templateId}`,{
+    checklist:[{id:item.id,title_template:'Assigned step',fixed_user_id:frank,skill_ids:[]},
+      {title_template:'New plain step',fixed_user_id:null,skill_ids:[]}],
+  });
+  assert.equal(changed.status,200,JSON.stringify(changed.body));
+  assert.equal(changed.body.data.checklist[0].fixed_user_id,frank);
+  assert.equal(changed.body.data.checklist[1].fixed_user_id,null);
+  assert.equal(db.prepare('SELECT assigned_to FROM tasks WHERE id=?').get(child.id).assigned_to,grace);
+  const next=await call('POST','/tasks',{title:'Second person step',category:'misc',activity_template_id:templateId});
+  assert.equal(next.status,201,JSON.stringify(next.body));
+  assert.equal(db.prepare('SELECT assigned_to FROM tasks WHERE parent_task_id=?').get(next.body.data.id).assigned_to,frank);
+  const invalid=await call('PUT',`/automation/admin/activity-templates/${templateId}`,{
+    checklist:[{id:item.id,title_template:'Assigned step',fixed_user_id:999999,skill_ids:[]}],
+  });
+  assert.equal(invalid.status,400);
+  assert.equal(db.prepare('SELECT fixed_user_id FROM activity_template_checklist_items WHERE id=?').get(item.id).fixed_user_id,frank);
+});
+
+test('Workflow presence override is applied before fixed Template subtasks are assigned',async()=>{
+  const shiftType=Number(db.prepare(`INSERT INTO schedule_shift_types(name,start_time,end_time,availability_state)
+    VALUES('Fixed checklist busy period','08:00','16:00','busy')`).run().lastInsertRowid);
+  const pattern=Number(db.prepare(`INSERT INTO schedule_patterns(user_id,name,anchor_date,cycle_length,valid_from,valid_until)
+    VALUES(?,'Fixed checklist busy day','2028-05-01',1,'2028-05-01','2028-05-01')`).run(grace).lastInsertRowid);
+  db.prepare('INSERT INTO schedule_pattern_days(pattern_id,position,shift_type_id) VALUES(?,0,?)').run(pattern,shiftType);
+  const activity=await call('POST','/automation/admin/activity-templates',{
+    name:'Presence-sensitive checklist',assignment_strategy:'fixed',fixed_user_id:admin,
+    due_time:'10:00',checklist:[{title_template:'Grace step',fixed_user_id:grace,skill_ids:[]}],
+  });
+  assert.equal(activity.status,201,JSON.stringify(activity.body));
+  const workflow=await call('POST','/automation/admin/workflow-templates',{
+    name:'Presence-sensitive workflow',subject_required:false,quick_add_enabled:true,input_schema:[],
+    steps:[{step_key:'work',activity_template_id:activity.body.data.id,depends_on:[],
+      presence_policy_override:'available_before_due'}],
+  });
+  assert.equal(workflow.status,201,JSON.stringify(workflow.body));
+  const before=db.prepare('SELECT COUNT(*) n FROM tasks').get().n;
+  const blocked=await call('POST',`/automation/quick-add/${workflow.body.data.id}/create`,{start_date:'2028-05-01'});
+  assert.equal(blocked.status,400,JSON.stringify(blocked.body));
+  assert.match(blocked.body.error,/availability/i);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM tasks').get().n,before,'workflow creation rolls back its parent and checklist together');
+  const strict=await call('PUT',`/automation/admin/activity-templates/${activity.body.data.id}`,{
+    presence_policy:'available_before_due',
+  });
+  assert.equal(strict.status,200,JSON.stringify(strict.body));
+  const editorLaunch=await call('POST','/tasks',{
+    title:'Presence-sensitive editor launch',category:'misc',activity_template_id:activity.body.data.id,
+    start_date:'2028-05-01',due_date:'2028-05-01',due_time:'10:00',
+    subtasks:[{title:'Grace step',assigned_user_ids:[grace],skill_ids:[],
+      activity_template_checklist_item_id:activity.body.data.checklist[0].id}],
+  });
+  assert.equal(editorLaunch.status,400,JSON.stringify(editorLaunch.body));
+  assert.match(editorLaunch.body.error,/availability/i);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM tasks').get().n,before,'Task editor creation also rolls back its parent and checklist');
+});
+
+test('an explicit fixed Template Owner override changes only the primary and preserves the roster',async()=>{
+  const template=await call('POST','/automation/admin/activity-templates',{
+    name:'Owner override routine',assignment_strategy:'fixed',fixed_user_id:admin,
+    fixed_assignee_ids:[admin,grace],allow_assignment_override:true,skill_ids:[],
+  });
+  assert.equal(template.status,201,JSON.stringify(template.body));
+  const templateId=template.body.data.id;
+  const created=await call('POST','/tasks',{
+    title:'Chosen owner',category:'misc',activity_template_id:templateId,
+    assigned_to:[grace,admin],direct_assignee_ids:[grace,admin],owner_user_id:grace,
+  });
+  assert.equal(created.status,201,JSON.stringify(created.body));
+  const id=created.body.data.id;
+  assert.equal(db.prepare('SELECT assigned_to FROM tasks WHERE id=?').get(id).assigned_to,grace);
+  const roster=()=>JSON.parse(db.prepare('SELECT definition_snapshot_json FROM task_activity_bindings WHERE task_id=?').get(id).definition_snapshot_json).fixed_assignee_ids;
+  assert.deepEqual(roster(),[grace,admin]);
+  const changed=await call('PUT',`/tasks/${id}`,{
+    title:'Chosen owner',activity_template_id:templateId,
+    assigned_to:[admin,grace],direct_assignee_ids:[admin,grace],owner_user_id:admin,
+  });
+  assert.equal(changed.status,200,JSON.stringify(changed.body));
+  assert.equal(db.prepare('SELECT assigned_to FROM tasks WHERE id=?').get(id).assigned_to,admin);
+  assert.deepEqual(roster(),[admin,grace]);
+  const invalid=await call('PUT',`/tasks/${id}`,{
+    title:'Chosen owner',activity_template_id:templateId,
+    assigned_to:[admin,grace],direct_assignee_ids:[admin,grace],owner_user_id:frank,
+  });
+  assert.equal(invalid.status,400,JSON.stringify(invalid.body));
+  assert.deepEqual(roster(),[admin,grace]);
+  const {actorPermissions}=await import('../server/permissions.js');
+  const prior=db.prepare("SELECT access FROM access_capabilities WHERE subject_type='user' AND subject_id=? AND capability_key='tasks.reassign'").get(String(grace));
+  db.prepare("INSERT OR REPLACE INTO access_capabilities(subject_type,subject_id,capability_key,access) VALUES('user',?,'tasks.reassign','none')").run(String(grace));
+  assert.equal(actorPermissions(db,grace).capabilities['tasks.reassign'],'none');
+  const denied=await call('PUT',`/tasks/${id}`,{
+    title:'Chosen owner',activity_template_id:templateId,
+    assigned_to:[grace,admin],direct_assignee_ids:[grace,admin],owner_user_id:grace,
+  },grace);
+  if(prior)db.prepare("UPDATE access_capabilities SET access=? WHERE subject_type='user' AND subject_id=? AND capability_key='tasks.reassign'").run(prior.access,String(grace));
+  else db.prepare("DELETE FROM access_capabilities WHERE subject_type='user' AND subject_id=? AND capability_key='tasks.reassign'").run(String(grace));
+  assert.equal(denied.status,403,JSON.stringify(denied.body));
+  assert.deepEqual(roster(),[admin,grace]);
+});
+
+test('manual fixed Owner change retains the second assignee',async()=>{
+  const created=await call('POST','/tasks',{
+    title:'Manual shared Task',category:'misc',assigned_to:[admin,grace],owner_user_id:admin,
+  });
+  assert.equal(created.status,201,JSON.stringify(created.body));
+  const id=created.body.data.id;
+  const changed=await call('PUT',`/tasks/${id}`,{
+    title:'Manual shared Task',assigned_to:[grace,admin],direct_assignee_ids:[grace,admin],owner_user_id:grace,
+  });
+  assert.equal(changed.status,200,JSON.stringify(changed.body));
+  assert.equal(db.prepare('SELECT assigned_to FROM tasks WHERE id=?').get(id).assigned_to,grace);
+  assert.deepEqual(db.prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(id).map(row=>row.user_id),[admin,grace]);
 });
 
 test('Activity expiration defaults, validation, authorization and Task snapshots use the existing editor capabilities', async () => {

@@ -8,6 +8,10 @@ const ids = values => [...new Set((values || []).map(Number))].sort((a, b) => a 
 const text = value => String(value ?? '').trim();
 const point = value => value === undefined ? 0 : validTaskPoints(value) ? Number(value) : value;
 const assignmentGroup=value=>typeof value==='string'?JSON.parse(value):value||null;
+const candidatePool=value=>{
+  const pool=typeof value==='string'?JSON.parse(value):value;
+  return pool?{person_ids:[...(pool.person_ids||[])].map(Number),group_ids:[...(pool.group_ids||[])].map(Number)}:null;
+};
 
 /** Compare reusable form intent, excluding status and occurrence-only dates. */
 export function taskEditDefinition(value) {
@@ -23,6 +27,8 @@ export function taskEditDefinition(value) {
       assignment_group:assignmentGroup(step.assignment_group??step.assignment_group_json),
     })),
     skill_ids: ids(value.skill_ids), assigned_to: ids(value.assigned_to),
+    owner_user_id: Number(value.owner_user_id) || null,
+    subtask_candidate_pool:candidatePool(value.subtask_candidate_pool??value.subtask_candidate_pool_json),
     assignment_mode: value.assignment_mode || 'fixed',assignment_group:assignmentGroup(value.assignment_group??value.assignment_group_json), rotation_user_ids: (value.rotation_user_ids || []).map(Number),
     rotation_group: text(value.rotation_group), rotation_slot: Number(value.rotation_slot) || 0,
     rotation_bindings:(value.rotation_bindings||[]).map(({direction,...binding}) =>
@@ -65,7 +71,7 @@ export function taskEditResultMessage(result, fallback) {
     pending?`${pending} future ${pending===1?'occurrence is':'occurrences are'} waiting for rotation resolution.`:''].filter(Boolean).join(' ');
 }
 
-const futureFields = ['card_color_choice','title','description','category','priority','start_date','start_time','due_date','due_time','due_date_offset_days','is_recurring','recurrence_rule','recurrence_from_completion','assignment_mode','assignment_group','rotation_group','rotation_slot','points','visibility','countdown','locked','expiration_policy','scoring_mode','assigned_to','rotation_user_ids','skill_ids','tags','rotation_bindings'];
+const futureFields = ['card_color_choice','title','description','category','priority','start_date','start_time','due_date','due_date_offset_days','is_recurring','recurrence_rule','recurrence_from_completion','assignment_mode','assignment_group','subtask_candidate_pool','rotation_group','rotation_slot','points','visibility','countdown','locked','expiration_policy','scoring_mode','assigned_to','rotation_user_ids','skill_ids','tags','rotation_bindings'];
 const actionFields = ['title','description','category','priority','start_date','start_time','due_date','due_time','points','visibility','locked','expiration_policy','is_optional','assigned_user_ids','assignment_group','skill_ids','tags'];
 const comparable = (key, value) => ['is_optional','is_recurring','countdown','locked','recurrence_from_completion'].includes(key) ? !!value
   : key === 'points' ? point(value) : value;
@@ -76,8 +82,14 @@ export function taskFuturePatch(definition, draft, rootIntent = []) {
   const fields = {}, actions = {}, intent = new Set(rootIntent);
   for (const key of futureFields) {
     const baseline=key==='assigned_to'?definition.fields.direct_assignee_ids??definition.fields[key]:definition.fields[key];
-    if (intent.has(key) && writable(key,draft[key]) && JSON.stringify(comparable(key,draft[key])) !== JSON.stringify(comparable(key,baseline))) fields[key] = key==='points'?point(draft[key]):draft[key];
+    const changed=key==='assigned_to'
+      ?JSON.stringify(ids(draft[key]))!==JSON.stringify(ids(baseline))
+        ||Number(draft.owner_user_id||0)!==Number(definition.fields.owner_user_id||0)
+      :JSON.stringify(comparable(key,draft[key]))!==JSON.stringify(comparable(key,baseline));
+    if (intent.has(key) && writable(key,draft[key]) && changed) fields[key] = key==='points'?point(draft[key]):draft[key];
   }
+  if (Object.hasOwn(fields, 'assigned_to') && draft.owner_user_id)
+    fields.owner_user_id = Number(draft.owner_user_id);
   const original = new Map((definition.actions || []).map(action => [action.action_key,action]));
   const next = (draft.subtasks || []).filter(row => row.action_key || text(row.title));
   const update = [], add = [], order = [];
@@ -97,7 +109,7 @@ export function taskFuturePatch(definition, draft, rootIntent = []) {
 
 /** Editing intent only: no status, recipient eligibility or reward calculation. */
 export function hasTaskScoringChanges(before, after) {
-  const terms = value => [value.scoring_mode,point(value.points),value.assigned_to,value.assignment_mode,value.rotation_user_ids,
+  const terms = value => [value.scoring_mode,point(value.points),value.assigned_to,value.owner_user_id,value.assignment_mode,value.rotation_user_ids,
     value.rotation_group,value.rotation_slot,value.rotation_bindings,value.assignment_group,value.skill_ids,
     (value.subtasks || []).map(row => [row.id || row.action_key || row.client_key,point(row.points),row.assigned_user_ids,row.assignment_group,row.skill_ids])];
   return JSON.stringify(terms(before)) !== JSON.stringify(terms(after));

@@ -16,7 +16,8 @@ import { substituteVariableTemplate } from './variable-resolution.js';
 
 export function loadActivityChecklist(d, activityTemplateId) {
   const items = d.prepare(`
-    SELECT id, title_template, sort_order, is_optional, points, assignment_group_json
+    SELECT id, title_template, sort_order, is_optional, points, assignment_group_json, fixed_user_id,
+      assignment_rule_json, supervisor_pool_json
       FROM activity_template_checklist_items
      WHERE activity_template_id = ?
      ORDER BY sort_order ASC, id ASC
@@ -85,7 +86,26 @@ export function materializeActivityChecklist(d, {
     assignNewTaskCardColor(d,taskId,{inheritFrom:parent.id});
     persistNewTaskAssignees(d,taskId,[]);
     setTaskSkills(d, taskId, item.skill_ids || item.skills?.map((skill) => skill.id) || []);
-    if(item.assignment_group_json){
+    const planning=d.prepare('SELECT place_id,presence_policy,presence_window FROM task_planning_context WHERE task_id=?').get(parent.id);
+    if(planning)d.prepare(`INSERT INTO task_planning_context(task_id,place_id,presence_policy,presence_window,source)
+      VALUES(?,?,?,?, 'activity_template')`).run(taskId,planning.place_id,planning.presence_policy,planning.presence_window);
+    if(item.assignment_rule_json){
+      // Authoring policy stays separate from actual work. The internal
+      // resolver will materialize one occurrence after eligibility checks.
+      d.prepare('INSERT INTO task_subtask_assignment_rules(task_id,source_json,supervisor_pool_json) VALUES(?,?,?)')
+        .run(taskId,item.assignment_rule_json,item.supervisor_pool_json??null);
+    }else if(item.fixed_user_id){
+      const selected=Number(item.fixed_user_id),skills=item.skill_ids||item.skills?.map(skill=>skill.id)||[];
+      // A fixed Template target is an intended performer. A member explicitly
+      // excluded from a required skill cannot be made that performer; a
+      // supervised member remains eligible and receives linked helper work.
+      assertTaskSkillAssignments(d,skills,[selected],parent.due_date||undefined);
+      assertTaskAssignmentAvailability(d,taskId,[selected]);
+      d.prepare('UPDATE tasks SET assigned_to=? WHERE id=?').run(selected,taskId);
+      setTaskAssignments(d,taskId,[selected]);
+      persistNewTaskAssignees(d,taskId,[selected]);
+    }
+    if(!item.assignment_rule_json&&item.assignment_group_json){
       const group=JSON.parse(item.assignment_group_json),skills=item.skill_ids||item.skills?.map(skill=>skill.id)||[];
       const date=parent.due_date||undefined;
       const candidates=groupAssignmentMembers(d,group).filter(userId=>{

@@ -368,7 +368,7 @@ function assertCurrentTaskMutation(d, actor, task, body, {operation}) {
 }
 const idsOrStrings = value => (Array.isArray(value) ? value : []).map(String).sort();
 const PROTECTED_FIELDS = Object.freeze({
-  change_assignment: ['assigned_to', 'direct_assignee_ids', 'assignment_mode', 'rotation_user_ids', 'rotation_group', 'rotation_slot', 'activity_template_id', 'activity_subject_user_id', 'activity_inputs', 'activity_binding'],
+  change_assignment: ['assigned_to', 'direct_assignee_ids', 'owner_user_id', 'assignment_mode', 'rotation_user_ids', 'rotation_group', 'rotation_slot', 'activity_template_id', 'activity_subject_user_id', 'activity_inputs', 'activity_binding'],
   change_priority: ['priority'], change_points: ['points','scoring_mode'], change_category_tags: ['category', 'tags'],
   change_dates: ['expiration_policy', 'start_time', 'start_date', 'due_date', 'due_time', 'is_recurring', 'recurrence_rule', 'recurrence_from_completion'],
   change_required_skills: ['skill_ids', 'activity_template_id', 'activity_binding'],

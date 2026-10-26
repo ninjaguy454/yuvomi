@@ -30,7 +30,10 @@ function asPositiveInt(value) {
 
 function activityTemplate(d, id) {
   const activity = d.prepare('SELECT * FROM activity_templates WHERE id = ?').get(id) ?? null;
-  if (activity) activity.checklist = loadActivityChecklist(d, activity.id);
+  if (activity) {
+    activity.checklist = loadActivityChecklist(d, activity.id);
+    activity.fixed_assignee_ids = activity.fixed_assignee_ids_json ? JSON.parse(activity.fixed_assignee_ids_json) : null;
+  }
   return activity;
 }
 

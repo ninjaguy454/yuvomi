@@ -56,6 +56,29 @@ test('future assignment intent compares direct performers rather than child visi
   assert.deepEqual(taskFuturePatch(definition,{assigned_to:[2,3],subtasks:[]},['assigned_to']),{fields:{assigned_to:[2,3]}});
 });
 
+test('Owner identity changes definition and future patch keeps Owner first',()=>{
+  const before={...task,assigned_to:[1,2],owner_user_id:1};
+  assert.equal(hasTaskDefinitionChanges(before,{...before,owner_user_id:2}),true);
+  const definition={fields:{assigned_to:[1,2],direct_assignee_ids:[1,2]},actions:[]};
+  assert.deepEqual(taskFuturePatch(definition,{assigned_to:[2,1],owner_user_id:2,subtasks:[]},['assigned_to']),
+    {fields:{assigned_to:[2,1],owner_user_id:2}});
+  assert.deepEqual(taskFuturePatch(definition,{assigned_to:[1,2,3],owner_user_id:1,subtasks:[]},['assigned_to']),
+    {fields:{assigned_to:[1,2,3],owner_user_id:1}});
+  const ordered={fields:{assigned_to:[3,2],direct_assignee_ids:[2,3],owner_user_id:3},actions:[]};
+  assert.deepEqual(taskFuturePatch(ordered,{assigned_to:[3,2],owner_user_id:3,subtasks:[]},['assigned_to']),{});
+  assert.deepEqual(taskFuturePatch(ordered,{assigned_to:[2,3],owner_user_id:2,subtasks:[]},['assigned_to']),
+    {fields:{assigned_to:[2,3],owner_user_id:2}});
+});
+
+test('subtask candidate pool changes are future policy edits without changing direct assignees',()=>{
+  const first={person_ids:[2],group_ids:[31,32]},second={person_ids:[2],group_ids:[32,31]};
+  assert.equal(hasTaskDefinitionChanges({...task,subtask_candidate_pool:first},{...task,subtask_candidate_pool:second}),true);
+  const definition={fields:{assigned_to:[2],subtask_candidate_pool:first},actions:[]};
+  assert.deepEqual(taskFuturePatch(definition,{assigned_to:[2],subtask_candidate_pool:second,subtasks:[]},['subtask_candidate_pool']),
+    {fields:{subtask_candidate_pool:second}});
+  assert.deepEqual(taskFuturePatch(definition,{assigned_to:[2],subtask_candidate_pool:first,subtasks:[]},[]),{});
+});
+
 test('all authoritative unavailable forecast codes produce specific guidance without raw private codes',()=>{
   for(const [code,key] of Object.entries({next_occurrence_unavailable:'scoringNoNext',recurrence_ended:'scoringEnded',target_preserved:'scoringTargetPreserved',random_assignment_unresolved:'scoringRandom',binding_policy_changed:'scoringBindingChanged',projection_evidence_unavailable:'scoringEvidence'})){
     const message=taskScoringErrorMessage({data:{reason:'scoring_projection_unavailable',conditions:[code,code,'private_unknown']}});assert.equal(message,`tasks.scoringForecastUnavailable tasks.${key}`);

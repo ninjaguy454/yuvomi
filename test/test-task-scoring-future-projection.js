@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {scoringFixture} from './helpers/task-scoring-route-fixture.js';
 const {taskSeriesState,seriesDefinitionForGeneration}=await import('../server/services/task-series.js');
+const {saveRotationGroup}=await import('../server/services/rotation.js');
 const {default:taskRouter}=await import('../server/routes/tasks.js');
 const previewRequests=[];
 const definitionRequests=[];
@@ -405,6 +406,99 @@ test('round3 real creator points edit reconciles ordinary target without blanket
 });
 
 const assignmentPatch=(assigned_to,fields={})=>({edit_scope:'future_only',future_patch:{fields:{assigned_to,...fields}}});
+
+test('future fixed Owner changes retain the other Activity assignee and materialize once',async t=>{
+  const f=await scoringFixture(t);
+  const created=await f.create({...recurring,assigned_to:[2,3],points:5,scoring_mode:'whole_task'});
+  assert.equal(created.status,201,JSON.stringify(created));
+  const root=created.data.id;
+  const request=assignmentPatch([3,2],{owner_user_id:3});
+  const preview=await purePreview(f,root,request);
+  assert.equal(preview.status,200,JSON.stringify(preview));
+  const saved=await f.edit(root,request);
+  assert.equal(saved.status,200,JSON.stringify(saved));
+  assert.deepEqual(pending(f,root).assigned_user_ids,[3,2]);
+  assert.equal(pending(f,root).owner_user_id,3);
+  const reopened=await purePreview(f,root,{...future,include_edit_definition:true});
+  assert.equal(reopened.data.edit_definition.fields.owner_user_id,3);
+  const legacy=await f.edit(root,assignmentPatch([2,3]));
+  assert.equal(legacy.status,200,JSON.stringify(legacy));
+  assert.deepEqual(pending(f,root).assigned_user_ids,[3,2],
+    'an older client cannot reorder an explicitly recorded Owner by echoing a roster');
+  assert.equal(pending(f,root).owner_user_id,3);
+  assert.equal((await f.finish(root)).status,200);
+  const next=successor(f,root);
+  assert.equal(next.assigned_to,3);
+  assert.deepEqual(f.d.prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(next.id).map(row=>row.user_id),[2,3]);
+});
+test('future subtask candidate choices materialize without assigning candidate people',async t=>{
+  const f=await scoringFixture(t),initial={person_ids:[3],group_ids:[]};
+  const created=await f.create({...recurring,assigned_to:[2],points:5,scoring_mode:'whole_task',subtask_candidate_pool:initial});
+  assert.equal(created.status,201,JSON.stringify(created));
+  const root=created.data.id,nextPool={person_ids:[3,2],group_ids:[]};
+  assert.deepEqual(JSON.parse(f.row(root).subtask_candidate_pool_json),initial);
+  const request={...future,future_patch:{fields:{subtask_candidate_pool:nextPool}}};
+  const preview=await purePreview(f,root,request);
+  assert.equal(preview.status,200,JSON.stringify(preview));
+  const saved=await f.edit(root,request);
+  assert.equal(saved.status,200,JSON.stringify(saved));
+  assert.deepEqual(JSON.parse(f.row(root).subtask_candidate_pool_json),initial,'future-only keeps current occurrence');
+  assert.deepEqual(JSON.parse(pending(f,root).task.subtask_candidate_pool_json),nextPool);
+  assert.equal((await f.finish(root)).status,200);
+  const next=successor(f,root);
+  assert.deepEqual(JSON.parse(next.subtask_candidate_pool_json),nextPool);
+  assert.deepEqual(f.d.prepare('SELECT user_id FROM task_assignments WHERE task_id=?').all(next.id).map(row=>row.user_id),[2]);
+});
+test('switching future work to a Template inherits its subtask choices without rewriting the current occurrence',async t=>{
+  const f=await scoringFixture(t),pool={person_ids:[3],group_ids:[]};
+  const activity=Number(f.d.prepare("INSERT INTO activity_templates(name,title_template,assignment_strategy,assignment_policy,fixed_user_id,subject_required,presence_policy,created_by,subtask_candidate_pool_json) VALUES('Future pool','Future pool','fixed','fixed',2,0,'ignore',1,?)")
+    .run(JSON.stringify(pool)).lastInsertRowid);
+  const created=await f.create({...recurring,points:5,scoring_mode:'whole_task'});
+  assert.equal(created.status,201,JSON.stringify(created));
+  const root=created.data.id;
+  assert.equal((await f.finish(root)).status,200);
+  const currentSuccessor=successor(f,root),body={edit_scope:'future',activity_template_id:activity};
+  const preview=await purePreview(f,root,body);
+  assert.equal(preview.status,409,JSON.stringify(preview));
+  assert.deepEqual(preview.conditions,['binding_policy_changed']);
+  const saved=await f.edit(root,body);
+  assert.equal(saved.status,200,JSON.stringify(saved));
+  assert.equal(f.row(root).subtask_candidate_pool_json,null);
+  assert.deepEqual(JSON.parse(f.row(currentSuccessor.id).subtask_candidate_pool_json),pool);
+  assert.deepEqual(JSON.parse(pending(f,currentSuccessor.id).task.subtask_candidate_pool_json),pool);
+  assert.equal((await f.finish(currentSuccessor.id)).status,200);
+  const next=successor(f,currentSuccessor.id);
+  assert.deepEqual(JSON.parse(next.subtask_candidate_pool_json),pool);
+  assert.deepEqual(f.d.prepare('SELECT user_id FROM task_assignments WHERE task_id=?').all(next.id).map(row=>row.user_id),[2]);
+});
+test('launching a Template inherits Group choices without requiring Group browsing',async t=>{
+  const f=await scoringFixture(t);
+  const group=saveRotationGroup(f.d,{name:'Inherited choices',member_ids:[2,3]},{actorId:1});
+  const pool={person_ids:[],group_ids:[group.id]};
+  const activity=Number(f.d.prepare("INSERT INTO activity_templates(name,title_template,assignment_strategy,assignment_policy,fixed_user_id,subject_required,presence_policy,created_by,subtask_candidate_pool_json) VALUES('Inherited pool','Inherited pool','fixed','fixed',2,0,'ignore',1,?)")
+    .run(JSON.stringify(pool)).lastInsertRowid);
+  f.d.prepare("INSERT INTO access_capabilities(subject_type,subject_id,capability_key,access) VALUES('user','2','rotations.view','none')").run();
+  const created=await f.call('POST','/tasks',{title:'Allowed Template launch',activity_template_id:activity,category:'misc'},2);
+  assert.equal(created.status,201,JSON.stringify(created));
+  assert.deepEqual(JSON.parse(f.row(created.data.id).subtask_candidate_pool_json),pool);
+  assert.deepEqual(f.d.prepare('SELECT user_id FROM task_assignments WHERE task_id=?').all(created.data.id).map(row=>row.user_id),[2]);
+});
+test('recurring Template subtask keeps its fixed Person snapshot after Template edits',async t=>{
+  const f=await scoringFixture(t);
+  const activity=Number(f.d.prepare("INSERT INTO activity_templates(name,title_template,assignment_strategy,assignment_policy,fixed_user_id,subject_required,presence_policy,created_by) VALUES('Fixed step recurrence','Fixed step recurrence','fixed','fixed',2,0,'ignore',1)")
+    .run().lastInsertRowid);
+  const item=Number(f.d.prepare("INSERT INTO activity_template_checklist_items(activity_template_id,title_template,sort_order,fixed_user_id) VALUES(?,'Fixed step',0,3)")
+    .run(activity).lastInsertRowid);
+  const created=await f.create({...recurring,activity_template_id:activity,scoring_mode:'whole_task'});
+  assert.equal(created.status,201,JSON.stringify(created));
+  const root=created.data.id;
+  assert.equal(f.d.prepare('SELECT assigned_to FROM tasks WHERE parent_task_id=? AND activity_template_checklist_item_id=?').get(root,item).assigned_to,3);
+  f.d.prepare('UPDATE activity_template_checklist_items SET fixed_user_id=2 WHERE id=?').run(item);
+  assert.equal((await f.finish(root)).status,200);
+  const next=successor(f,root);
+  assert.equal(next.assigned_to,2);
+  assert.equal(f.d.prepare('SELECT assigned_to FROM tasks WHERE parent_task_id=? AND activity_template_checklist_item_id=?').get(next.id,item).assigned_to,3);
+});
 async function checkedDefinitionSave(f,id,body,actor=1){
   const count=definitionRequests.length,input=structuredClone(body),saved=await f.edit(id,body,actor);
   assert.deepEqual(body,input);assert.equal(definitionRequests.length,count+1);

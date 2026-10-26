@@ -143,10 +143,10 @@ export function bindSkillPicker(root, { onChange = null, onCreateSkill = null } 
 }
 
 function subtaskRow(subtask, skills, template, index, canCreateSkill = false, users = [], groups = [],canCreateGroup=false) {
-  const assigned = Number(subtask.assigned_to || subtask.assigned_user_ids?.[0] || subtask.assigned_users?.[0]?.id) || null;
+  const assigned = Number((template&&subtask.fixed_user_id)||subtask.assigned_to || subtask.assigned_user_ids?.[0] || subtask.assigned_users?.[0]?.id) || null;
   const group=typeof subtask.assignment_group_json==='string'?JSON.parse(subtask.assignment_group_json):subtask.assignment_group||subtask.assignment_group_json;
   const selectedGroup=groups.find(item=>Number(item.id)===Number(group?.group_id));
-  const assignment = !template && users.length ? `<span class="task-subtask-editor__assignment" data-task-subtask-assignment hidden>
+  const assignment = users.length ? `<span class="task-subtask-editor__assignment" data-task-subtask-assignment hidden>
     <button type="button" class="task-allocation__target task-allocation__target--empty" data-task-subtask-target aria-haspopup="dialog" aria-expanded="false"><span aria-hidden="true">?</span></button>
     <select data-task-subtask-assignee hidden aria-label="Subtask ${index + 1} assignee"><option value="">Use the parent Activity's responsibility</option>${assigned && !users.some(user => Number(user.id) === assigned) ? `<option value="${assigned}" selected>Unavailable member</option>` : ''}${users.map(user => `<option value="${Number(user.id)}" ${assigned === Number(user.id) ? 'selected' : ''}>${esc(memberLabel(user, users))}</option>`).join('')}</select>
   </span>` : '';
@@ -184,7 +184,7 @@ function subtaskRow(subtask, skills, template, index, canCreateSkill = false, us
 
 export function renderSubtaskEditor({ subtasks = [], skills = [], template = false, canCreateSkill = false,canCreateGroup=false, users = [],groups=[] } = {}) {
   return `<div class="task-subtask-editor" data-task-subtask-editor>
-    ${!template && users.length ? '<div class="task-subtask-editor__people" data-task-subtask-people hidden><div class="task-allocation__strip" role="group" aria-label="Subtask assignees"></div></div>' : ''}
+    ${users.length ? '<div class="task-subtask-editor__people" data-task-subtask-people hidden><div class="task-allocation__strip" role="group" aria-label="Subtask assignees"></div></div>' : ''}
     <div class="task-subtask-editor__rows" data-task-subtask-rows>${subtasks.map((subtask, index) => subtaskRow(subtask, skills, template, index, canCreateSkill, users,groups,canCreateGroup)).join('')}</div>
     <button type="button" class="btn btn--ghost btn--sm" data-task-subtask-add>+ Add subtask</button>
     <span class="sr-only" role="status" aria-live="polite" data-task-subtask-announcement></span>
@@ -201,7 +201,18 @@ export function bindSubtaskEditor(root, { skills = [], template = false, dateKey
   let readOnly = false;
   let preserveAssignmentHistory = true;
   let pointsMode = null, settledIds = new Set();
-  const assignments = !template ? bindSubtaskPeople(editor, { users,groups }) : null;
+  const assignments = bindSubtaskPeople(editor, { users,groups,groupBehavior:assignmentGroupBehavior,template });
+  let candidateGroupIds = null;
+  const filterGroupOptions=()=>{
+    if(!candidateGroupIds)return;
+    for(const select of editor.querySelectorAll('[data-task-subtask-group]'))
+      for(const option of select.options){
+        if(!option.value)continue;
+        const group=groups.find(item=>Number(item.id)===Number(option.value));
+        const available=option.selected||candidateGroupIds.has(Number(option.value))&&!!group?.active;
+        option.hidden=!available;option.disabled=!available;
+      }
+  };
   const getValue = ({ withKeys = false } = {}) => [...rows.children].map((row) => {
     const {assigned_user_ids: oldIds,...original}=originals.get(row)||{};
     if (withKeys && !template && !original.id && !original.action_key) {
@@ -210,7 +221,7 @@ export function bindSubtaskEditor(root, { skills = [], template = false, dateKey
     }
     const rawPoints = row.querySelector('[data-task-subtask-points]')?.value;
     const pointsValue = rawPoints !== undefined && rawPoints.trim() !== '' && Number.isInteger(Number(rawPoints)) && Number(rawPoints) >= 0 && Number(rawPoints) <= 10000 ? Number(rawPoints) : rawPoints;
-    const previous=oldIds||original.assigned_users?.map(user=>user.id)||(original.assigned_to?[original.assigned_to]:[]);
+    const previous=oldIds||original.assigned_users?.map(user=>user.id)||(original.assigned_to?[original.assigned_to]:original.fixed_user_id?[original.fixed_user_id]:[]);
     const groupId=Number(row.querySelector('[data-task-subtask-group]')?.value)||null;
     const groupConfig=groupId?{group_id:groupId,start_mode:row.querySelector('[data-task-subtask-group-start]').value,
       direction:row.querySelector('[data-task-subtask-group-direction]').value,
@@ -226,14 +237,16 @@ export function bindSubtaskEditor(root, { skills = [], template = false, dateKey
     ...(row.dataset.subtaskId ? { id: Number(row.dataset.subtaskId) } : {}),
     title: row.querySelector('[data-task-subtask-title]').value,
     ...(template ? { title_template: row.querySelector('[data-task-subtask-title]').value } : {}),
+    ...(template?{fixed_user_id:groupId?null:selected}:{}),
     points: pointsValue,
     skill_ids: pickers.get(row).getValue(),
     is_optional: row.querySelector('[data-task-subtask-optional]').checked ? 1 : 0,
     ...(groupId||originalGroup?{assignment_group:groupConfig}:{}),
-    ...(assignmentsEnabled && includeAssignment && row.querySelector('[data-task-subtask-assignee]') ? {assigned_user_ids: assignmentChanged ? groupId?[]:selected ? [selected] : [] : previous} : {}),
+    ...(!template && assignmentsEnabled && includeAssignment && row.querySelector('[data-task-subtask-assignee]') ? {assigned_user_ids: assignmentChanged ? groupId?[]:selected ? [selected] : [] : previous} : {}),
   });});
   const changed = () => onChange?.(getValue());
   const refresh = () => {
+    filterGroupOptions();
     const pool = editor.querySelector('[data-task-subtask-people]');
     if (pool) pool.hidden = !assignmentsEnabled;
     [...rows.children].forEach((row, index) => {
@@ -359,10 +372,13 @@ export function bindSubtaskEditor(root, { skills = [], template = false, dateKey
   return {
     getValue,
     refresh,
+    setAssignmentCandidates(candidates) { assignments?.setCandidates(candidates);candidateGroupIds=new Set(candidates?.groupIds||[]);filterGroupOptions(); },
     addSkill,
-    addGroup(group){if(!group||groups.some(item=>Number(item.id)===Number(group.id)))return;
-      groups.push(group);
-      for(const row of rows.children){const select=row.querySelector('[data-task-subtask-group]');if(select)select.add(new Option(group.name,String(group.id)));}
+    addGroup(group){if(!group)return;
+      if(!groups.some(item=>Number(item.id)===Number(group.id)))groups.push(group);
+      for(const row of rows.children){const select=row.querySelector('[data-task-subtask-group]');
+        const option=select&&[...select.options].find(item=>item.value===String(group.id));
+        if(option)option.textContent=group.name;else if(select)select.add(new Option(group.name,String(group.id)));}
     },
     ready: reorder.ready.then(() => undefined),
     setValue(subtasks = []) {

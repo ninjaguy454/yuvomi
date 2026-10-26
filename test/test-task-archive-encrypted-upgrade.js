@@ -45,7 +45,7 @@ const schema=d=>d.prepare('SELECT MAX(version) AS version FROM schema_migrations
 const upgradeWithApplication=file=>{
   const moduleUrl=new URL('../server/db.js',import.meta.url).href;
   const script=`import {get,currentVersion} from ${JSON.stringify(moduleUrl)};
-    if(currentVersion()!==10070)throw Error('Unexpected migrated schema: '+currentVersion());
+    if(currentVersion()!==10078)throw Error('Unexpected migrated schema: '+currentVersion());
     get().close();`;
   const result=spawnSync(process.execPath,['--input-type=module','-e',script],{
     env:{...process.env,DB_PATH:file,DB_ENCRYPTION_KEY:key},encoding:'utf8',timeout:30000,
@@ -85,13 +85,13 @@ test('encrypted schema 10067 backup upgrades on a copy and restores exactly',asy
     copyFileSync(backupPath,upgradedPath);
     upgradeWithApplication(upgradedPath);
     upgraded=open(upgradedPath,{readonly:true});
-    assert.equal(schema(upgraded),10070);
+    assert.equal(schema(upgraded),10078);
     assert.deepEqual(audit(upgraded),original);
     assert.equal(upgraded.prepare('SELECT auto_archive_after FROM tasks WHERE id=?').get(taskId).auto_archive_after,null);
     upgraded.close();upgraded=null;
     upgradeWithApplication(upgradedPath); // restarting must not replay migrations
     upgraded=open(upgradedPath,{readonly:true});
-    assert.equal(schema(upgraded),10070);
+    assert.equal(schema(upgraded),10078);
     assert.deepEqual(audit(upgraded),original);
     upgraded.close();upgraded=null;
 

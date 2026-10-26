@@ -58,11 +58,11 @@ export function openAllocationPicker({ host, anchor, child, draft, onAssign, sig
   }
   if(groups.some(group=>group.active)&&onAssignGroup){
     const section=document.createElement('div');section.className='task-allocation-picker__groups';
-    section.insertAdjacentHTML('beforeend','<strong>Rotation Groups</strong><p class="form-hint">Group membership and order are shared.</p>');
+    section.insertAdjacentHTML('beforeend','<strong>Groups</strong>');
     for(const group of groups.filter(group=>group.active)){
       const button=document.createElement('button');button.type='button';button.className='task-allocation-picker__choice';
       button.setAttribute('aria-pressed',String(Number(group.id)===Number(selectedGroupId)));
-      button.setAttribute('aria-label',`Assign Rotation Group ${group.name}`);
+      button.setAttribute('aria-label',`Assign Group ${group.name}`);
       button.innerHTML=`<span class="task-allocation__avatar" aria-hidden="true"><i data-lucide="users-round"></i></span><span>${esc(group.name)}</span>`;
       button.addEventListener('click',()=>{if(signal?.aborted||closed)return;close(false);onAssignGroup(Number(child.id),Number(group.id));
         if(anchor.isConnected&&!anchor.disabled)anchor.focus({preventScroll:true});},options);

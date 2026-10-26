@@ -9217,6 +9217,116 @@ FORK_MIGRATIONS.push({version:10070,description:'Avoid full-text Task reindexing
       FROM tasks t WHERE t.id=NEW.id;
   END;
 `});
+FORK_MIGRATIONS.push({version:10071,description:'Persist fixed multi-person Activity Template rosters',up(database){
+  database.exec(`ALTER TABLE activity_templates ADD COLUMN fixed_assignee_ids_json TEXT
+    CHECK(fixed_assignee_ids_json IS NULL OR json_valid(fixed_assignee_ids_json));`);
+}});
+FORK_MIGRATIONS.push({version:10072,description:'Store subtask People and Group candidate pools separately from assignments',up(database){
+  database.exec(`ALTER TABLE activity_templates ADD COLUMN subtask_candidate_pool_json TEXT
+    CHECK(subtask_candidate_pool_json IS NULL OR json_valid(subtask_candidate_pool_json));
+    ALTER TABLE tasks ADD COLUMN subtask_candidate_pool_json TEXT
+    CHECK(subtask_candidate_pool_json IS NULL OR json_valid(subtask_candidate_pool_json));`);
+}});
+FORK_MIGRATIONS.push({version:10073,description:'Store fixed Person targets on Activity Template checklist definitions',up(database){
+  database.exec('ALTER TABLE activity_template_checklist_items ADD COLUMN fixed_user_id INTEGER REFERENCES users(id)');
+}});
+FORK_MIGRATIONS.push({version:10074,description:'Durable occurrence subtask rules and idempotent resolution receipts',up:`
+  CREATE TABLE task_subtask_assignment_rules (
+    task_id INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+    source_json TEXT NOT NULL CHECK(json_valid(source_json)),
+    supervisor_pool_json TEXT CHECK(supervisor_pool_json IS NULL OR json_valid(supervisor_pool_json))
+  );
+  CREATE TABLE rotation_group_supervisor_defaults (
+    group_id INTEGER PRIMARY KEY REFERENCES rotation_groups(id) ON DELETE CASCADE,
+    pool_json TEXT NOT NULL CHECK(json_valid(pool_json))
+  );
+  CREATE TABLE task_subtask_resolution_runs (
+    root_task_id INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+    idempotency_key TEXT NOT NULL,
+    input_hash TEXT NOT NULL,
+    receipt_json TEXT NOT NULL CHECK(json_valid(receipt_json)),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  );
+  CREATE TABLE task_subtask_resolution_decisions (
+    task_id INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+    root_task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    source_json TEXT NOT NULL CHECK(json_valid(source_json)),
+    selected_user_ids_json TEXT NOT NULL CHECK(json_valid(selected_user_ids_json)),
+    supervisor_user_id INTEGER REFERENCES users(id),
+    state TEXT NOT NULL CHECK(state IN ('assigned','unresolved','preserved')),
+    reason TEXT,
+    decision_key TEXT,
+    input_hash TEXT NOT NULL
+  );
+  CREATE INDEX idx_subtask_resolution_decisions_root ON task_subtask_resolution_decisions(root_task_id);
+  CREATE TABLE task_subtask_synced_advances (
+    root_task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    group_id INTEGER NOT NULL REFERENCES rotation_groups(id),
+    cursor_key TEXT NOT NULL,
+    selected_user_id INTEGER NOT NULL REFERENCES users(id),
+    PRIMARY KEY(root_task_id,group_id)
+  );
+`});
+FORK_MIGRATIONS.push({version:10075,description:'Snapshot authored subtask rules through Templates and recurrence',up:`
+  ALTER TABLE activity_template_checklist_items ADD COLUMN assignment_rule_json TEXT
+    CHECK(assignment_rule_json IS NULL OR json_valid(assignment_rule_json));
+  ALTER TABLE activity_template_checklist_items ADD COLUMN supervisor_pool_json TEXT
+    CHECK(supervisor_pool_json IS NULL OR json_valid(supervisor_pool_json));
+  CREATE TRIGGER trg_task_subtask_rules_revision_insert AFTER INSERT ON task_subtask_assignment_rules BEGIN
+    UPDATE tasks SET revision=revision+1 WHERE id=NEW.task_id;
+    UPDATE task_change_clock SET version=version+1 WHERE id=1;
+  END;
+  CREATE TRIGGER trg_task_subtask_rules_revision_update AFTER UPDATE ON task_subtask_assignment_rules BEGIN
+    UPDATE tasks SET revision=revision+1 WHERE id=NEW.task_id;
+    UPDATE task_change_clock SET version=version+1 WHERE id=1;
+  END;
+  CREATE TRIGGER trg_task_subtask_rules_revision_delete AFTER DELETE ON task_subtask_assignment_rules BEGIN
+    UPDATE tasks SET revision=revision+1 WHERE id=OLD.task_id;
+    UPDATE task_change_clock SET version=version+1 WHERE id=1;
+  END;
+`});
+FORK_MIGRATIONS.push({version:10076,description:'Recover unresolved occurrence decisions with immutable attempt receipts',up:`
+  ALTER TABLE task_subtask_resolution_runs ADD COLUMN recovery_hash TEXT;
+  CREATE TABLE task_subtask_resolution_attempts (
+    root_task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    idempotency_key TEXT NOT NULL,
+    input_hash TEXT NOT NULL,
+    receipt_json TEXT NOT NULL CHECK(json_valid(receipt_json)),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    PRIMARY KEY(root_task_id,idempotency_key)
+  );
+  INSERT INTO task_subtask_resolution_attempts(root_task_id,idempotency_key,input_hash,receipt_json,created_at)
+    SELECT root_task_id,idempotency_key,input_hash,receipt_json,created_at FROM task_subtask_resolution_runs;
+`});
+FORK_MIGRATIONS.push({version:10077,description:'Occurrence-only subtask reassignment receipts and provenance',up:`
+  CREATE TABLE task_subtask_reassignment_runs (
+    root_task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    idempotency_key TEXT NOT NULL,
+    actor_user_id INTEGER NOT NULL REFERENCES users(id),
+    preview_hash TEXT NOT NULL,
+    receipt_json TEXT NOT NULL CHECK(json_valid(receipt_json)),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    PRIMARY KEY(root_task_id,idempotency_key)
+  );
+  CREATE TABLE task_subtask_occurrence_overrides (
+    id INTEGER PRIMARY KEY,
+    root_task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    idempotency_key TEXT NOT NULL,
+    actor_user_id INTEGER NOT NULL REFERENCES users(id),
+    mode TEXT NOT NULL CHECK(mode IN ('replace','rebalance')),
+    before_user_ids_json TEXT NOT NULL CHECK(json_valid(before_user_ids_json)),
+    after_user_ids_json TEXT NOT NULL CHECK(json_valid(after_user_ids_json)),
+    source_json TEXT CHECK(source_json IS NULL OR json_valid(source_json)),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    UNIQUE(root_task_id,idempotency_key,task_id)
+  );
+  CREATE INDEX idx_subtask_occurrence_overrides_task ON task_subtask_occurrence_overrides(task_id,id);
+`});
+FORK_MIGRATIONS.push({version:10078,description:'Scope linked supervision to individual actions when explicitly planned',up:`
+  ALTER TABLE task_activity_support_tasks ADD COLUMN supervisor_scope TEXT NOT NULL DEFAULT 'single'
+    CHECK(supervisor_scope IN ('single','per_action'));
+`});
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];
 
 const FORK_MIGRATION_REMAPS = [

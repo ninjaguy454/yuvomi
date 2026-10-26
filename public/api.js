@@ -98,6 +98,11 @@ async function apiFetch(path, options = {}, _retried = false, captured = authent
     // Für beide: fall-through zum generischen !response.ok-Handler unten.
   }
 
+  if(response.status===403&&data?.reason==='fresh_two_factor_required'&&stateChanging&&!_retried&&typeof window.prompt==='function'){
+    const code=window.prompt('Enter a current two-factor or recovery code to confirm this security change.');
+    if(code){await apiFetch('/auth/2fa/reauthenticate',{method:'POST',body:JSON.stringify({code})},true,captured);return apiFetch(path,options,true,captured);}
+  }
+
   // CSRF-Token-Desync (haeufig nach iOS-PWA-Resume): einmal GET /auth/me
   // ausfuehren um den CSRF-Token zu erneuern, dann den Request wiederholen.
   // Permission and lifecycle denials also carry X-CSRF-Token. Only the
@@ -267,8 +272,8 @@ const auth = {
   },
   // Zweiter Schritt der Anmeldung (#672). Der Code darf ein TOTP-Code oder ein
   // Wiederherstellungscode sein - welcher es war, sagt die Antwort.
-  verifyTwoFactor: async (code) => {
-    const res = await api.post('/auth/2fa/verify', { code });
+  verifyTwoFactor: async (code, remember_browser=false) => {
+    const res = await api.post('/auth/2fa/verify', { code, remember_browser });
     setPermissions({ ...res?.permissions, principal_kind: res?.principal?.kind || res?.user?.kind || 'member' });
     setHouseholdSize(res?.householdSize);
     if (res?.user) broadcastSessionChange('login');

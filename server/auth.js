@@ -7,6 +7,7 @@
 import { APP_NAME } from './utils/brand.js';
 import express from 'express';
 import session from 'express-session';
+import {ensurePersonalSessionSchema,validPersonalSession,personalExpiry,isPersonal,startPersonalSession,boundPersonalCookie,remembered,enrollBrowser,revokeBrowser,revokePresentedBrowser,revokeAllPersonal,epoch,REMEMBER_COOKIE} from './services/personal-sessions.js';
 import rateLimit from 'express-rate-limit';
 import crypto from 'node:crypto';
 import * as db from './db.js';
@@ -147,9 +148,11 @@ class BetterSQLiteStore extends session.Store {
         expired_at INTEGER NOT NULL
       )
     `);
+    ensurePersonalSessionSchema(db.get());
     // Abgelaufene Sessions regelmäßig aufräumen (alle 15 Minuten)
     setInterval(() => {
       db.get().prepare('DELETE FROM sessions WHERE expired_at <= ?').run(Date.now());
+      db.get().prepare('DELETE FROM personal_session_revocations WHERE revoked_at < ?').run(Date.now()-31*86400000);
     }, 15 * 60_000).unref();
   }
 
@@ -158,7 +161,8 @@ class BetterSQLiteStore extends session.Store {
       const row = db.get()
         .prepare('SELECT sess FROM sessions WHERE sid = ? AND expired_at > ?')
         .get(sid, Date.now());
-      callback(null, row ? JSON.parse(row.sess) : null);
+      const value=row?JSON.parse(row.sess):null;
+      callback(null,value&&validPersonalSession(db.get(),value)?value:null);
     } catch (err) {
       callback(err);
     }
@@ -168,13 +172,17 @@ class BetterSQLiteStore extends session.Store {
     return withoutDeviceWriteLease(()=>{
     try {
       if(db.get().prepare('SELECT 1 FROM device_session_tombstones WHERE sid=?').get(sid)) { callback(null); return; }
+      if(db.get().prepare('SELECT 1 FROM personal_session_revocations WHERE sid=?').get(sid)) { callback(null); return; }
       const previous = db.get().prepare('SELECT sess FROM sessions WHERE sid=?').get(sid);
       preserveWallSessionLock(previous ? JSON.parse(previous.sess) : null, sess);
-      const ttl = sess.cookie?.maxAge ?? 7 * 24 * 60 * 60 * 1000;
-      const expiredAt = Date.now() + ttl;
+      const expiredAt=personalExpiry(db.get(),sess);
+      if(expiredAt===null){callback(null);return;}
       db.get()
-        .prepare('INSERT OR REPLACE INTO sessions (sid, sess, expired_at) VALUES (?, ?, ?)')
-        .run(sid, JSON.stringify(sess), expiredAt);
+        .prepare(`INSERT INTO sessions (sid, sess, expired_at)
+          SELECT ?,?,? WHERE NOT EXISTS(SELECT 1 FROM personal_session_revocations WHERE sid=?)
+          AND NOT EXISTS(SELECT 1 FROM device_session_tombstones WHERE sid=?)
+          ON CONFLICT(sid) DO UPDATE SET sess=excluded.sess,expired_at=excluded.expired_at`)
+        .run(sid, JSON.stringify(sess), expiredAt,sid,sid);
       callback(null);
     } catch (err) {
       callback(err);
@@ -196,8 +204,8 @@ class BetterSQLiteStore extends session.Store {
   touch(sid, sess, callback) {
     return withoutDeviceWriteLease(()=>{
     try {
-      const ttl = sess.cookie?.maxAge ?? 7 * 24 * 60 * 60 * 1000;
-      const expiredAt = Date.now() + ttl;
+      const expiredAt=personalExpiry(db.get(),sess);
+      if(expiredAt===null){callback(null);return;}
       db.get()
         .prepare('UPDATE sessions SET expired_at = ? WHERE sid = ?')
         .run(expiredAt, sid);
@@ -306,7 +314,20 @@ function sessionMiddleware(req, res, next) {
       res.clearCookie(LEGACY_SESSION_COOKIE, { path: '/' });
     }
   }
-  return expressSession(req, res, next);
+  return expressSession(req, res, error=>{
+    if(error)return next(error);
+    // Personal reads need a renewed cookie as well as a store touch. Changing a
+    // small policy field causes express-session to emit it only for personal
+    // sessions; paired/display and anonymous authentication flows stay intact.
+    if(isPersonal(req.session)&&!/[.](?:js|css|png|jpe?g|webp|svg|ico|woff2?|map)$/i.test(req.path||'')){
+      const expires=personalExpiry(db.get(),req.session);
+      if(expires===null)return req.session.destroy(err=>next(err));
+      req.session.personalSession.renewedAt=Math.max(Date.now(),(req.session.personalSession.renewedAt||0)+1);
+      req.session.cookie.maxAge=Math.max(0,expires-Date.now());
+      boundPersonalCookie(req.session);
+    }
+    next();
+  });
 }
 
 // --------------------------------------------------------
@@ -348,6 +369,45 @@ const twoFactorLimiter = rateLimit({
 
 // Wie lange ein bestandenes Passwort auf den zweiten Faktor warten darf.
 const TWO_FACTOR_WINDOW_MS = 5 * 60 * 1000;
+
+// Remembered-browser authentication is insufficient proof for a security change.
+// These rejections happen before handlers or async work, so clients can step up
+// and safely resubmit. Existing per-action factor verification remains required.
+router.use((req,res,next)=>{
+  if(['GET','HEAD','OPTIONS'].includes(req.method)||!isPersonal(req.session)||deviceCookie(req))return next();
+  const sensitive=/^\/(?:me\/password|oidc\/link|api-tokens|users|2fa\/require)(?:\/|$)/.test(req.path)
+    ||(req.path==='/me/profile'&&Object.hasOwn(req.body||{},'email'));
+  if(sensitive&&twoFactor.isEnabled(db.get(),req.session.userId)&&!(req.session.personalSession?.factorAt>Date.now()-TWO_FACTOR_WINDOW_MS))
+    return res.status(403).json({error:'Verify a current two-factor code before changing security settings.',reason:'fresh_two_factor_required'});
+  next();
+});
+
+router.post('/2fa/reauthenticate',requireAuth,csrfMiddleware,twoFactorLimiter,(req,res)=>{
+  if(!isPersonal(req.session)||deviceCookie(req)||req.authMethod!=='session')return res.sendStatus(403);
+  const code=String(req.body?.code||'');
+  if(code.length>64||!twoFactor.verifySecondFactor(db.get(),req.authUserId,code).valid)return res.status(403).json({error:'Invalid two-factor code.'});
+  req.session.personalSession.factorAt=Date.now();res.json({ok:true});
+});
+router.get('/remembered-browsers',requireAuth,(req,res)=>{
+  if(!isPersonal(req.session)||deviceCookie(req)||req.authMethod!=='session')return res.sendStatus(403);
+  res.set('Cache-Control','private, no-store');
+  const current=remembered(db.get(),req,req.authUserId)?.id;
+  res.json({data:db.get().prepare('SELECT id,created_at,expires_at FROM remembered_browsers WHERE user_id=? AND revoked_at IS NULL AND expires_at>? ORDER BY created_at DESC').all(req.authUserId,Date.now()).map(row=>({...row,current:row.id===current}))});
+});
+router.delete('/remembered-browsers/:id',requireAuth,csrfMiddleware,(req,res)=>{
+  if(!isPersonal(req.session)||deviceCookie(req)||req.authMethod!=='session')return res.sendStatus(403);
+  revokeBrowser(db.get(),req.authUserId,Number(req.params.id));
+  if(req.session.personalSession?.trustId===Number(req.params.id)){
+    res.clearCookie(REMEMBER_COOKIE,{path:'/'});res.clearCookie(SESSION_COOKIE,{path:'/'});
+    return req.session.destroy(error=>error?res.sendStatus(500):res.json({ok:true}));
+  }
+  res.json({ok:true});
+});
+router.post('/sign-out-everywhere',requireAuth,csrfMiddleware,(req,res)=>{
+  if(!isPersonal(req.session)||deviceCookie(req)||req.authMethod!=='session')return res.sendStatus(403);
+  revokeAllPersonal(db.get(),req.authUserId);res.clearCookie(REMEMBER_COOKIE,{path:'/'});res.clearCookie(SESSION_COOKIE,{path:'/'});
+  req.session.destroy(error=>error?res.sendStatus(500):res.json({ok:true}));
+});
 
 function hashApiToken(token) {
   return crypto.createHash('sha256').update(token, 'utf8').digest('hex');
@@ -767,7 +827,7 @@ function requireAuth(req, res, next) {
  * @param {{ id: number, role: string }} user
  * @returns {Promise<void>}
  */
-function setupAuthSession(req, res, user) {
+function setupAuthSession(req, res, user, personalOptions={}) {
   const deviceContext=validateTemporaryLogin(db.get(),req,user);
   const previousSid=req.sessionID;
   return new Promise((resolve, reject) => {
@@ -780,6 +840,7 @@ function setupAuthSession(req, res, user) {
         try {retireBrowserSession(db.get(),previousSid);establishTemporary(db.get(),req,deviceContext,user);}
         catch(error){delete req.session.userId;delete req.session.role;return reject(error);}
       }
+      if(!deviceContext)startPersonalSession(db.get(),req.session,personalOptions);
       res.cookie('csrf-token', req.session.csrfToken, {
         httpOnly: false,
         sameSite: 'lax',
@@ -1120,9 +1181,10 @@ router.post('/login', loginLimiter, async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials.', code: 401 });
     }
 
+    const passwordEpoch=epoch(db.get(),user.id);
     const { valid, needsRehash } = await verifyPassword(password, user.password_hash);
     if (approvalId) deviceApprovalProof(req, approvalId);
-    if (!valid) {
+    if (!valid||epoch(db.get(),user.id)!==passwordEpoch) {
       log.warn('Login failed', { ip: req.ip, username, reason: 'invalid_password' });
       return res.status(401).json({ error: 'Invalid credentials.', code: 401 });
     }
@@ -1133,7 +1195,9 @@ router.post('/login', loginLimiter, async (req, res) => {
       try {
         const migrated = await hashPassword(password);
         if (approvalId) deviceApprovalProof(req, approvalId);
-        db.get().prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(migrated, user.id);
+        if(epoch(db.get(),user.id)!==passwordEpoch)return res.status(401).json({error:'Invalid credentials.',code:401});
+        const updated=db.get().prepare('UPDATE users SET password_hash = ? WHERE id = ? AND password_hash = ?').run(migrated, user.id,user.password_hash);
+        if(!updated.changes)return res.status(401).json({error:'Invalid credentials.',code:401});
         log.info('Password hash migrated to NFC', { userId: user.id });
       } catch (rehashErr) {
         log.error('Password hash migration failed:', rehashErr.message);
@@ -1171,17 +1235,19 @@ router.post('/login', loginLimiter, async (req, res) => {
     // halb angemeldeten Zustand. Ein neuer Schluessel kann hier nichts
     // aufschliessen, was der alte nicht schon aufgeschlossen haette.
     assertPrizeApprovalActor(req,user,approvalId);
-    if (twoFactor.isEnabled(db.get(), user.id)) {
-      req.session.pendingTwoFactor = { userId: user.id, expiresAt: Date.now() + TWO_FACTOR_WINDOW_MS, ...(approvalId ? {approvalId} : {}) };
+    const trusted=!approvalId&&!deviceCookie(req)?remembered(db.get(),req,user.id):null;
+    if (twoFactor.isEnabled(db.get(), user.id)&&!trusted) {
+      req.session.pendingTwoFactor = { userId: user.id, expiresAt: Date.now() + TWO_FACTOR_WINDOW_MS, passwordVerified:true,authEpoch:epoch(db.get(),user.id), ...(approvalId ? {approvalId} : {}) };
       return res.json({
         twoFactorRequired: true,
         recoveryAvailable: twoFactor.getStatus(db.get(), user.id).recovery_remaining > 0,
+        rememberAvailable:!approvalId&&!deviceCookie(req),
       });
     }
 
     try {
       if (approvalId) return finishDeviceApproval(req, res, user, approvalId);
-      await setupAuthSession(req, res, user);
+      await setupAuthSession(req, res, user,{trust:trusted});
       res.json(loginPayload(req, user));
     } catch (sessionErr) {
       log.error('Session regeneration failed:', sessionErr);
@@ -1569,7 +1635,22 @@ buildInviteRoutes(router);
  * POST /api/v1/auth/logout
  * Response: { ok: true }
  */
-router.post('/logout', requireAuth, csrfMiddleware, (req, res) => {
+router.post('/logout',(req,res,next)=>{
+  if(req.session?.userId||deviceCookie(req))return next();
+  // An expired SID cannot provide CSRF proof. SameSite=Lax plus exact Origin /
+  // Fetch-Metadata checks allow cookie-possession logout to only remove access.
+  const origin=req.get('Origin');
+  try{if(req.get('Sec-Fetch-Site')==='cross-site'||(origin&&new URL(origin).origin!==`${req.protocol}://${req.get('Host')}`))return res.sendStatus(403);}catch{return res.sendStatus(403);}
+  revokePresentedBrowser(db.get(),req);res.clearCookie(REMEMBER_COOKIE,{path:'/'});res.clearCookie(SESSION_COOKIE,{path:'/'});
+  req.session.destroy(error=>error?res.sendStatus(500):res.json({ok:true}));
+}, requireAuth, csrfMiddleware, (req, res) => {
+  if(req.authMethod==='session'&&isPersonal(req.session)){
+    const trust=remembered(db.get(),req,req.authUserId);
+    const id=req.session.personalSession?.trustId||trust?.id;
+    if(id)revokeBrowser(db.get(),req.authUserId,id);
+    revokePresentedBrowser(db.get(),req);
+    res.clearCookie(REMEMBER_COOKIE,{path:'/'});
+  }
   // This authorized atomic transition intentionally revokes its own lease.
   if(req.deviceContext)withoutDeviceWriteLease(()=>returnToDevice(db.get(),req.deviceContext.credential));
   if (req.authMethod === 'api_token') {
@@ -2036,6 +2117,7 @@ router.post('/2fa/verify', twoFactorLimiter, async (req, res) => {
     if (!pending) {
       return res.status(401).json({ error: 'No pending sign-in.', code: 401 });
     }
+    if(pending.authEpoch!==undefined&&pending.authEpoch!==epoch(db.get(),pending.userId))return res.status(401).json({error:'No pending sign-in.'});
     if ((pending.approvalId || null) !== approvalId)
       return res.status(409).json({error:'This approval changed. Authenticate again for this action.'});
     assertPrizeApprovalActor(req,{id:pending.userId},approvalId);
@@ -2062,6 +2144,10 @@ router.post('/2fa/verify', twoFactorLimiter, async (req, res) => {
     // Sitzungsschlüssel taugt nichts mehr.
     if (approvalId) return finishDeviceApproval(req, res, user, approvalId);
     await setupAuthSession(req, res, user);
+    if(isPersonal(req.session)){
+      req.session.personalSession.factorAt=Date.now();
+      if(pending.passwordVerified&&req.body.remember_browser===true&&!deviceCookie(req))enrollBrowser(db.get(),req,res);
+    }
     log.info('Second factor accepted', { userId: user.id, method: result.method });
 
     res.json({
@@ -2196,6 +2282,7 @@ router.post('/2fa/recovery-codes', requireAuth, csrfMiddleware, twoFactorLimiter
     }
 
     const { recovery_codes: codes } = twoFactor.regenerateRecoveryCodes(db.get(), req.authUserId);
+    if(!deviceCookie(req))revokeAllPersonal(db.get(),req.authUserId);
     res.json({ data: { recovery_codes: codes } });
   } catch (err) {
     log.error('2FA recovery codes error:', err);

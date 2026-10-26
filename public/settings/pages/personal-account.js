@@ -1,4 +1,5 @@
 import { api, auth } from '/api.js';
+import { pairedDeviceHint } from '/utils/device-context.js';
 import {
   isDateInputValid,
   parseDateInput,
@@ -739,6 +740,25 @@ export async function render(container, { user }) {
       avatarData: currentUser?.avatar_data ?? null,
     });
     bindTwoFactorEvents(container, () => render(container, { user: currentUser }));
+    if(currentUser?.kind!=='device'&&!pairedDeviceHint()){
+      const card=document.createElement('section');card.className='settings-card';
+      card.innerHTML='<h3 class="settings-card__title">Remembered personal browsers</h3><p>Remembering a browser skips repeated two-factor prompts for up to 30 days. A new login still requires your password. Signing out forgets this browser.</p><div data-remembered-list></div><button class="btn btn--secondary" data-sign-out-everywhere>Sign out all personal sessions</button><p role="alert" data-remembered-error></p>';
+      container.append(card);
+      const list=card.querySelector('[data-remembered-list]'),error=card.querySelector('[data-remembered-error]');
+      const refresh=async()=>{
+        try{const result=await api.get('/auth/remembered-browsers');list.replaceChildren();
+          if(!result.data.length)list.textContent='No remembered browsers.';
+          for(const row of result.data){const item=document.createElement('p'),button=document.createElement('button');
+            item.textContent=`${row.current?'This browser':'Personal browser'} · remembered ${new Date(row.created_at).toLocaleDateString()} · expires ${new Date(row.expires_at).toLocaleDateString()} `;
+            button.type='button';button.className='btn btn--secondary';button.textContent='Forget';
+            button.onclick=async()=>{try{await api.delete(`/auth/remembered-browsers/${row.id}`);if(row.current){await auth.logout().catch(()=>{});window.yuvomi?.clearSession?.();window.yuvomi.navigate('/login');}else await refresh();}catch(e){error.textContent=e.message;}};
+            item.append(button);list.append(item);
+          }
+        }catch(e){error.textContent=e.message;}
+      };
+      card.querySelector('[data-sign-out-everywhere]').onclick=async()=>{try{await api.post('/auth/sign-out-everywhere',{});await auth.logout().catch(()=>{});window.yuvomi?.clearSession?.();window.yuvomi.navigate('/login');}catch(e){error.textContent=e.message;}};
+      void refresh();
+    }
     container.querySelector('#account-retry')?.addEventListener('click', () => {
       render(container, { user: currentUser });
     });

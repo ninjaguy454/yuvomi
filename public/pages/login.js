@@ -246,7 +246,7 @@ export async function render(container) {
       // schickt statt des Nutzers nur diese Marke. Das Formular tritt zurueck
       // und macht der Code-Eingabe Platz.
       if (result?.twoFactorRequired) {
-        renderSecondFactor(container, { recoveryAvailable: result.recoveryAvailable === true });
+        renderSecondFactor(container, { recoveryAvailable: result.recoveryAvailable === true,rememberAvailable:result.rememberAvailable===true });
         return;
       }
       window.yuvomi.navigate('/', result.user);
@@ -327,7 +327,7 @@ export async function render(container) {
  * @param {HTMLElement} container
  * @param {{ recoveryAvailable: boolean }} options
  */
-function renderSecondFactor(container, { recoveryAvailable }) {
+function renderSecondFactor(container, { recoveryAvailable, rememberAvailable=false }) {
   const card = container.querySelector('.auth-card');
   if (!card) return;
 
@@ -352,6 +352,7 @@ function renderSecondFactor(container, { recoveryAvailable }) {
         >
         <p class="form-hint" id="two-factor-hint">${esc(t(recoveryAvailable ? 'login.twoFactorHintRecovery' : 'login.twoFactorHint'))}</p>
       </div>
+      ${rememberAvailable?'<label class="form-hint"><input type="checkbox" id="remember-browser"> Remember this personal browser for 30 days</label><p class="form-hint">Your password is still required for a new login. Use this only on a personal device you control.</p>':''}
       <div class="form-error" id="two-factor-error" role="alert" tabindex="-1" hidden></div>
       <button type="submit" class="btn btn--primary auth-form__submit" id="two-factor-btn">
         <span class="auth-btn__label">${esc(t('login.twoFactorSubmit'))}</span>
@@ -395,7 +396,7 @@ function renderSecondFactor(container, { recoveryAvailable }) {
     button.insertBefore(spinner, label);
 
     try {
-      const result = await auth.verifyTwoFactor(code);
+      const result = await auth.verifyTwoFactor(code,form.querySelector('#remember-browser')?.checked===true);
       window.yuvomi.navigate('/', result.user);
     } catch (err) {
       // 401 heisst hier zweierlei: falscher Code oder abgelaufener Wartezustand.

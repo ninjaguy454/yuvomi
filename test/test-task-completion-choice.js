@@ -191,6 +191,14 @@ test('reopening after archive restore preserves frozen children until explicit o
   assert.deepEqual(root.subtasks.map(row=>f.row(row.id)),children);assert.deepEqual(rows(f,'reward_ledger'),earned);
 });
 
+test('same-status completion still requires restoring an archived original activity',async t=>{
+  const f=await scoringFixture(t),root=(await f.create(routine)).data;
+  assert.equal((await finish(f,root.id,false)).status,200);
+  assert.equal((await f.call('PATCH',`/tasks/${root.id}/archive`,{archived:true})).status,200);
+  const before=f.snapshot(),result=await finish(f,root.id,false);
+  assert.equal(result.status,409,JSON.stringify(result));assert.match(result.error,/Restore the original/);assert.equal(f.snapshot(),before);
+});
+
 for(const terminal of ['expired','skipped'])test(`complete remaining preserves ${terminal} child history while completing active eligible children once`,async t=>{
   const f=await scoringFixture(t),root=(await f.create({...routine,...recurring})).data;
   const historical=root.subtasks[0].id;

@@ -3,8 +3,7 @@ import { createHash } from 'node:crypto';
 
 const PRIORITY = { urgent: 0, high: 1, medium: 2, low: 3, none: 4 };
 const FALLBACK_CATEGORY = 'misc';
-const CLOSED = new Map([['expired','Expired'],['skipped','Skipped'],
-  ['closed_incomplete','Closed without completing remaining subtasks']]);
+const CLOSED = new Map([['expired','Expired'],['skipped','Skipped']]);
 
 function dueTime(row, timeZone = null) {
   const date = row.trip_group ? row.display_due_date : row.due_date;
@@ -40,13 +39,16 @@ export function orderTaskWindow(rows, {
   const groups = new Map();
   const groupLabels = new Map();
   for (const row of rows) {
+    // Migration10079 converts persisted closures to Done. Older descriptors
+    // keep their row identity and provenance while sharing ordinary grouping.
+    const status=row.status==='closed_incomplete'?'done':row.status;
     let ids;
     if (groupMode === 'category') ids = [row.category || FALLBACK_CATEGORY];
     else if (groupMode === 'none') ids = ['all'];
-    else if (groupMode === 'status') ids = [row.archived_at ? 'archived' : row.status];
+    else if (groupMode === 'status') ids = [row.archived_at ? 'archived' : status];
     else if (groupMode === 'due') {
       const date = row.trip_group ? row.display_due_date : row.due_date;
-      if (CLOSED.has(row.status)) ids = [row.status];
+      if (CLOSED.has(status)) ids = [status];
       else if (!date) ids = ['noDate'];
       else {
         if (!/^\d{4}-\d{2}-\d{2}$/.test(today || '')) throw new TypeError('Due groups need the viewer calendar day');
@@ -70,7 +72,7 @@ export function orderTaskWindow(rows, {
     }
   }
   const categoryOrder = new Map(categories.map((row, index) => [row.key, index]));
-  const dueOrder = ['overdue','today','thisWeek','nextWeek','later','noDate','expired','skipped','closed_incomplete'];
+  const dueOrder = ['overdue','today','thisWeek','nextWeek','later','noDate','expired','skipped'];
   if(groupMode==='status' && [...groups.keys()].some(id=>!statusOrder.includes(id)))
     throw new RangeError('Status group order is incomplete');
   const ids = [...groups.keys()].sort((a, b) => {

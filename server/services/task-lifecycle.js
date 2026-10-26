@@ -215,11 +215,17 @@ export function changeTaskStatus(d, taskId, status, {actorId=null, principal=act
     if (authorize) assertTaskMutation(d,principal,requested,device?{...body,status}:{status},{operation:'status'});
     assertTaskRevision(d,requested,body,{required:requireRevision,requireParent:requireRevision});
     assertTaskWindowAction(d,requested.id,now);
-    if(requested.status===status&&status==='done')return {pending:false,undone:0,task:requested,parent_task:requested.parent_task_id?d.prepare('SELECT * FROM tasks WHERE id=?').get(requested.parent_task_id):null};
     if(retiredRecurrenceOccurrence(d,requested.id))throw new TaskStateError(
       'This historical occurrence was retired. Its recorded progress is preserved; use the current occurrence instead.',
       {reason:'occurrence_retired'});
     if(status==='done')assertRecurringCompletionStarted(d,requested.id,now,principal);
+    if(requested.status===status&&status==='done') {
+      // A replay cannot bypass source/helper restore or prize authority guards.
+      // Validate current state without cascading into retained child progress.
+      taskSupervisionTransition(d,requested.id,status,actorId);
+      prizeTaskTransition(d,requested,status,{actorId,principal});
+      return {pending:false,undone:0,task:requested,parent_task:requested.parent_task_id?d.prepare('SELECT * FROM tasks WHERE id=?').get(requested.parent_task_id):null};
+    }
     // Includes legacy Tasks whose mappings did not exist before this action.
     reconcileTaskSupervision(d,requested.id,{actorId});
     const gate = taskSupervisionTransition(d,requested.id,status,actorId);

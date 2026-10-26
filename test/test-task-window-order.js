@@ -57,15 +57,15 @@ test('title and due sort preserve direction, ties, missing dates, and locale col
   assert.throws(() => orderTaskWindow(rows, { sort:{field:'progress'} }), /descriptor missing/);
 });
 
-test('due buckets match current calendar-day groups including closed occurrences', () => {
+test('due buckets retain converted legacy completions in ordinary Done calendar-day groups', () => {
   const rows = [
+    { id:7,title:'Converted completion',due_date:'2026-10-19',status:'done',closed_incomplete_at:'2026-10-19T12:00:00Z',completion_kept_subtasks:1 },
     { id:1,title:'Old',due_date:'2026-10-20',status:'open' },
     { id:2,title:'Now',due_date:'2026-10-21',status:'open' },
     { id:3,title:'Week',due_date:'2026-10-23',status:'open' },
     { id:4,title:'Next',due_date:'2026-10-27',status:'open' },
     { id:5,title:'Later',due_date:'2026-11-10',status:'open' },
     { id:6,title:'None',due_date:null,status:'open' },
-    { id:7,title:'Closed',due_date:'2026-10-19',status:'closed_incomplete' },
   ];
   const labels = { overdue:'Overdue',today:'Today',thisWeek:'This week',nextWeek:'Next week',later:'Later',noDate:'No date' };
   const translations = Object.fromEntries(Object.entries(labels).map(([key,value])=>[`tasks.group${key[0].toUpperCase()}${key.slice(1)}`,value]));
@@ -82,6 +82,23 @@ test('due buckets match current calendar-day groups including closed occurrences
   const expected=vm.runInContext("groupBy(rows,'due').map(g=>({id:g.id,ids:g.tasks.map(row=>row.id)}))",context);
   const actual=orderTaskWindow(rows,{groupMode:'due',today:'2026-10-21',labels});
   assert.deepEqual(actual.map(g=>({id:g.id,ids:g.ids})),JSON.parse(JSON.stringify(expected)));
+  assert.deepEqual(actual.flatMap(group=>group.ids).sort((a,b)=>a-b),rows.map(row=>row.id).sort((a,b)=>a-b),'No converted occurrence is dropped');
+});
+
+test('legacy closure descriptors map to Done without emitting or dropping a fourth status group',()=>{
+  const rows=[
+    {id:1,title:'Legacy compatibility row',status:'closed_incomplete',due_date:'2026-10-19',closed_incomplete_at:'2026-10-19T12:00:00Z'},
+    {id:2,title:'Converted legacy row',status:'done',completion_kept_subtasks:1,due_date:null},
+    {id:3,title:'Expired',status:'expired',due_date:'2026-10-18'},
+    {id:4,title:'Skipped',status:'skipped',due_date:'2026-10-18'},
+  ];
+  const snapshot=structuredClone(rows);
+  const due=orderTaskWindow(rows,{groupMode:'due',today:'2026-10-21'});
+  assert.deepEqual(due.map(group=>({id:group.id,ids:group.ids})),[{id:'overdue',ids:[1]},{id:'noDate',ids:[2]},{id:'expired',ids:[3]},{id:'skipped',ids:[4]}]);
+  const statuses=orderTaskWindow(rows,{groupMode:'status',statusOrder:['open','in_progress','done','expired','skipped']});
+  assert.deepEqual(statuses.map(group=>({id:group.id,ids:group.ids})),[{id:'done',ids:[1,2]},{id:'expired',ids:[3]},{id:'skipped',ids:[4]}]);
+  for(const groups of [due,statuses])assert.deepEqual(groups.flatMap(group=>group.ids).sort((a,b)=>a-b),rows.map(row=>row.id));
+  assert.deepEqual(rows,snapshot,'Grouping preserves stored legacy provenance');
 });
 
 test('equal localized group labels have stable IDs across page boundaries',()=>{

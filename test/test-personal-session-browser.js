@@ -20,7 +20,7 @@ async function start(){
  let log='';for(const s of [server.stdout,server.stderr])s.on('data',v=>log=(log+v).slice(-2000));
  origin=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error(log)),45000);server.once('message',v=>{clearTimeout(timer);resolve(v.origin);});server.once('exit',code=>{clearTimeout(timer);reject(Error(`Synthetic server exited ${code}: ${log}`));});});
 }
-test.before(async()=>{await start();browser=await puppeteer.launch({headless:true,executablePath:process.env.PUPPETEER_EXECUTABLE_PATH||'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',args:['--no-sandbox']});page=await browser.newPage();page.setDefaultTimeout(20000);});
+test.before(async()=>{await start();browser=await puppeteer.launch({headless:true,executablePath:process.env.PUPPETEER_EXECUTABLE_PATH||'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',args:[]});page=await browser.newPage();page.setDefaultTimeout(20000);});
 test.after(async()=>{await browser?.close();server?.kill();});
 test('personal browser enrollment is opt-in, survives reload/restart, and logout forgets trust',async()=>{
  await page.goto(origin+'/login');await page.waitForSelector('#username');await page.type('#username','browser');await page.type('#password',password);await page.click('#auth-btn');await page.waitForSelector('#remember-browser');
@@ -51,10 +51,12 @@ test('sign-out-everywhere clears another open tab through the existing session b
   // is not an initialization signal. Wait for canonical account data instead.
   await page.waitForSelector('[data-remembered-list] button');
   const signout=page.waitForResponse(r=>r.url().endsWith('/auth/sign-out-everywhere'),{timeout:5000});
-  // This case verifies session broadcasts; the enrollment case covers pointer
-  // interaction. Activate the control directly to avoid Edge view-transition
-  // hit testing on the newly foregrounded tab.
-  await page.$eval('[data-sign-out-everywhere]',button=>button.click());
+  // Use an ordinary keyboard action after the page regains foreground focus.
+  // This also verifies the real account control, rather than invoking its
+  // click handler directly from the test.
+  await page.focus('[data-sign-out-everywhere]');
+  await page.waitForFunction(()=>document.activeElement?.matches('[data-sign-out-everywhere]'));
+  await page.keyboard.press('Enter');
   const result=await signout;assert.equal(result.status(),200);
   await page.waitForFunction(()=>location.pathname==='/login');await other.bringToFront();await other.waitForFunction(()=>location.pathname==='/login');
  }finally{await other.close();}

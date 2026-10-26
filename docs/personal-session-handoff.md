@@ -129,6 +129,14 @@ The cross-tab fixture uses direct DOM activation of the sign-out control after
 real authentication; native pointer activation was intermittent in the Edge
 headless/foreground-tab fixture. Its behavior must receive ordinary interactive
 release QA. The enrollment test uses actual pointer/keyboard input.
+Combined-release verification subsequently passed both browser cases with the
+normal Edge browser sandbox enabled and native keyboard activation of the
+sign-out-everywhere control. The two tabs both returned to login. This replaces
+the earlier direct-DOM activation limitation for that case; physical Safari,
+iOS and installed-PWA behavior remain unmeasured on this Windows host.
+An encrypted recovery test also verified persisted revocation after reopening
+a backup, and explicit trust/session invalidation on an older restored snapshot.
+
 New trust-management copy is English; locale-specific translations are deferred.
 
 ## Measured request overhead

@@ -3813,6 +3813,12 @@ function recurrenceFollowupOf(taskId) {
  * (editiert, erledigt, hinzugefügt oder gelöscht).
  */
 function isFollowupSubtasksTouched(followup) {
+  // These allocation receipts record only the chosen member, without the
+  // previous cursor state needed for a safe rewind. Preserve their occurrence
+  // identity even when its generated checklist has not yet been edited.
+  if(db.get().prepare(`WITH RECURSIVE tree(id) AS (SELECT ? UNION SELECT t.id FROM tasks t JOIN tree p ON t.parent_task_id=p.id)
+    SELECT 1 FROM task_subtask_synced_advances a JOIN tree ON tree.id=a.root_task_id
+    UNION ALL SELECT 1 FROM task_group_assignment_decisions a JOIN tree ON tree.id=a.task_id LIMIT 1`).get(followup.id))return true;
   const durableBaseline=db.get().prepare('SELECT materialized_state_json FROM task_recurrence_occurrences WHERE task_id=?').get(followup.id);
   if(durableBaseline?.materialized_state_json) {
     const rows=db.get().prepare(`WITH RECURSIVE tree(id) AS (SELECT ? UNION SELECT t.id FROM tasks t JOIN tree p ON t.parent_task_id=p.id)
@@ -3921,7 +3927,7 @@ function isFollowupSubtasksTouched(followup) {
  * Arbeit, die ein Klick auf die Vorgängerin nicht wegwerfen darf.
  * Rückgabe: Anzahl vorgemerkter CalDAV-Löschungen.
  */
-function discardRecurrenceFollowupSingle(taskId) {
+function discardRecurrenceFollowupSingle(taskId,{resetCompletionChoice=false}={}) {
   const followup = recurrenceFollowupOf(taskId);
   if (!followup || followup.status !== 'open') return 0;
 
@@ -3931,14 +3937,15 @@ function discardRecurrenceFollowupSingle(taskId) {
   // weg. Lokal erzeugte Folgeinstanzen sind nicht gespiegelt, dann ist das ein No-op.
   const queued = queueTodoDeletion('tasks', followup) ? 1 : 0;
   db.get().prepare('DELETE FROM tasks WHERE id = ?').run(followup.id);
+  if(resetCompletionChoice)db.get().prepare('UPDATE task_completion_choices SET recurrence_handled=0 WHERE task_id=? AND recurrence_handled=1').run(taskId);
   return queued;
 }
 
-function discardRecurrenceFollowup(taskId) {
+function discardRecurrenceFollowup(taskId,{resetCompletionChoice=false}={}) {
   if(db.get().prepare('SELECT 1 FROM task_incomplete_closures WHERE task_id=?').get(taskId))return 0;
   const task = db.get().prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
   const source = task && recurringCohortMember(task);
-  if (!source?.rotation_group) return discardRecurrenceFollowupSingle(taskId);
+  if (!source?.rotation_group) return discardRecurrenceFollowupSingle(taskId,{resetCompletionChoice});
 
   const cohort = recurringCohort(source);
   const followups = cohort.map((member) => recurrenceFollowupOf(member.id));
@@ -3952,6 +3959,8 @@ function discardRecurrenceFollowup(taskId) {
     for (const followup of followups) queued += queueTodoDeletion('tasks', followup) ? 1 : 0;
     const placeholders = followups.map(() => '?').join(',');
     db.get().prepare(`DELETE FROM tasks WHERE id IN (${placeholders})`).run(...followups.map((f) => f.id));
+    if(resetCompletionChoice)db.get().prepare(`UPDATE task_completion_choices SET recurrence_handled=0
+      WHERE task_id IN (${placeholders}) AND recurrence_handled=1`).run(...cohort.map(member=>member.id));
   })();
   return queued;
 }
@@ -3990,15 +3999,22 @@ function shiftedStartDate(startDate, dueDate, nextDue) {
  */
 function spawnRecurrenceFollowupSingle(task, {expirationAnchor=false}={}) {
   if (!task || task.parent_task_id) return;
-  if(db.get().prepare('SELECT 1 FROM task_completion_choices WHERE task_id=? AND recurrence_handled=1').get(task.id))return;
+  const completionChoice=db.get().prepare('SELECT recurrence_handled FROM task_completion_choices WHERE task_id=?').get(task.id);
+  if(completionChoice?.recurrence_handled)return;
   const closure=db.get().prepare('SELECT * FROM task_incomplete_closures WHERE task_id=? AND recurrence_closed_at IS NOT NULL').get(task.id);
   if(closure?.recurrence_handled)return;
+  // A cohort may wait for peers before entering this function. Record handling
+  // only with materialization, an existing successor, or an exhausted rule.
+  const markHandled=()=>{
+    if(completionChoice)db.get().prepare('UPDATE task_completion_choices SET recurrence_handled=1 WHERE task_id=?').run(task.id);
+    if(closure)db.get().prepare('UPDATE task_incomplete_closures SET recurrence_handled=1 WHERE task_id=?').run(task.id);
+  };
   const series=ensureSeriesDefinition(db.get(),task.id);
   if(!series)return;
   if (!isRecurrenceFrontier(db.get(),task.id)) return;
   // Höchstens eine Folgeinstanz je Erledigung - sonst legt doppeltes Abhaken nach.
   if (recurrenceFollowupOf(task.id)) {
-    if(closure)db.get().prepare('UPDATE task_incomplete_closures SET recurrence_handled=1 WHERE task_id=?').run(task.id);
+    markHandled();
     return;
   }
 
@@ -4009,7 +4025,7 @@ function spawnRecurrenceFollowupSingle(task, {expirationAnchor=false}={}) {
   // expiration continues to supply no completion-relative anchor.
   const completedOn = closure ? todayKey(db.get(),new Date(closure.recurrence_closed_at)) : todayInHouseholdZone();
   const plan=seriesMaterializationPlan(db.get(),task,{completedOn,expirationAnchor});
-  if(!plan){if(closure)db.get().prepare('UPDATE task_incomplete_closures SET recurrence_handled=1 WHERE task_id=?').run(task.id);return;}
+  if(!plan){markHandled();return;}
   const sourceTask=task;
   const definition=plan.definition.data;
   task={...sourceTask,...definition.task,assigned_to:definition.assigned_user_ids[0]??null};
@@ -4173,7 +4189,7 @@ function spawnRecurrenceFollowupSingle(task, {expirationAnchor=false}={}) {
     recordTaskActivity(db.get(),Number(newTask.lastInsertRowid),'recurrence_generated',task.created_by,
       {title:task.title,revision:db.get().prepare('SELECT revision FROM tasks WHERE id=?').get(newTask.lastInsertRowid).revision});
     recordOccurrenceDefinition(db.get(),Number(newTask.lastInsertRowid),{definitionId:plan.definition.id,startDate:nextStartDate,dueDate:nextDate,baseline:true});
-    if(closure)db.get().prepare('UPDATE task_incomplete_closures SET recurrence_handled=1 WHERE task_id=?').run(sourceTask.id);
+    markHandled();
     return Number(newTask.lastInsertRowid);
   })();
 }

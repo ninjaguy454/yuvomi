@@ -189,7 +189,6 @@ function applyTransition(d, task, status, actorId, effects, {preserveFollowup=fa
     const choice=d.prepare('SELECT recurrence_handled FROM task_completion_choices WHERE task_id=?').get(task.id);
     if(!choice?.recurrence_handled) {
       recurrenceHooks?.spawn(d.prepare('SELECT * FROM tasks WHERE id=?').get(task.id));
-      if(choice&&task.is_recurring)d.prepare('UPDATE task_completion_choices SET recurrence_handled=1 WHERE task_id=?').run(task.id);
     }
   } else if (task.status === 'done') {
     // Historical supervisors are not all revived when an occurrence reopens.
@@ -197,7 +196,8 @@ function applyTransition(d, task, status, actorId, effects, {preserveFollowup=fa
     d.prepare("UPDATE task_responsibilities SET status='active' WHERE task_id=? AND status='fulfilled' AND role!='supervisor'").run(task.id);
     d.prepare(`UPDATE task_assignment_context SET state=CASE WHEN strategy='open_claimable'
       AND (SELECT assigned_to FROM tasks WHERE id=?) IS NULL THEN 'open' ELSE 'assigned' END WHERE task_id=?`).run(task.id,task.id);
-    if(!preserveFollowup&&!d.prepare('SELECT 1 FROM task_completion_choices WHERE task_id=?').get(task.id))effects.undone += recurrenceHooks?.discard(task.id) || 0;
+    if(!preserveFollowup&&effects.resetRecurrenceTaskId!==task.id
+      &&!d.prepare('SELECT 1 FROM task_completion_choices WHERE task_id=?').get(task.id))effects.undone += recurrenceHooks?.discard(task.id) || 0;
   }
   syncWorkflowInstanceForTask(d, task.id, {syncParent:false});
 }
@@ -278,6 +278,7 @@ export function changeTaskStatus(d, taskId, status, {actorId=null, principal=act
     const explicitChoice=status==='done'&&originalRootRequest&&typeof body.complete_remaining==='boolean';
     const effects={pending:false,undone:0,changedTaskIds:new Set(),bulkCompletion:status==='done'&&incomplete.length>0&&body.complete_remaining!==false,
       completionChoiceTaskId:explicitChoice?task.id:null,completeRemaining:body.complete_remaining,
+      resetRecurrenceTaskId:status==='open'&&originalRootRequest&&body.reset_progress===true&&!resumeProgress?task.id:null,
       resumeProgress, // Trusted compatibility reopening only; never read from request bodies.
       // A one-action authenticated approval retains its human actor and display origin.
       // This trusted option is never accepted from a Task request body.
@@ -304,6 +305,11 @@ export function changeTaskStatus(d, taskId, status, {actorId=null, principal=act
     }
     for (const child of targets) applyTransition(d,child,status,actorId,effects,{now,optionalReopenScope});
     applyTransition(d,task,status,actorId,effects,{preserveFollowup,now,optionalReopenScope});
+    // Ordinary reopen preserves the completed occurrence's successor. An
+    // explicit progress reset keeps the established pristine-tree undo;
+    // the adapter clears receipts only after it actually removes that tree.
+    if(effects.resetRecurrenceTaskId===task.id)
+      effects.undone += recurrenceHooks?.discard(task.id,{resetCompletionChoice:true}) || 0;
     // A Workflow may depend on the linked supervision Task. Publish the
     // authoritative action to that projection before checking its parent.
     const syncProjections = sourceId => {

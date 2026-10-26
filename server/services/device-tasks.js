@@ -155,10 +155,11 @@ export function deviceTaskStatus(d,principal,id,body={}) {
       fail('This display can change existing progress only.');
     assertTaskMutation(d,principal,task,body,{operation:'status'});
     reconcileTaskSupervision(d,task.id,{actorId:null});
+    const includeOptional=body.status==='done'&&body.complete_remaining===true&&!task.parent_task_id;
     const scope=[],seen=new Set();
     const collect=row=>{if(seen.has(row.id))return;seen.add(row.id);scope.push(row);
       if(['done','open'].includes(body.status)&&!(body.status==='done'&&body.complete_remaining===false))for(const child of actionableSubtasks(d,row.id)) {
-        if(body.status==='done' && (child.is_optional || !['open','in_progress'].includes(child.status)))continue;collect(child);
+        if(body.status==='done' && (child.is_optional&&!includeOptional || !['open','in_progress'].includes(child.status)))continue;collect(child);
       }};
     collect(task);
     for(const row of scope) {

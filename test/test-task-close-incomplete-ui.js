@@ -64,3 +64,9 @@ test('saved legacy status filters normalize to Done without duplicate or invisib
   assert.deepEqual(ui.normalizeFilterSet({status:['done','closed_incomplete','open']}).status,['done','open']);
   assert.deepEqual(ui.normalizeFilterSet({status:['closed_incomplete','expired'],priority:'high'}),{status:['done','expired'],priority:['high'],assigned_to:[],tags:[]});
 });
+
+test('remaining optional actions expose the explicit root completion checkbox',()=>{
+  const root=task();root.subtasks[1].is_optional=true;
+  const prompt=taskStatusConfirmation(root,'done');assert.ok(prompt?.checkbox);
+  assert.doesNotMatch(prompt.detail,/Optional subtasks stay as they are/);
+});

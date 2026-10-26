@@ -58,13 +58,12 @@ test('nine required steps finish the recurring parent once while optional work r
  assert.equal(successors().length,1);
 });
 
-test('bulk completion skips optional branches and their independent points',()=>{
+test('explicit root completion includes optional branches and their earned points',()=>{
  const root=task('Morning',null,false,2),required=task('Required',root),optional=task('Optional',root,true,5),nested=task('Optional branch child',optional);
  transition(root,'done',learner,{complete_remaining:true});
- assert.equal(read(required).status,'done');assert.equal(read(optional).status,'open');assert.equal(read(nested).status,'open');
- assert.equal(count('SELECT COUNT(*) n FROM reward_ledger WHERE task_id=?',optional),0);
- assert.equal(d.prepare('SELECT SUM(delta) n FROM reward_ledger').get().n,2);
- assert.throws(()=>transition(nested),error=>error.details?.reason==='optional_parent_completed');
+ assert.equal(read(required).status,'done');assert.equal(read(optional).status,'done');assert.equal(read(nested).status,'done');
+ assert.equal(count('SELECT COUNT(*) n FROM reward_ledger WHERE task_id=?',optional),1);
+ assert.equal(d.prepare('SELECT SUM(delta) n FROM reward_ledger').get().n,7);
 });
 
 test('completed optional progress is retained and all-optional parents need explicit completion',()=>{

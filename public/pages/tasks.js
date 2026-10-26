@@ -16,7 +16,7 @@ import { isDevicePrincipal, deviceBootstrap } from '/utils/device-context.js';
 
 import { api } from '/api.js';
 import { canTask, canCapability, isPermAdmin } from '/permissions.js';
-import { actionableSubtasks, changeTaskStatus, taskRevision, taskStatusConfirmation } from '/utils/task-state.js';
+import { actionableSubtasks, changeTaskStatus, taskRevision, confirmTaskStatusChange } from '/utils/task-state.js';
 import {captureCompletionSound,playUiSound} from '/utils/ui-sounds.js';
 import {mountCardColorPicker} from '/components/card-color-picker.js';
 import {cardColorAttribute} from '/utils/card-colors.js';
@@ -2988,6 +2988,7 @@ function wireTaskForm(panel, {
   taskFormControls.set(form, { colorPicker, skills, subtasks, pool, poolExplicit:!!savedPool, poolTouched:false,
     rotations, refreshAssignment, addSkill, disposeMentions, originalTask: task ? structuredClone(task) : null });
   refreshAssignment?.();
+  form.querySelector('#task-status')?.addEventListener('change',()=>{taskFormControls.get(form).statusDecision=null;});
   wireActivityTemplatePrefill(panel, { task, presetActivityTemplate, presetDates, container, onChanged, syncReady });
   panel.querySelector('[data-save-as-template]')?.addEventListener('click', () => saveTaskAsTemplate(form));
 
@@ -3713,13 +3714,14 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
   if (taskId && controls?.originalTask) {
     Object.assign(body, taskRevision(controls.originalTask));
     if (body.status && body.status !== controls.originalTask.status) {
-      const confirmation = taskStatusConfirmation(controls.originalTask, body.status);
-      if (confirmation) {
-        if (!await confirmOverModal(confirmation.message, { detail: confirmation.detail, confirmLabel: confirmation.confirmLabel, danger: confirmation.danger, closeOnConfirm: false })) {
-          submitBtn.disabled = false; submitBtn.textContent = originalLabel; return;
-        }
-        body[confirmation.flag] = true;
-      }
+      const key=`${controls.originalTask.id}:${body.expected_revision}:${body.expected_parent_revision||''}:${body.status}`;
+      const decision=controls.statusDecision?.key===key?controls.statusDecision.flags
+        :await confirmTaskStatusChange(controls.originalTask,body.status);
+      if(decision===null){submitBtn.disabled=false;submitBtn.textContent=originalLabel;return;}
+      // A retry of an unchanged server revision retains the explicit choice,
+      // including false. Later form edits remain a separate saved draft.
+      controls.statusDecision={key,flags:{...decision}};
+      Object.assign(body,decision);
     }
   }
   if (managedActivity && activityRequiresSubject && !activitySubjectUserId) {

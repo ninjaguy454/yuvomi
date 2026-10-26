@@ -141,3 +141,19 @@ test('legacy saved filters and collapse preferences show converted Done work thr
   await page.screenshot({path:join(output,'legacy-filter-restored-done.png'),fullPage:true});
   results.push({legacy_filter:'done',obsolete_collapse_removed:true,restored_status:'done',legacy_new_points:0});
 });
+
+for(const choice of [false,true])test(`optional-only completion choice ${choice} uses the normal root checkbox`,{timeout:90000},async()=>{
+  const width=choice?390:1366,page=await client(width);
+  const root=(await api(page,'post','/tasks',{title:`Synthetic optional-only ${choice}`,assigned_to:[3],scoring_mode:'subtasks',points:3,subtasks:[{title:'Optional actionable work',points:3,is_optional:true}]})).data;
+  await open(page,root.id);await page.select('[data-focus-key="status"]','done');
+  await page.waitForSelector('#confirm-modal-checkbox',{visible:true});
+  assert.match(await page.$eval('#confirm-modal-ok',element=>element.closest('.modal-panel').textContent),/including optional actions/);
+  await page.waitForFunction(()=>{const input=document.getElementById('confirm-modal-checkbox'),rect=input?.getBoundingClientRect();return rect&&document.elementFromPoint(rect.x+rect.width/2,rect.y+rect.height/2)===input;},{timeout:30000});
+  if(!choice)await page.click('#confirm-modal-checkbox');
+  await page.screenshot({path:join(output,`optional-only-${choice}-confirmation.png`),fullPage:true});
+  await press(page,'#confirm-modal-ok');await page.waitForFunction(()=>document.querySelector('[data-focus-key="status"]')?.value==='done');
+  assert.equal(row(root.id).status,'done');assert.equal(row(root.subtasks[0].id).status,choice?'done':'open');
+  const points=d.prepare('SELECT COALESCE(SUM(delta),0) n FROM reward_ledger WHERE task_id=?').get(root.subtasks[0].id).n;assert.equal(points,choice?3:0);
+  await page.screenshot({path:join(output,`optional-only-${choice}-completed.png`),fullPage:true});
+  results.push({optional_only:true,choice,width,status:'done',child_status:row(root.subtasks[0].id).status,points});
+});

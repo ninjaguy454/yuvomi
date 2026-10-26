@@ -229,13 +229,15 @@ export function changeTaskStatus(d, taskId, status, {actorId=null, principal=act
     const containerActions = (gate.containerActionTaskIds||[])
       .map(id=>d.prepare('SELECT * FROM tasks WHERE id=?').get(id)).filter(Boolean);
     const children = containerActions.length ? containerActions : actionableSubtasks(d,task.id);
+    const originalRootRequest=requested.id===task.id&&!task.parent_task_id&&!containerActions.length&&(gate.sourceTaskId==null||gate.sourceTaskId===task.id);
+    const includeOptional=status==='done'&&body.complete_remaining===true&&originalRootRequest;
     const descendants=[];
     const visited=new Set([task.id]);
     const collectDescendants = rows => {
       for(const child of rows) {
         if(visited.has(child.id))continue;
         visited.add(child.id);
-        if(status==='done'&&child.is_optional&&!containerActions.length)continue;
+        if(status==='done'&&child.is_optional&&!containerActions.length&&!includeOptional)continue;
         if(status==='done'&&!['open','in_progress'].includes(child.status))continue;
         collectDescendants(actionableSubtasks(d,child.id));
         descendants.push(child);
@@ -259,12 +261,12 @@ export function changeTaskStatus(d, taskId, status, {actorId=null, principal=act
     if (status==='done' && incomplete.length && body.complete_remaining===undefined)
       throw new TaskStateError('Choose whether to complete this Task’s remaining subtasks.',
         {confirmation_required:'complete_remaining',remaining:incomplete.length});
-    if(status==='done'&&body.complete_remaining===false&&(task.parent_task_id||containerActions.length))
+    if(status==='done'&&body.complete_remaining===false&&!originalRootRequest)
       throw new TaskStateError('Choose remaining-subtask completion on the whole original activity.',{reason:'whole_activity_required'});
     if (status==='open' && !resumeProgress && ((task.status==='done'&&!task.parent_task_id)||descendants.some(child=>child.status==='done')) && body.reset_progress!==true)
       throw new TaskStateError('Resetting this Task will clear its subtask progress.',
         {confirmation_required:'reset_progress'});
-    const explicitChoice=status==='done'&&!task.parent_task_id&&typeof body.complete_remaining==='boolean';
+    const explicitChoice=status==='done'&&originalRootRequest&&typeof body.complete_remaining==='boolean';
     const effects={pending:false,undone:0,changedTaskIds:new Set(),bulkCompletion:status==='done'&&incomplete.length>0&&body.complete_remaining!==false,
       completionChoiceTaskId:explicitChoice?task.id:null,completeRemaining:body.complete_remaining,
       resumeProgress, // Trusted compatibility reopening only; never read from request bodies.

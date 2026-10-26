@@ -100,6 +100,49 @@ async function mounted({task=null,width=390,pointsAllowed=true,user={id:1,role:'
 async function set(page,selector,value){await page.$eval(selector,(el,value)=>{el.value=value;el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));},value);}
 const scoring={mode:'whole_task',root_task_id:70,mode_locked:false,review_required:false,earned:[{user_id:1,points:4}],potential:[{user_id:1,points:3}],personal_total:7,settled_task_ids:[],settlements:[]};
 const task={id:70,title:'Routine',description:'',status:'open',points:999,assigned_to:1,assigned_users:[members[0]],priority:'none',category:'misc',revision:4,subtasks:[],scoring};
+const completionTask=()=>({...task,points:5,scoring:{...scoring,earned:[],potential:[{user_id:1,points:5}],personal_total:5},documents:[],
+  permissions:{view:true,edit:true,complete:true,change_assignment:true,change_points:true,change_required_skills:true},
+  subtasks:[{id:71,title:'Required action',status:'open',points:2,parent_task_id:70},{id:72,title:'Optional action',status:'open',points:3,is_optional:1,parent_task_id:70}]});
+
+for(const choice of [false,true])test(`editor status Done offers the shared completion choice ${choice} and sends it through PUT`,async()=>{
+  const page=await mounted({task:completionTask(),width:choice?1366:390,quietLive:true});try{
+    await set(page,'#task-status','done');await page.click('#task-submit-btn');
+    await page.waitForSelector('#confirm-modal-checkbox');
+    assert.equal(requests.filter(row=>row.method==='PUT'&&row.path==='/tasks/70').length,0);
+    if(!choice)await page.click('#confirm-modal-checkbox');await page.click('#confirm-modal-ok');
+    await page.waitForFunction(()=>!document.querySelector('#task-form'));
+    const saved=requests.filter(row=>row.method==='PUT'&&row.path==='/tasks/70');assert.equal(saved.length,1);assert.equal(saved[0].body.status,'done');assert.equal(saved[0].body.complete_remaining,choice);
+    assert.equal(requests.filter(row=>row.method==='PATCH'&&row.path==='/tasks/70/status').length,0);
+  }finally{await page.dispose();}
+});
+
+test('editor completion false survives an uncertain unapplied PUT retry while preserving newer draft edits',async()=>{
+  const page=await mounted({task:completionTask(),width:390,quietLive:true});try{
+    await set(page,'#task-title','First completion draft');await set(page,'#task-status','done');putOutcome='unapplied_unknown';
+    await page.click('#task-submit-btn');await page.waitForSelector('#confirm-modal-checkbox');await page.click('#confirm-modal-checkbox');await page.click('#confirm-modal-ok');
+    await page.waitForSelector('#task-form-save-status [data-task-save-check]');
+    await set(page,'#task-title','Newer completion draft');await page.click('#task-form-save-status [data-task-save-check]');
+    await page.waitForFunction(()=>document.querySelector('#task-submit-btn')?.disabled===false);
+    assert.equal(await page.$eval('#task-title',element=>element.value),'Newer completion draft');
+    await page.click('#task-submit-btn');await page.waitForFunction(()=>!document.querySelector('#task-form'));
+    const saves=requests.filter(row=>row.method==='PUT'&&row.path==='/tasks/70');assert.equal(saves.length,2);assert.deepEqual(saves.map(row=>row.body.complete_remaining),[false,false]);
+    assert.deepEqual(saves.map(row=>row.body.title),['First completion draft','Newer completion draft']);assert.equal(saves[1].body.expected_revision,saves[0].body.expected_revision);
+  }finally{putOutcome=null;await page.dispose();}
+});
+
+test('editor completion acknowledgement preserves newer draft edits without repeating completion',async()=>{
+  const page=await mounted({task:completionTask(),width:390,quietLive:true});try{
+    await set(page,'#task-status','done');holdPut=true;await page.click('#task-submit-btn');
+    await page.waitForSelector('#confirm-modal-checkbox');await page.click('#confirm-modal-checkbox');await page.click('#confirm-modal-ok');
+    for(let attempt=0;attempt<100&&!heldPutResponse;attempt++)await new Promise(resolve=>setTimeout(resolve,10));assert.ok(heldPutResponse);
+    await set(page,'#task-title','Newer draft while completion saves');const first=heldPutResponse;heldPutResponse=null;holdPut=false;first.res.json(first.result);
+    await page.waitForFunction(()=>document.querySelector('#task-submit-btn')?.disabled===false);
+    assert.equal(await page.$eval('#task-title',element=>element.value),'Newer draft while completion saves');
+    await page.click('#task-submit-btn');await page.waitForFunction(()=>!document.querySelector('#task-form'));
+    const saves=requests.filter(row=>row.method==='PUT'&&row.path==='/tasks/70');assert.equal(saves.length,2);assert.equal(saves[0].body.complete_remaining,false);assert.equal(saves[1].body.complete_remaining,undefined);
+    assert.equal(saves[1].body.title,'Newer draft while completion saves');assert.equal(saves[1].body.expected_revision,saves[0].body.expected_revision+1);
+  }finally{holdPut=false;heldPutResponse?.res.json(heldPutResponse.result);heldPutResponse=null;await page.dispose();}
+});
 
 test('named modes switch active labeled controls and retain zero and inactive values',async()=>{
   const page=await mounted();try{

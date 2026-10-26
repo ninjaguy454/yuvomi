@@ -31,11 +31,14 @@ export function taskStatusConfirmation(task, status) {
   const completesHelperWork = pendingDelegated.length > 0
     && pendingDelegated.every((child) => supervisionOf(child)?.can_complete === true && child.permissions?.complete !== false);
   const originalRoot=!task.parent_task_id&&!task.is_supervision_projection&&!task.helper_view_user_id;
-  const children = (originalRoot||completesHelperWork ? structural : actionableSubtasks(task)).filter(child => !child.is_optional);
+  const children = (originalRoot||completesHelperWork ? structural : actionableSubtasks(task)).filter(child => originalRoot||!child.is_optional);
   if (status === 'done' && (children.some((child) => child.status !== 'done')
-    || Number(task.scheduled_subtask_total || 0) > Number(task.scheduled_subtask_done || 0))) {
+    || Number(task.scheduled_subtask_total || 0) > Number(task.scheduled_subtask_done || 0)
+    || originalRoot&&Number(task.scheduled_optional_subtask_total||0)>Number(task.scheduled_optional_subtask_done||0))) {
     return { flag: 'complete_remaining', message: 'Complete this Task?',
-      detail: 'Choose whether to mark remaining required subtasks complete. Uncheck to keep their saved progress. Optional subtasks stay as they are. Points follow the activity’s scoring rules; required supervision still applies.',
+      detail: originalRoot
+        ? 'Choose whether to mark remaining subtasks, including optional actions, complete. Uncheck to keep their saved progress. Points follow the activity’s scoring rules; required supervision still applies.'
+        : 'Remaining required subtasks will be marked complete. Optional subtasks stay as they are. Points follow the activity’s scoring rules; required supervision still applies.',
       checkbox: originalRoot
         ? {label:'Complete remaining subtasks',checked:true}:null,
       confirmLabel: 'Complete Task' };
@@ -50,6 +53,16 @@ export function taskStatusConfirmation(task, status) {
   return null;
 }
 
+/** Shared by progress PATCH and editor PUT; Cancel returns no decision. */
+export async function confirmTaskStatusChange(task,status,{confirm:requestConfirmation=confirmOverModal}={}) {
+  const confirmation=taskStatusConfirmation(task,status);
+  if(!confirmation)return {};
+  let completeRemaining=true;
+  const checkbox=confirmation.checkbox?{...confirmation.checkbox,onChange:checked=>{completeRemaining=checked;}}:null;
+  if(!await requestConfirmation(confirmation.message,{...confirmation,checkbox,closeOnConfirm:false}))return null;
+  return {[confirmation.flag]:confirmation.flag==='complete_remaining'?completeRemaining:true};
+}
+
 export async function changeTaskStatus(task, status, { confirm: requestConfirmation = confirmOverModal, beforeRequest = () => {},gesture=null,soundTicket=null,signal,parentTaskId,onUncertain=()=>{} } = {}) {
   const authentication=authenticationSnapshot();
   const cue=status==='done'?(soundTicket||captureCompletionSound(gesture)):null;
@@ -59,14 +72,10 @@ export async function changeTaskStatus(task, status, { confirm: requestConfirmat
   if (status === 'skipped') throw new Error('Use Skip this occurrence from Task details.');
   if (task.status === 'expired') throw new Error('Reopen this expired Task before changing its status.');
   if (status === 'expired') throw new Error('Tasks expire automatically at their deadline.');
-  const confirmation = taskStatusConfirmation(task, status);
   const body = { status, ...taskRevision(task) };
-  if (confirmation) {
-    let completeRemaining=true;
-    const checkbox=confirmation.checkbox?{...confirmation.checkbox,onChange:checked=>{completeRemaining=checked;}}:null;
-    if (!await requestConfirmation(confirmation.message, { ...confirmation, checkbox,closeOnConfirm: false })) return null;
-    body[confirmation.flag] = confirmation.flag==='complete_remaining'?completeRemaining:true;
-  }
+  const decision=await confirmTaskStatusChange(task,status,{confirm:requestConfirmation});
+  if(decision===null)return null;
+  Object.assign(body,decision);
   // A pending projection starts only after confirmation, with the original
   // revision still attached to the write. Cancel never paints unsaved progress.
   beforeRequest();

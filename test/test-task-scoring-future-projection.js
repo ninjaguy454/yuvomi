@@ -528,12 +528,13 @@ for(const ids of [[3],[2,3]])test('round4 qualified explicit independent root se
   assert.deepEqual(f.row(root),source);assert.deepEqual(rotationState(f),cursors);assert.equal((await f.finish(root)).status,200);
   const next=successor(f,root);assert.equal(next.assigned_to,ids[0]);assert.deepEqual((await f.call('GET','/tasks/'+next.id)).data.scoring.potential,p.data.after);assert.deepEqual(unitTotals(p.data.after_units),p.data.after);
 });
-test('round4 changed canonical order cannot promote an excluded secondary to independent primary',async t=>{
+test('future primary order and explicit Owner cannot promote an excluded secondary',async t=>{
   const f=await scoringFixture(t),{root,add}=await participantTarget(f);assert.equal((await f.edit(root,add)).status,200);const skill=pending(f,root).skill_ids[0];
   f.d.prepare("UPDATE user_skill_proficiency SET proficiency='normal' WHERE user_id=3 AND skill_id=?").run(skill);
   assert.equal((await checkedDefinitionSave(f,root,assignmentPatch([2,3]))).status,200);
   f.d.prepare("UPDATE user_skill_proficiency SET proficiency='excluded' WHERE user_id=3 AND skill_id=?").run(skill);
   await rejectsIndependentIntent(f,root,assignmentPatch([3,2]));
+  await rejectsIndependentIntent(f,root,assignmentPatch([3,2],{owner_user_id:3}));
 });
 for(const points of [0,7])test('round4 zero amounts and disabled enrollment do not exempt changed independent intent '+points,async t=>{
   const f=await scoringFixture(t),{root,add}=await participantTarget(f);assert.equal((await f.edit(root,add)).status,200);

@@ -414,7 +414,8 @@ function assertFutureIndependentAssignmentIntent(req,task,state,stored,before,de
   const sharedBinding = before.binding?.snapshot?.fixed_assignee_ids && definition.binding?.snapshot?.fixed_assignee_ids;
   if(!Object.hasOwn(req.body.future_patch?.fields??{},'assigned_to')||definition.binding&&!sharedBinding
     ||(definition.task.assignment_mode??'fixed')!=='fixed'
-    ||sameIdOrder(before.assignee_policy?.direct_assignee_ids??before.assigned_user_ids,definition.assignee_policy?.direct_assignee_ids??definition.assigned_user_ids))return;
+    ||sameIdOrder(before.assignee_policy?.direct_assignee_ids??before.assigned_user_ids,definition.assignee_policy?.direct_assignee_ids??definition.assigned_user_ids)
+      &&before.assigned_user_ids?.[0]===definition.assigned_user_ids?.[0]&&before.owner_user_id===definition.owner_user_id)return;
   const d=db.get(),skills=definition.skill_ids,assigned=definition.assignee_policy?.direct_assignee_ids??definition.assigned_user_ids;
   // The central empty-list/no-requirement rule needs no future date proof.
   if(!sharedBinding&&(!skills.length||!assigned.length))return assertTaskSkillAssignments(d,skills,assigned);

@@ -22,6 +22,8 @@ export function createSubtaskQueue({ getTask, getChild, canDispatch = () => true
       return failure('This Task changed while steps were queued. Review it before trying again.');
     if (task.archived_at || ['expired','skipped','closed_incomplete'].includes(task.status) || child.archived_at || ['expired','skipped','closed_incomplete'].includes(child.status))
       return failure('This Task is no longer available for queued progress.');
+    if(task.status==='done'&&task.completion_kept_subtasks)
+      return failure('Reopen the completed activity before changing retained subtask progress.','parent_completed');
     if (child.is_optional && task.status === 'done')
       return failure('Reopen the completed parent Task before changing an optional action.', 'optional_parent_completed');
     const allowed = canDispatch(child, item.status, task);

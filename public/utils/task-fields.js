@@ -46,7 +46,6 @@ export const STATUSES = () => [
   { value: 'done',        label: t('tasks.statusDone')       },
   { value: 'expired',     label: 'Expired'                  },
   { value: 'skipped',     label: 'Skipped'                  },
-  { value: 'closed_incomplete', label: 'Closed without completing remaining subtasks' },
 ];
 
 // Archive has its own destination; it is not a status filter in active Tasks.

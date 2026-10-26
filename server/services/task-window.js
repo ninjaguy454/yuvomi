@@ -17,12 +17,18 @@ export function taskExpirationDue(d, task, now = new Date()) {
   const deadline = taskDeadlineMs(d, task);
   return task?.expiration_policy === 'expire_incomplete' && !task.archived_at
     && ['open','in_progress'].includes(task.status) && deadline != null && Number(now) >= deadline
-    && !taskWindowAncestors(d,task.id).some(row=>['skipped','closed_incomplete'].includes(row.status));
+    && !taskWindowAncestors(d,task.id).some(row=>['skipped','closed_incomplete'].includes(row.status)||row.status==='done'&&row.completion_kept_subtasks);
 }
 /** Include structural ancestors and authoritative sources of helper projections. */
 export function taskWindowAncestors(d, taskId) {
   return taskReadStatement(d,`${ancestrySql(d,'?')}
     SELECT t.* FROM tasks t JOIN ancestry a ON a.id=t.id`).all(taskId);
+}
+
+/** Only explicit root-only completion freezes retained checklist evidence.
+ * Ordinary child undo and optional-action rules keep their existing behavior. */
+export function taskCompletedScope(d,taskId,{includeSelf=false}={}) {
+  return taskWindowAncestors(d,taskId).find(row=>row.status==='done'&&row.completion_kept_subtasks&&(includeSelf||row.id!==Number(taskId)))||null;
 }
 
 // Follow source edges at every level, including children of a retained helper.
@@ -38,5 +44,6 @@ function ancestrySql(d, seed) {
 /** Active projections must also respect the outcome of their canonical source. */
 export function taskUnskippedWhere(d, alias='t') {
   if(!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(alias))throw new TypeError('Invalid Task SQL alias.');
-  return `NOT EXISTS (${ancestrySql(d,`${alias}.id`)} SELECT 1 FROM tasks source JOIN ancestry a ON source.id=a.id WHERE source.status IN ('skipped','closed_incomplete'))`;
+  const retained=taskReadTableExists(d,'task_completion_choices')?` OR (source.status='done' AND source.completion_kept_subtasks=1 AND source.id!=${alias}.id)`:'';
+  return `NOT EXISTS (${ancestrySql(d,`${alias}.id`)} SELECT 1 FROM tasks source JOIN ancestry a ON source.id=a.id WHERE source.status IN ('skipped','closed_incomplete')${retained})`;
 }

@@ -326,6 +326,7 @@ function renderVisibilityBadge(visibility) {
 function groupKey(mode, id) {
   return `${mode}:${id}`;
 }
+const retiredStatusKey=key=>/(^|:)closed_incomplete(?=:|$)/.test(key);
 
 function isGroupCollapsed(mode, id) {
   return state.collapsedGroups.has(groupKey(mode, id));
@@ -351,7 +352,9 @@ function toggleGroup(mode, id) {
 function loadCollapsedGroups() {
   try {
     const raw = JSON.parse(taskViewStorage.getItem(COLLAPSED_GROUPS_KEY) ?? '[]');
-    state.collapsedGroups = new Set(Array.isArray(raw) ? raw.filter((k) => typeof k === 'string') : []);
+    const keys=Array.isArray(raw)?raw.filter(k=>typeof k==='string'):[];
+    state.collapsedGroups = new Set(keys.filter(k=>!retiredStatusKey(k)));
+    if(state.collapsedGroups.size!==keys.length)taskViewStorage.setItem(COLLAPSED_GROUPS_KEY,JSON.stringify([...state.collapsedGroups]));
   } catch {
     state.collapsedGroups = new Set();
   }
@@ -417,7 +420,6 @@ function groupBy(tasks, mode, categories = state.categories) {
     ['noDate',   groupNoDate],
     ['expired', 'Expired'],
     ['skipped', 'Skipped'],
-    ['closed_incomplete','Closed without completing remaining subtasks'],
   ];
   return order
     .filter(([, label]) => groups[label])
@@ -3929,7 +3931,6 @@ const KANBAN_SECTIONS = () => [
   { value: 'done', label: t('tasks.kanbanDone') },
   { value: 'expired', label: 'Expired' },
   { value: 'skipped', label: 'Skipped' },
-  { value: 'closed_incomplete', label: 'Closed without completing remaining subtasks' },
 ];
 
 /** In welcher Spalte steht die Aufgabe? Die Ablage sticht den Status. */
@@ -4075,7 +4076,7 @@ function renderKanban(container) {
       const bucketKey = `${state.boardScope}:${state.groupMode}:${bucket.id}`;
       const bucketSort = state.bucketSorts.get(bucketKey);
       const byStatus = new Map([
-        ['active', []], ['done', []], ['expired', []], ['skipped', []], ['closed_incomplete', []],
+        ['active', []], ['done', []], ['expired', []], ['skipped', []],
       ]);
       bucket.tasks.forEach((task) => (byStatus.get(kanbanSectionOf(task)) || byStatus.get('active')).push(task));
       return `<section class="kanban-col task-board__bucket" data-view-key="bucket:${esc(bucketKey)}" data-bucket-key="${esc(bucketKey)}">
@@ -5187,7 +5188,7 @@ async function toggleTagFilter(tag, container) {
 function normalizeFilterSet(f = {}) {
   const asList = (value) => (Array.isArray(value) ? value : (value ? [value] : [])).filter(Boolean).map(String);
   return {
-    status:      asList(f.status).filter(value => value !== 'archived' && STATUSES().some(item => item.value === value)),
+    status:      [...new Set(asList(f.status).map(value=>value==='closed_incomplete'?'done':value))].filter(value => value !== 'archived' && STATUSES().some(item => item.value === value)),
     priority:    asList(f.priority),
     assigned_to: asList(f.assigned_to),
     tags:        asList(Array.isArray(f.tags) ? f.tags : (f.tag ? [f.tag] : [])),
@@ -6560,6 +6561,8 @@ export async function render(container, { user }) {
   taskPageOperations.set(container, statusOperations);
   state.offersOnly = new URLSearchParams(window.location.search).get('offers') === '1';
   state.filters = normalizeFilterSet(state.filters);
+  state.collapsedBoardSections=new Set([...state.collapsedBoardSections].filter(key=>!retiredStatusKey(key)));
+  state.expandedBoardSections=new Set([...state.expandedBoardSections].filter(key=>!retiredStatusKey(key)));
   if (state.offersOnly) state.filters = { status: [], priority: [], assigned_to: [], tags: [] };
   state.user = user ?? null;
   state.currentUserId = user?.id ?? null;

@@ -14,6 +14,7 @@ import {addTaskAssigneePolicySchema} from './services/task-assignee-policy-schem
 import {addTaskScoringCompletionSchema} from './services/task-scoring-completion-schema.js';
 import {addTaskTemplateLaunchSchema} from './services/task-template-launch-schema.js';
 import {addTaskCloseSchema} from './services/task-close-schema.js';
+import {addTaskCompletionChoiceSchema} from './services/task-completion-choice-schema.js';
 import {addGroupCompatibilityReviewSchema} from './services/group-compatibility-schema.js';
 import {convertLegacyRotationGroups} from './services/legacy-rotation-conversion.js';
 /**
@@ -9327,6 +9328,7 @@ FORK_MIGRATIONS.push({version:10078,description:'Scope linked supervision to ind
   ALTER TABLE task_activity_support_tasks ADD COLUMN supervisor_scope TEXT NOT NULL DEFAULT 'single'
     CHECK(supervisor_scope IN ('single','per_action'));
 `});
+FORK_MIGRATIONS.push({version:10079,description:'Ordinary activity completion with optional remaining subtask completion',up:addTaskCompletionChoiceSchema});
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];
 
 const FORK_MIGRATION_REMAPS = [

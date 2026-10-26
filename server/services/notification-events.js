@@ -10,7 +10,7 @@ export function isNotificationDeliveryCurrent(database, notification) {
   // Expiration can commit after a reminder or assignment notification was
   // queued. Include ancestors: a completed child keeps its historical status.
   if (notification.entity_type === 'task' && taskWindowAncestors(database,notification.entity_id)
-    .some(row=>['expired','skipped','closed_incomplete'].includes(row.status))) return false;
+    .some(row=>['expired','skipped','closed_incomplete'].includes(row.status)||row.status==='done'&&row.completion_kept_subtasks)) return false;
   const scope = /^task-supervision-scope:(\d+):[a-f0-9]+$/.exec(notification.source_key || '');
   if (scope) {
     const view = inspectTaskSupervision(database, Number(scope[1]));

@@ -1,4 +1,4 @@
-import { taskWindowAncestors } from './task-window.js';
+import { taskWindowAncestors,taskCompletedScope } from './task-window.js';
 /**
  * Modul: Rewards (Belohnungen)
  * Zweck: Punkte-Vergabe bei Aufgaben-Erledigung und Salden-Berechnung aus dem
@@ -10,6 +10,7 @@ import { taskWindowAncestors } from './task-window.js';
 
 import { rewardOccurrenceProvenance } from './task-recurrence-frontier.js';
 import {taskRewardDefinition,recordTaskScoringSettlement,assertTaskScoringAward} from './task-scoring.js';
+import {taskReadTableExists} from './task-access.js';
 
 const REWARD_TX = `
   INSERT INTO reward_ledger (user_id, delta, type, reason, task_id, redemption_id, created_by)
@@ -48,6 +49,8 @@ export function awardForCompletion(d, taskId, actingUserId) {
     if (!task || !Number.isInteger(task.points) || task.points < 0) return false;
     if(task.parent_task_id && task.status!=='done')return false;
     if (taskWindowAncestors(d,taskId).some(row=>['expired','skipped','closed_incomplete'].includes(row.status))) return false;
+    if(taskCompletedScope(d,taskId))return false;
+    if(taskReadTableExists(d,'task_completion_choices')&&d.prepare('SELECT 1 FROM task_completion_choices WHERE task_id=? AND completion_recorded=0').get(taskId))return false;
     const provenance=rewardOccurrenceProvenance(d,taskId);
     if(provenance.retired)return false;
     const settled=d.prepare(`SELECT s.* FROM task_scoring_settlements s WHERE logical_key=?

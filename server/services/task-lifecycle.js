@@ -13,7 +13,7 @@ import { assertTaskMutation, taskCapabilities, taskDevicePrincipal } from './tas
 import { reconcileTaskSupervision, inspectTaskSupervision, taskSupervisionTransition, supervisionProjectionUpdates, taskSupervisionRootId } from './task-supervision.js';
 import * as v from '../middleware/validate.js';
 import { todayKey } from '../utils/timezone.js';
-import { taskDeadlineMs, taskStartMs, taskExpirationDue, taskWindowAncestors, EXPIRATION_POLICIES } from './task-window.js';
+import { taskDeadlineMs, taskStartMs, taskExpirationDue, taskWindowAncestors, taskCompletedScope, EXPIRATION_POLICIES } from './task-window.js';
 import { taskOptionalContext } from './task-optional.js';
 import { settleTaskRotations } from './task-rotation.js';
 
@@ -71,6 +71,8 @@ export function assertRecurringCompletionStarted(d, taskId, now = new Date()) {
 /** Shared by REST and compatibility writers, including changes to child actions. */
 export function assertTaskWindowAction(d, taskId, now = new Date(), {optionalReopenScope=null}={}) {
   assertTripTaskActive(d,taskId);
+  const completed=taskCompletedScope(d,taskId);
+  if(completed&&!optionalReopenScope?.has(completed.id))throw new TaskStateError('Reopen the completed activity before changing its retained subtask progress.',{reason:'parent_completed',task_id:completed.id});
   for (const task of taskWindowAncestors(d,taskId)) {
     if (task.status === 'closed_incomplete')
       throw new TaskStateError('This activity was closed without completing its remaining subtasks. A household parent or administrator must explicitly reopen it before progress can change.',{reason:'task_closed_incomplete',task_id:task.id});
@@ -159,6 +161,7 @@ function applyTransition(d, task, status, actorId, effects, {preserveFollowup=fa
   if (task.is_recurring && !task.parent_task_id && !recurrenceHooks)
     throw new TaskStateError('Recurring Task actions are temporarily unavailable. Please try again.', {}, 503);
   d.prepare('UPDATE tasks SET status=? WHERE id=?').run(status, task.id);
+  if(status==='done')d.prepare('UPDATE task_completion_choices SET completion_recorded=1 WHERE task_id=? AND completion_recorded=0').run(task.id);
   effects.changedTaskIds.add(task.id);
   effects.pending = markTodoOutbound('tasks', task, {...task, status}) || effects.pending;
   // Preserve the existing linked housekeeping payment projection.
@@ -167,11 +170,12 @@ function applyTransition(d, task, status, actorId, effects, {preserveFollowup=fa
     WHERE payment_task_id = ?`).run(status, task.id);
   syncTaskRewards(d, task.id, task.status, status, actorId);
   syncTaskCompletion(d, task.id, task.status, status, actorId, {sourceDevice:effects.sourceDevice});
-  recordTaskActivity(d, task.id, status === 'done' ? 'completed' : status === 'open' ? 'reset'
+  recordTaskActivity(d, task.id, status === 'done' ? 'completed' : status === 'open' ? effects.resumeProgress?'reopened':'reset'
     : task.status === 'done' ? 'reopened' : 'started',
   actorId, {from_status:task.status,to_status:status,title:task.title,
     ...(effects.sourceDevice ? {source_device:effects.sourceDevice,assigned_members:deviceResponsibilitySnapshot(d,task)} : {}),
-    ...(status==='done'?{assigned_user_id:task.assigned_to??null,completion_source:effects.bulkCompletion?'bulk':'individual'}:{})});
+    ...(status==='done'?{assigned_user_id:task.assigned_to??null,completion_source:effects.bulkCompletion?'bulk':'individual',
+      ...(effects.completionChoiceTaskId===task.id?{complete_remaining:effects.completeRemaining}:{})}:{})});
   if (status === 'done') {
     d.prepare(`UPDATE planning_obligations SET status='fulfilled',
       responded_at=strftime('%Y-%m-%dT%H:%M:%SZ','now'),updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
@@ -179,23 +183,28 @@ function applyTransition(d, task, status, actorId, effects, {preserveFollowup=fa
     d.prepare("UPDATE task_responsibilities SET status='fulfilled' WHERE task_id=? AND status='active'").run(task.id);
     d.prepare("UPDATE task_assignment_context SET state='fulfilled' WHERE task_id=?").run(task.id);
     settleTaskRotations(d, task.id, 'completed', {actorId});
-    recurrenceHooks?.spawn(d.prepare('SELECT * FROM tasks WHERE id=?').get(task.id));
+    const choice=d.prepare('SELECT recurrence_handled FROM task_completion_choices WHERE task_id=?').get(task.id);
+    if(!choice?.recurrence_handled) {
+      recurrenceHooks?.spawn(d.prepare('SELECT * FROM tasks WHERE id=?').get(task.id));
+      if(choice&&task.is_recurring)d.prepare('UPDATE task_completion_choices SET recurrence_handled=1 WHERE task_id=?').run(task.id);
+    }
   } else if (task.status === 'done') {
     // Historical supervisors are not all revived when an occurrence reopens.
     // The reconciler chooses one person for its new remaining scope below.
     d.prepare("UPDATE task_responsibilities SET status='active' WHERE task_id=? AND status='fulfilled' AND role!='supervisor'").run(task.id);
     d.prepare(`UPDATE task_assignment_context SET state=CASE WHEN strategy='open_claimable'
       AND (SELECT assigned_to FROM tasks WHERE id=?) IS NULL THEN 'open' ELSE 'assigned' END WHERE task_id=?`).run(task.id,task.id);
-    if(!preserveFollowup)effects.undone += recurrenceHooks?.discard(task.id) || 0;
+    if(!preserveFollowup&&!d.prepare('SELECT 1 FROM task_completion_choices WHERE task_id=?').get(task.id))effects.undone += recurrenceHooks?.discard(task.id) || 0;
   }
   syncWorkflowInstanceForTask(d, task.id, {syncParent:false});
 }
 
 /** Atomic child/parent/projection transition, including recurrence and rewards. */
-export function changeTaskStatus(d, taskId, status, {actorId=null, principal=actorId, body={}, authorize=true, requireRevision=authorize,now=null,sourceDevice=null}={}) {
+export function changeTaskStatus(d, taskId, status, {actorId=null, principal=actorId, body={}, authorize=true, requireRevision=authorize,now=null,sourceDevice=null,resumeProgress=false}={}) {
   const device = taskDevicePrincipal(principal);
   if (device) actorId = null; // Device IDs must never enter human actor or reward-recipient fields.
   if (!['open','in_progress','done'].includes(status)) throw new TaskStateError('Invalid Task status.',{},400);
+  if(body.complete_remaining!==undefined&&typeof body.complete_remaining!=='boolean')throw new TaskStateError('Choose whether to complete remaining subtasks.',{},400);
   return d.transaction(() => {
     now ??= new Date();
     const requested = d.prepare('SELECT * FROM tasks WHERE id=?').get(taskId);
@@ -203,6 +212,7 @@ export function changeTaskStatus(d, taskId, status, {actorId=null, principal=act
     if (authorize) assertTaskMutation(d,principal,requested,device?{...body,status}:{status},{operation:'status'});
     assertTaskRevision(d,requested,body,{required:requireRevision,requireParent:requireRevision});
     assertTaskWindowAction(d,requested.id,now);
+    if(requested.status===status&&status==='done')return {pending:false,undone:0,task:requested,parent_task:requested.parent_task_id?d.prepare('SELECT * FROM tasks WHERE id=?').get(requested.parent_task_id):null};
     if(retiredRecurrenceOccurrence(d,requested.id))throw new TaskStateError(
       'This historical occurrence was retired. Its recorded progress is preserved; use the current occurrence instead.',
       {reason:'occurrence_retired'});
@@ -226,17 +236,18 @@ export function changeTaskStatus(d, taskId, status, {actorId=null, principal=act
         if(visited.has(child.id))continue;
         visited.add(child.id);
         if(status==='done'&&child.is_optional&&!containerActions.length)continue;
+        if(status==='done'&&!['open','in_progress'].includes(child.status))continue;
         collectDescendants(actionableSubtasks(d,child.id));
         descendants.push(child);
       }
     };
-    if(status==='open'||status==='done')collectDescendants(children);
+    if(status==='open'&&!resumeProgress||status==='done')collectDescendants(children);
     const incomplete = descendants.filter(child=>child.status!=='done');
     // Check authorization before disclosing counts for independently private
     // children in a parent completion/reset confirmation.
-    if(authorize)for(const child of status==='done'?incomplete:status==='open'?descendants.filter(row=>row.status!=='open'):[])
+    if(authorize)for(const child of status==='done'&&body.complete_remaining!==false?incomplete:status==='open'?descendants.filter(row=>row.status!=='open'):[])
       assertTaskMutation(d,principal,child,{status},{operation:'status'});
-    if (status === 'done' && incomplete.length) {
+    if (status === 'done' && incomplete.length && body.complete_remaining!==false) {
       const incompleteIds = new Set(incomplete.map(child => child.id));
       const helperPending = inspectTaskSupervision(d, task.id).actions.some(action =>
         action.execution_mode === 'delegated' && action.state !== 'not_required' && !action.completed
@@ -245,17 +256,22 @@ export function changeTaskStatus(d, taskId, status, {actorId=null, principal=act
         'A helper must finish the transferred steps before this whole Task can be completed. Finish the steps you are responsible for in the checklist.',
         {reason: 'waiting_for_helper'});
     }
-    if (status==='done' && incomplete.length && body.complete_remaining!==true)
-      throw new TaskStateError('Completing this Task will also complete its remaining subtasks.',
+    if (status==='done' && incomplete.length && body.complete_remaining===undefined)
+      throw new TaskStateError('Choose whether to complete this Task’s remaining subtasks.',
         {confirmation_required:'complete_remaining',remaining:incomplete.length});
-    if (status==='open' && ((task.status==='done'&&!task.parent_task_id)||descendants.some(child=>child.status==='done')) && body.reset_progress!==true)
+    if(status==='done'&&body.complete_remaining===false&&(task.parent_task_id||containerActions.length))
+      throw new TaskStateError('Choose remaining-subtask completion on the whole original activity.',{reason:'whole_activity_required'});
+    if (status==='open' && !resumeProgress && ((task.status==='done'&&!task.parent_task_id)||descendants.some(child=>child.status==='done')) && body.reset_progress!==true)
       throw new TaskStateError('Resetting this Task will clear its subtask progress.',
         {confirmation_required:'reset_progress'});
-    const effects={pending:false,undone:0,changedTaskIds:new Set(),bulkCompletion:status==='done'&&incomplete.length>0,
+    const explicitChoice=status==='done'&&!task.parent_task_id&&typeof body.complete_remaining==='boolean';
+    const effects={pending:false,undone:0,changedTaskIds:new Set(),bulkCompletion:status==='done'&&incomplete.length>0&&body.complete_remaining!==false,
+      completionChoiceTaskId:explicitChoice?task.id:null,completeRemaining:body.complete_remaining,
+      resumeProgress, // Trusted compatibility reopening only; never read from request bodies.
       // A one-action authenticated approval retains its human actor and display origin.
       // This trusted option is never accepted from a Task request body.
       authorizationActor:principal,sourceDevice:device ? {id:device.id,name:device.name} : sourceDevice};
-    const targets = status==='done' ? incomplete : status==='open' ? descendants.filter(child=>child.status!=='open') : [];
+    const targets = status==='done' ? body.complete_remaining===false?[]:incomplete : status==='open' ? descendants.filter(child=>child.status!=='open') : [];
     // Validate every affected action before writing any progress.
     for (const child of targets) {
       if (authorize) assertTaskMutation(d,principal,child,{status},{operation:'status'});
@@ -267,6 +283,14 @@ export function changeTaskStatus(d, taskId, status, {actorId=null, principal=act
     // descendants while their old parent statuses still record completion.
     const optionalReopenScope=status==='open'?new Set([task.id,...targets.map(child=>child.id)]):null;
     const preserveFollowup=task.status==='done'&&actionableSubtasks(d,task.id).some(child=>child.is_optional);
+    if(explicitChoice) {
+      d.prepare('INSERT OR IGNORE INTO task_completion_choices(task_id,first_completed_at) VALUES(?,?)').run(task.id,now.toISOString());
+      d.prepare('UPDATE tasks SET completion_kept_subtasks=? WHERE id=?').run(body.complete_remaining===false?1:0,task.id);
+    } else if(status!=='done'&&task.completion_kept_subtasks) {
+      const deadline=taskDeadlineMs(d,task);
+      const policy=task.expiration_policy==='expire_incomplete'&&deadline!=null&&Number(now)>=deadline?'keep_overdue':task.expiration_policy;
+      d.prepare('UPDATE tasks SET completion_kept_subtasks=0,expiration_policy=? WHERE id=?').run(policy,task.id);
+    }
     for (const child of targets) applyTransition(d,child,status,actorId,effects,{now,optionalReopenScope});
     applyTransition(d,task,status,actorId,effects,{preserveFollowup,now,optionalReopenScope});
     // A Workflow may depend on the linked supervision Task. Publish the
@@ -296,6 +320,9 @@ export function changeTaskStatus(d, taskId, status, {actorId=null, principal=act
       return seen.size;
     };
     for (const parentId of [...parents].sort((a,b)=>depth(b)-depth(a))) {
+      // Explicitly finishing the selected parent may retain terminal historical
+      // children. Its own checklist projection must not immediately reopen it.
+      if(parentId===task.id&&status==='done')continue;
       const parent = d.prepare('SELECT * FROM tasks WHERE id=?').get(parentId);
       const siblings = actionableSubtasks(d,parent.id);
       if (siblings.length) {
@@ -407,6 +434,8 @@ export function reopenExpiredTask(d,taskId,{actorId,body={},now=new Date()}={}) 
     assertTaskRevision(d,task,body,{required:true,requireParent:true});
     if(task.status!=='expired')throw new TaskStateError('Only expired Tasks can be reopened.');
     if(task.archived_at)throw new TaskStateError('Restore this Task from the archive before reopening it.');
+    const completed=taskCompletedScope(d,taskId);
+    if(completed)throw new TaskStateError('Reopen the completed activity before changing retained subtask progress.',{reason:'parent_completed',task_id:completed.id});
     const closed=taskWindowAncestors(d,taskId).find(row=>row.status==='closed_incomplete');
     if(closed)throw new TaskStateError('A household parent or administrator must explicitly reopen the closed activity before progress can change.',{reason:'task_closed_incomplete',task_id:closed.id});
     if(taskWindowAncestors(d,taskId).some(row=>row.id!==task.id&&row.status==='expired'))

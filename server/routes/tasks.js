@@ -1827,11 +1827,10 @@ export function hydrateTask(task, me, supervisionViews = new Map(), starts = nul
   task.can_skip_occurrence=Boolean(task.permissions.skip_occurrence && !task.archived_at
     && ['open','in_progress','expired'].includes(task.status) && !task.parent_task_id && task.is_recurring
     && !taskSkipUnsupportedReason(db.get(),task));
-  task.can_close_incomplete=Boolean(task.permissions.close_incomplete&&!task.archived_at
-    &&['open','in_progress'].includes(task.status)&&!task.parent_task_id&&!taskCloseUnsupportedReason(db.get(),task));
+  task.can_close_incomplete=false; // Compatibility endpoint only; completion offers a checklist choice.
   const closure=db.get().prepare('SELECT first_closed_at,recurrence_handled FROM task_incomplete_closures WHERE task_id=?').get(task.id);
   task.incomplete_closure=closure?{first_closed_at:closure.first_closed_at,recurrence_handled:!!closure.recurrence_handled}:null;
-  task.can_reopen_incomplete=Boolean(task.permissions.close_incomplete&&!task.archived_at&&task.status==='closed_incomplete'&&closure);
+  task.can_reopen_incomplete=false;
   for(const row of [task,...task.subtasks])if(row.supervision) {
     // A shared parent does not expose a separately private child's title.
     let actions=row.supervision.actions.filter(action=>mayAccessTask(
@@ -1889,9 +1888,9 @@ export function hydrateTask(task, me, supervisionViews = new Map(), starts = nul
   attachTaskHelperViewMetadata(db.get(),[task,...task.subtasks]);
   // An unfinished helper container shares its source's closed window without
   // rewriting its physical checkbox/progress records.
-  if(task.is_supervision_projection&&task.status!=='done') {
-    const closed=taskWindowAncestors(db.get(),task.id).find(row=>row.status==='closed_incomplete');
-    if(closed){task.status='closed_incomplete';task.closed_incomplete_at=closed.closed_incomplete_at;}
+  if(task.supervision?.support_task_id===task.id&&task.status!=='done') {
+    const closed=taskWindowAncestors(db.get(),task.id).find(row=>row.status==='done'&&row.completion_kept_subtasks||row.status==='closed_incomplete');
+    if(closed){task.status='done';task.permissions.complete=false;}
   }
   // A hidden container is not a navigation target. Retain only its numeric
   // parent_revision: taskRevision forwards that CAS token independently, and
@@ -3896,6 +3895,7 @@ function shiftedStartDate(startDate, dueDate, nextDue) {
  */
 function spawnRecurrenceFollowupSingle(task, {expirationAnchor=false}={}) {
   if (!task || task.parent_task_id) return;
+  if(db.get().prepare('SELECT 1 FROM task_completion_choices WHERE task_id=? AND recurrence_handled=1').get(task.id))return;
   const closure=db.get().prepare('SELECT * FROM task_incomplete_closures WHERE task_id=? AND recurrence_closed_at IS NOT NULL').get(task.id);
   if(closure?.recurrence_handled)return;
   const series=ensureSeriesDefinition(db.get(),task.id);

@@ -1,11 +1,10 @@
-/** Closing an activity records an outcome, never a completion or checklist reset. */
+/** Compatibility endpoints retain operation receipts and use ordinary completion. */
 import {createHash} from 'node:crypto';
 import {actorId} from '../permissions.js';
 import {assertTaskMutation,taskDevicePrincipal} from './task-access.js';
-import {assertTaskRevision,assertTaskWindowAction,assertRecurringCompletionStarted,advanceClosedTaskRecurrence,recordTaskActivity,TaskStateError} from './task-lifecycle.js';
+import {assertTaskRevision,assertTaskWindowAction,assertRecurringCompletionStarted,changeTaskStatus,TaskStateError} from './task-lifecycle.js';
 import {retiredRecurrenceOccurrence} from './task-recurrence-frontier.js';
 import {taskSkipScope} from './task-skip.js';
-import {reconcileTaskSupervision} from './task-supervision.js';
 import {taskDeadlineMs} from './task-window.js';
 import {authoritativeTaskRecurrence,taskSeriesState,seriesDefinitionForGeneration} from './task-series.js';
 
@@ -68,13 +67,7 @@ export function closeIncompleteTask(d,taskId,{principal,body={},now=new Date()}=
     if(!['open','in_progress'].includes(task.status))throw new TaskStateError('Only an active, unfinished activity can be closed without completing its remaining subtasks.');
     assertTaskWindowAction(d,taskId,now);assertRecurringCompletionStarted(d,taskId,now);
     const at=now.toISOString(),actor=actorId(principal);
-    const recurring=!!authoritativeTaskRecurrence(d,task)?.is_recurring;
-    d.prepare('INSERT OR IGNORE INTO task_incomplete_closures(task_id,first_closed_at,recurrence_closed_at) VALUES(?,?,?)').run(taskId,at,recurring?at:null);
-    if(recurring)d.prepare('UPDATE task_incomplete_closures SET recurrence_closed_at=? WHERE task_id=? AND recurrence_closed_at IS NULL').run(at,taskId);
-    d.prepare("UPDATE tasks SET status='closed_incomplete',closed_incomplete_at=? WHERE id=?").run(at,taskId);
-    reconcileTaskSupervision(d,taskId,{actorId:actor});
-    advanceClosedTaskRecurrence(d,taskId);
-    recordTaskActivity(d,taskId,'closed_incomplete',actor,{title:task.title,from_status:task.status,to_status:'closed_incomplete',closed_incomplete_at:at,points_awarded:0,operation_id:body.operation_id});
+    changeTaskStatus(d,taskId,'done',{actorId:actor,principal,body:{expected_revision:body.expected_revision,complete_remaining:false},now});
     d.prepare('INSERT INTO task_close_receipts(principal_key,operation_id,request_hash,task_id,action,created_at) VALUES(?,?,?,?,?,?)').run(identity.principalKey,body.operation_id,identity.requestHash,taskId,'close',at);
     return {task:d.prepare('SELECT * FROM tasks WHERE id=?').get(taskId),replayed:false};
   }).immediate();
@@ -90,7 +83,7 @@ export function reopenIncompleteTask(d,taskId,{principal,body={},now=new Date()}
     if(identity.receipt)return {task,replayed:true};
     assertTaskRevision(d,task,body,{required:true});
     if(task.archived_at)throw new TaskStateError('Restore this activity from the archive before reopening it.');
-    if(task.status!=='closed_incomplete'||!d.prepare('SELECT 1 FROM task_incomplete_closures WHERE task_id=?').get(taskId))
+    if(task.status!=='done'||!task.completion_kept_subtasks)
       throw new TaskStateError('Only an activity closed without completing its remaining subtasks can be reopened here.');
     const unsupported=taskCloseUnsupportedReason(d,task,rows);
     if(unsupported)throw new TaskStateError(unsupported,{reason:'close_incomplete_unsupported'});
@@ -98,10 +91,9 @@ export function reopenIncompleteTask(d,taskId,{principal,body={},now=new Date()}
     const status=progress?'in_progress':'open';
     const deadline=taskDeadlineMs(d,task);
     const expiration=task.expiration_policy==='expire_incomplete'&&deadline!=null&&Number(now)>=deadline?'keep_overdue':task.expiration_policy;
-    d.prepare('UPDATE tasks SET status=?,closed_incomplete_at=NULL,expiration_policy=? WHERE id=?').run(status,expiration,taskId);
+    d.prepare('UPDATE tasks SET expiration_policy=? WHERE id=?').run(expiration,taskId);
     const actor=actorId(principal),at=now.toISOString();
-    reconcileTaskSupervision(d,taskId,{actorId:actor});
-    recordTaskActivity(d,taskId,'reopened',actor,{title:task.title,from_status:'closed_incomplete',to_status:status,previous_closed_incomplete_at:task.closed_incomplete_at,points_awarded:0,successors_preserved:true,expiration_policy:expiration,operation_id:body.operation_id});
+    changeTaskStatus(d,taskId,status,{actorId:actor,principal,body:{expected_revision:task.revision},now,resumeProgress:true});
     d.prepare('INSERT INTO task_close_receipts(principal_key,operation_id,request_hash,task_id,action,created_at) VALUES(?,?,?,?,?,?)').run(identity.principalKey,body.operation_id,identity.requestHash,taskId,'reopen',at);
     return {task:d.prepare('SELECT * FROM tasks WHERE id=?').get(taskId),replayed:false};
   }).immediate();

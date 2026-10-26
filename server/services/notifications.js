@@ -386,7 +386,7 @@ async function runDueNotifications({
   for (const reminder of due) {
     if(reminder.entity_type==='task'&&!tripReminderActive(activeDb,reminder.entity_id))continue;
     if(reminder.entity_type==='task' && taskWindowAncestors(activeDb,reminder.entity_id)
-      .some(row=>['expired','skipped','closed_incomplete'].includes(row.status)))continue;
+      .some(row=>['expired','skipped','closed_incomplete'].includes(row.status)||row.status==='done'&&row.completion_kept_subtasks))continue;
     const payload = reminderPayload(reminder, locale);
     const notification = enqueueNotification(activeDb, {
       userId: reminder.created_by,

@@ -107,19 +107,19 @@ function context(d, source, action) {
   const dateKey = occurrence.due_date || occurrence.start_date || todayKey(d);
   // Workflow/Activity bindings delimit eligibility scopes, but a terminal
   // ancestor still closes the useful completion window for every descendant.
-  let expiredTask = chain.find(item => ['expired','skipped','closed_incomplete'].includes(item.status));
+  let expiredTask = chain.find(item => ['expired','skipped','closed_incomplete'].includes(item.status)||item.status==='done'&&item.completion_kept_subtasks);
   let ancestor = source;
   const ancestorIds = new Set(chain.map(item => item.id));
   while (!expiredTask && ancestor?.parent_task_id && !ancestorIds.has(ancestor.parent_task_id)) {
     ancestor = task(d, ancestor.parent_task_id);
     if (!ancestor) break;
     ancestorIds.add(ancestor.id);
-    if (['expired','skipped','closed_incomplete'].includes(ancestor.status)) expiredTask = ancestor;
+    if (['expired','skipped','closed_incomplete'].includes(ancestor.status)||ancestor.status==='done'&&ancestor.completion_kept_subtasks) expiredTask = ancestor;
   }
   return { occurrence, dateKey, learnerId: chain.find(item => item.assigned_to)?.assigned_to || null,
     archived: chain.some(item => item.archived_at), expired: expiredTask?.status==='expired', expired_at: expiredTask?.expired_at ?? null,
     skipped:expiredTask?.status==='skipped',skipped_at:expiredTask?.skipped_at??null,
-    closed_incomplete:expiredTask?.status==='closed_incomplete',closed_incomplete_at:expiredTask?.closed_incomplete_at??null,
+    closed_incomplete:expiredTask?.status==='closed_incomplete'||Boolean(expiredTask?.completion_kept_subtasks),closed_incomplete_at:expiredTask?.closed_incomplete_at??null,
     presence: { policy: pc.presence_policy || 'ignore', targetPlaceId: pc.place_id || null,
     ...activityPresenceWindow(d, { task: occurrence, dateKey, windowMode: pc.presence_window || 'due' }) } };
 }

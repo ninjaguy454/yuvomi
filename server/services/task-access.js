@@ -2,7 +2,7 @@
 import { actorId, actorPermissions, PermissionError } from '../permissions.js';
 import { visibilityWhere } from './visibility.js';
 import { taskOptionalContext } from './task-optional.js';
-import { taskWindowAncestors } from './task-window.js';
+import { taskWindowAncestors,taskCompletedScope } from './task-window.js';
 import { assertRewardTaskMutation, rewardTaskCapabilities } from './reward-fulfillment-access.js';
 import {taskDirectAssignmentSelection} from './task-assignee-policy.js';
 import {inspectTaskSupervision} from './task-supervision-inspection.js';
@@ -152,7 +152,7 @@ export function deviceTaskCapabilities(d, principal, task) {
   const view = deviceTaskVisible(d, principal, task), allow = key => deviceAllows(principal, `device_tasks.${key}`);
   const stored=task?.id?d.prepare('SELECT * FROM tasks WHERE id=?').get(task.id):task;
   const locked=stored?.locked || stored?.parent_task_id && d.prepare('SELECT locked FROM tasks WHERE id=?').get(stored.parent_task_id)?.locked;
-  const skipped=stored?.id&&taskWindowAncestors(d,stored.id).some(row=>['skipped','closed_incomplete'].includes(row.status));
+  const skipped=stored?.id&&(taskWindowAncestors(d,stored.id).some(row=>['skipped','closed_incomplete'].includes(row.status))||taskCompletedScope(d,stored.id));
   const definition=view&&!locked&&!skipped&&!['done','expired','skipped','closed_incomplete'].includes(stored?.status);
   return {view, own:false, create:deviceAllows(principal,'tasks.create'), edit:definition&&deviceAllows(principal,'tasks.edit_others'), complete:view && !skipped && allow('complete'), reopen:view && !skipped && allow('reopen'),
     reset:view && !skipped && allow('reset'), claim:view && !skipped && allow('claim'), comment:false,
@@ -297,7 +297,7 @@ export function taskCapabilities(d, actor, sourceTask) {
 export function attachTaskCapabilities(d, actor, tasks) {
   for (const task of tasks) {
     task.permissions = taskCapabilities(d, actor, task);
-    if(taskWindowAncestors(d,task.id).some(row=>['skipped','closed_incomplete'].includes(row.status))) {
+    if(taskWindowAncestors(d,task.id).some(row=>['skipped','closed_incomplete'].includes(row.status))||taskCompletedScope(d,task.id)) {
       task.permissions.complete=false;task.permissions.claim=false;
     }
     // A closed optional branch is a lifecycle restriction, not a change to the

@@ -122,16 +122,16 @@ export function tasksPaths() {
         description:'Returns append-only Task activity, including recorded supervision, lifecycle changes and historical actors. Events are filtered by the current caller visibility of the underlying action.'}),
     },
     '/api/v1/tasks/{id}/status': {
-      patch: op({ summary: 'Update task status', tag: 'Tasks', params: [idParam()], stateChanging: true, requestBody: jsonBody(null), description: 'Body: { status }. Sending `archived` files the task away without touching its status - use PATCH /archive instead. Deliberately open on a locked task: ticking one off is the interaction the lock exists to preserve.' }),
+      patch: op({ summary: 'Update task status', tag: 'Tasks', params: [idParam()], stateChanging: true, requestBody: jsonBody(null), description: 'Body: {status, expected_revision, expected_parent_revision?, complete_remaining?, reset_progress?}. Completing an original root with remaining required actions requires an explicit boolean complete_remaining: true completes eligible active required actions; false records ordinary done while preserving every child’s progress. Existing expired, skipped and completed children retain their history; optional actions are unchanged. Points follow canonical scoring. Retained unfinished work becomes actionable after ordinary root reopening; existing successor occurrences are preserved. Existing visibility, completion, skill and lifecycle permissions apply. Use PATCH /archive to file or restore without changing completion status.' }),
     },
     '/api/v1/tasks/{id}/reopen': {
       post: op({summary:'Reopen an expired Task',tag:'Tasks',params:[idParam()],stateChanging:true,requestBody:jsonBody(null),
         description:'Requires the current lifecycle edit permission and expected_revision (plus expected_parent_revision for a subtask). Provide a future due_date/due_time or expiration_policy: keep_overdue. Preserves completed subtasks, history, and any existing recurrence successor. Archived occurrences must be restored first. Expiration itself never awards completion points.'}),
     },
     '/api/v1/tasks/{id}/close-incomplete': {
-      post:op({summary:'Close without completing remaining subtasks',tag:'Tasks',params:[idParam()],stateChanging:true,
+      post:op({summary:'Complete activity while retaining subtask progress (compatibility)',tag:'Tasks',params:[idParam()],stateChanging:true,
         requestBody:jsonBody({type:'object',additionalProperties:false,required:['operation_id','expected_revision'],properties:{operation_id:{type:'string',minLength:1,maxLength:128},expected_revision:{type:'integer',minimum:1}}}),
-        description:'A household parent or administrator with existing whole-scope tasks.skip_occurrence authority may close an active top-level local activity, recurring or one-off. Children and earned points remain unchanged; no completion, award, settlement or reversal is written. Status becomes closed_incomplete. Recurrence advances once, including repeat-from-completion from the household-local close date. Failed generation rolls back the entire action. Coupled Workflow/rotation, synced, prize-delivery and payment work are excluded. Exact retries reuse operation_id and revision and recheck current authority.'}),
+        description:'Compatibility endpoint for older clients. Retains existing parent/admin, whole-scope skip and completion authority checks. Uses the ordinary done transition with complete_remaining:false: children keep their saved progress, and the root follows its canonical scoring policy. Recurrence advances once; exact retries reuse operation_id and expected_revision. New clients use PATCH status with an explicit boolean complete_remaining choice. No new closed_incomplete status is produced.'}),
     },
     '/api/v1/tasks/{id}/reopen-incomplete': {
       post:op({summary:'Reopen an activity while preserving saved progress',tag:'Tasks',params:[idParam()],stateChanging:true,

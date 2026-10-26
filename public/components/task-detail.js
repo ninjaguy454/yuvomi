@@ -50,7 +50,7 @@ import { splitMentions, applyMention } from '/utils/mentions.js';
 import { refresh as refreshReminders } from '/reminders.js';
 import { parseRemindAtAsUtc } from '/utils/reminder-offset.js';
 import { canTask, canCapability, moduleAccess } from '/permissions.js';
-import { actionableSubtasks, changeTaskStatus, reopenExpiredTask, skipTaskOccurrence, closeIncompleteTask, reopenIncompleteTask, taskRevision } from '/utils/task-state.js';
+import { actionableSubtasks, changeTaskStatus, reopenExpiredTask, skipTaskOccurrence, taskRevision } from '/utils/task-state.js';
 import {closedOccurrenceLabel} from '/utils/task-fields.js';
 import { helperWaitingLabel, structuralSubtasks } from '/utils/task-progress.js';
 import { watchTaskChanges, latestTaskLoader } from '/utils/task-live.js';
@@ -1915,21 +1915,6 @@ export function openTaskDetail({
       })});
   }
 
-  if(canTask(task,'close_incomplete')) {
-    actions.push({id:'task-detail-close-incomplete',label:'Close without completing remaining subtasks',variant:'secondary',icon:'circle-stop',
-      onClick:({button})=>ctx.runMutation(button,async()=>{
-        const result=await closeIncompleteTask(task);if(!result)return null;
-        ctx.acceptSnapshot(result.data,'ack');toast('Activity closed. Unfinished subtasks stay unchecked; no additional points awarded.','success');return result;
-      })});
-  }
-  if(canTask(task,'close_incomplete')) {
-    actions.push({id:'task-detail-reopen-incomplete',label:'Reopen activity',variant:'secondary',icon:'rotate-ccw',
-      onClick:({button})=>ctx.runMutation(button,async()=>{
-        const result=await reopenIncompleteTask(task);if(!result)return null;
-        ctx.acceptSnapshot(result.data,'ack');toast('Activity reopened. Saved progress, earned points and future occurrences are preserved.','success');return result;
-      })});
-  }
-
   if(!canEdit && !task.parent_task_id && !archived && ['open','unavailable','in_progress'].includes(task.status)
     && canTask(task,'change_assignment') && canTask(task,'reassign')
     && structuralSubtasks(task).some(child=>canTask(child,'change_assignment')&&canTask(child,'reassign')
@@ -1970,12 +1955,6 @@ export function openTaskDetail({
   // their future definition without reopening or rewriting this occurrence.
   const editControl = document.getElementById('detail-view-edit');
   if (editControl) editControl.hidden = isClosedOccurrence(task) && !(task.recurrence_series_id != null && canTask(task, 'edit_series'));
-  const updateClosureControls=()=>{
-    for(const [id,allowed] of [['task-detail-close-incomplete',task.can_close_incomplete],['task-detail-reopen-incomplete',task.can_reopen_incomplete]]) {
-      const control=document.getElementById(id);if(control)control.hidden=!allowed||!canTask(task,'close_incomplete');
-    }
-  };
-  updateClosureControls();
   for (const child of actionableSubtasks(task)) ctx.childRenderKeys.set(Number(child.id), subtaskRenderKey(task, child));
   // Pending feedback changes existing controls without layout reads, icon scans,
   // Activity reads or rebuilding any subtask/skill disclosure.
@@ -2057,7 +2036,6 @@ export function openTaskDetail({
     }
     const skipControl=document.getElementById('task-detail-skip');
     if(skipControl)skipControl.hidden=!task.can_skip_occurrence||!canTask(task,'skip_occurrence');
-    updateClosureControls();
     const editing = document.querySelector('.detail-view__form');
     if (!editing || editing.hidden) {
       const title = pane?.closest('.modal-panel')?.querySelector('.modal-panel__title');

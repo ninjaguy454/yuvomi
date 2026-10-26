@@ -30,13 +30,14 @@ export function taskStatusConfirmation(task, status) {
   // explicitly include those direct responsibilities as well.
   const completesHelperWork = pendingDelegated.length > 0
     && pendingDelegated.every((child) => supervisionOf(child)?.can_complete === true && child.permissions?.complete !== false);
-  const children = (completesHelperWork ? structural : actionableSubtasks(task)).filter(child => !child.is_optional);
+  const originalRoot=!task.parent_task_id&&!task.is_supervision_projection&&!task.helper_view_user_id;
+  const children = (originalRoot||completesHelperWork ? structural : actionableSubtasks(task)).filter(child => !child.is_optional);
   if (status === 'done' && (children.some((child) => child.status !== 'done')
     || Number(task.scheduled_subtask_total || 0) > Number(task.scheduled_subtask_done || 0))) {
-    return { flag: 'complete_remaining', message: 'Complete this Task and its remaining subtasks?',
-      detail: completesHelperWork
-        ? 'Remaining subtasks, including direct helper responsibilities, will also be marked complete. Required supervision still applies.'
-        : 'The remaining required subtasks will also be marked complete. Optional subtasks stay as they are. Required supervision still applies.',
+    return { flag: 'complete_remaining', message: 'Complete this Task?',
+      detail: 'Choose whether to mark remaining required subtasks complete. Uncheck to keep their saved progress. Optional subtasks stay as they are. Points follow the activity’s scoring rules; required supervision still applies.',
+      checkbox: originalRoot
+        ? {label:'Complete remaining subtasks',checked:true}:null,
       confirmLabel: 'Complete Task' };
   }
   if (status === 'open' && (task.status === 'done' || structural.some((child) => child.status === 'done')
@@ -61,8 +62,10 @@ export async function changeTaskStatus(task, status, { confirm: requestConfirmat
   const confirmation = taskStatusConfirmation(task, status);
   const body = { status, ...taskRevision(task) };
   if (confirmation) {
-    if (!await requestConfirmation(confirmation.message, { ...confirmation, closeOnConfirm: false })) return null;
-    body[confirmation.flag] = true;
+    let completeRemaining=true;
+    const checkbox=confirmation.checkbox?{...confirmation.checkbox,onChange:checked=>{completeRemaining=checked;}}:null;
+    if (!await requestConfirmation(confirmation.message, { ...confirmation, checkbox,closeOnConfirm: false })) return null;
+    body[confirmation.flag] = confirmation.flag==='complete_remaining'?completeRemaining:true;
   }
   // A pending projection starts only after confirmation, with the original
   // revision still attached to the write. Cancel never paints unsaved progress.
@@ -131,16 +134,16 @@ export async function skipTaskOccurrence(task,{confirm:requestConfirmation=confi
 }
 
 const pendingClosures=new Map();
-/** A separate confirmed outcome: no optimistic checkmarks or completion sound. */
+/** Compatibility for older detail callers; the result is ordinary completion. */
 export async function closeIncompleteTask(task,{confirm:requestConfirmation=confirmOverModal}={}) {
   if(!task.can_close_incomplete||!task.permissions?.close_incomplete||task.archived_at||task.parent_task_id||task.helper_view_user_id||!['open','in_progress'].includes(task.status))
     throw new Error('You cannot close this activity.');
   const authentication=authenticationSnapshot();
   const recurrence=task.incomplete_closure?.recurrence_handled?'Already-created future occurrences stay unchanged.'
     :task.is_recurring?`The next occurrence advances once${task.recurrence_from_completion?' from today':''}.`:'';
-  if(!await requestConfirmation('Close without completing remaining subtasks?',{
-    detail:`Unfinished subtasks stay unchecked. Previously earned points remain; no additional points are awarded. ${recurrence}`.trim(),
-    confirmLabel:'Close without completing remaining subtasks',closeOnConfirm:false,
+  if(!await requestConfirmation('Complete this activity?',{
+    detail:`Unfinished subtasks keep their saved progress. Points follow the activity’s scoring rules. ${recurrence}`.trim(),
+    confirmLabel:'Complete activity',closeOnConfirm:false,
   }))return null;
   if(!sameAuthentication(authentication))throw new Error('Your sign-in changed. Reopen the activity and try again.');
   for(const [key,value] of pendingClosures)if(!sameAuthentication(value.authentication))pendingClosures.delete(key);

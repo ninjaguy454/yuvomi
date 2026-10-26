@@ -8,7 +8,7 @@ import { claimTask } from './assignment-responsibilities.js';
 import { flushOutbound } from './caldav-todo-outbound.js';
 import { taskScopeWhere, taskStartProjection } from './task-scope.js';
 import {listTaskOffers,taskOfferState} from './task-offers.js';
-import { taskWindowAncestors } from './task-window.js';
+import { taskWindowAncestors,taskCompletedScope } from './task-window.js';
 import { taskScoringSummary } from './task-scoring.js';
 import {assigneePolicyProjection} from './task-assignee-policy.js';
 import {attachTaskHelperViewMetadata} from './task-helper-views.js';
@@ -17,7 +17,7 @@ const fail = (message, status=403) => {throw Object.assign(new Error(message),{s
 const pick = (value, keys) => Object.fromEntries(keys.filter(key=>value[key]!==undefined).map(key=>[key,value[key]]));
 const keys = ['card_color','card_color_choice','id','title','description','status','priority','points','category','start_date','start_time','due_date','due_time','countdown',
   'revision','parent_task_id','assigned_to','is_optional','sort_order','is_recurring','expiration_policy','expired_at','skipped_at','closed_incomplete_at',
-  'created_at','updated_at','completed_at','locked','recurrence_rule','recurrence_from_completion'];
+  'created_at','updated_at','completed_at','locked','recurrence_rule','recurrence_from_completion','completion_kept_subtasks'];
 const member = row => pick(row,['id','display_name','avatar_color']);
 function requireTask(d, principal, id) {
   const row = d.prepare('SELECT * FROM tasks WHERE id=?').get(Number(id)||0);
@@ -41,14 +41,13 @@ function protectedAction(d,row,view=inspectTaskSupervision(d,row.id)) {
 }
 function helperClosure(d,row) {
   if(row.status==='done'||!d.prepare('SELECT 1 FROM task_activity_support_tasks WHERE task_id=? UNION SELECT 1 FROM task_supervision_actions WHERE counterpart_task_id=?').get(row.id,row.id))return null;
-  return taskWindowAncestors(d,row.id).find(source=>source.status==='closed_incomplete');
+  return taskWindowAncestors(d,row.id).find(source=>source.status==='closed_incomplete'||source.status==='done'&&source.completion_kept_subtasks);
 }
 function project(d,principal,row,cache=new Map(),seen=new Set()) {
   if(seen.has(row.id))return null;
   seen.add(row.id);
   const out=pick(row,keys);
   const closed=helperClosure(d,row);
-  if(closed){out.status='closed_incomplete';out.closed_incomplete_at=closed.closed_incomplete_at;}
   Object.assign(out,assigneePolicyProjection(d,row.id));
   out.assigned_users=assignees(d,row).map(member);
   out.assigned_name=out.assigned_users.find(user=>user.id===row.assigned_to)?.display_name || out.assigned_users[0]?.display_name || null;
@@ -61,6 +60,7 @@ function project(d,principal,row,cache=new Map(),seen=new Set()) {
   const supervisionKey=`device-supervision:${taskSupervisionRootId(d,row.id)}`;
   if(!cache.has(supervisionKey))cache.set(supervisionKey,inspectTaskSupervision(d,row.id));
   const supervision=cache.get(supervisionKey), blocked=protectedAction(d,row,supervision), optional=taskOptionalContext(d,row.id).closed_parent;
+  if(closed&&supervision.support_task_id===row.id)out.status='done';
   const action=supervision.actions.find(action=>action.action_task_id===row.id||action.counterpart_task_id===row.id);
   if(action)out.supervision_action={...pick(action,['execution_mode','state','completed']),can_complete:!blocked};
   out.is_supervision_projection=supervision.support_task_id===row.id||action?.counterpart_task_id===row.id;
@@ -79,7 +79,7 @@ function project(d,principal,row,cache=new Map(),seen=new Set()) {
         AND NOT EXISTS(SELECT 1 FROM split_expense_guest_users g WHERE g.user_id=u.id) ORDER BY u.display_name`).all().filter(member=>!allowed.length||allowed.includes(member.id));
     }else out.permissions.claim=false;
   }else out.permissions.claim=false;
-  if(blocked || optional || ['expired','skipped','closed_incomplete'].includes(out.status) || !out.assigned_users.length) {
+  if(blocked || optional || taskCompletedScope(d,row.id) || ['expired','skipped','closed_incomplete'].includes(out.status) || !out.assigned_users.length) {
     out.permissions.complete=false;out.permissions.reopen=false;out.permissions.reset=false;
     if(blocked)out.execution_notice='A qualified person must approve this supervised or helper-owned action.';
   }
@@ -87,9 +87,9 @@ function project(d,principal,row,cache=new Map(),seen=new Set()) {
     ? d.prepare('SELECT * FROM tasks WHERE parent_task_id=? AND archived_at IS NULL ORDER BY sort_order,id').all(row.id)
     : actionableSubtasks(d,row.id);
   out.subtasks=children.filter(child=>deviceTaskVisible(d,principal,child)).map(child=>project(d,principal,child,cache,new Set(seen)));
-  // The board must not suggest a bulk completion that its canonical mutation
-  // will reject. Approval is intentionally offered on the protected leaf only.
-  if(out.subtasks.some(child=>!child.is_optional&&child.status!=='done'&&child.permissions?.complete===false))out.permissions.complete=false;
+  // Original roots offer the remaining-subtask choice even when an action
+  // needs approval. Nested/helper containers still require actionable children.
+  if((row.parent_task_id||out.is_supervision_projection)&&out.subtasks.some(child=>!child.is_optional&&['open','in_progress'].includes(child.status)&&child.permissions?.complete===false))out.permissions.complete=false;
   out.tags=d.prepare('SELECT tag FROM task_tags WHERE task_id=? ORDER BY tag_key').all(row.id).map(item=>item.tag);
   const required=out.subtasks.filter(child=>!child.is_optional), optionalRows=out.subtasks.filter(child=>child.is_optional);
   out.subtask_total=required.length;out.subtask_done=required.filter(child=>child.status==='done').length;
@@ -132,11 +132,11 @@ export function deviceTaskList(d,principal,{query=null,withVisibility=false}={})
     AND t.archived_at IS NULL ORDER BY t.status='done',t.due_date IS NULL,t.due_date,t.due_time,t.id`).all()
     .filter(row=>{
       if(!deviceTaskVisible(d,principal,row))return false;
-      const status=helperClosure(d,row)?'closed_incomplete':row.status;
+      const status=helperClosure(d,row)?'done':row.status;
       return query?(!statuses.length?!['expired','skipped','closed_incomplete'].includes(status):statuses.includes(status))
         :!['done','expired','skipped','closed_incomplete'].includes(status);
     })
-    .filter(row=>statuses.some(status=>['expired','skipped','closed_incomplete','done'].includes(status)) || !taskWindowAncestors(d,row.id).some(source=>['skipped','closed_incomplete'].includes(source.status)))
+    .filter(row=>statuses.some(status=>['expired','skipped','closed_incomplete','done'].includes(status)) || !taskWindowAncestors(d,row.id).some(source=>['skipped','closed_incomplete'].includes(source.status)||source.status==='done'&&source.completion_kept_subtasks))
     .filter(row=>(!priorities.length||priorities.includes(row.priority))&&(!categories.length||categories.includes(row.category))
       &&(!assigned.length||assignees(d,row).some(member=>assigned.includes(member.id)))
       && (!tags.length||tags.every(tag=>d.prepare('SELECT 1 FROM task_tags WHERE task_id=? AND LOWER(tag)=?').get(row.id,tag))))
@@ -157,8 +157,8 @@ export function deviceTaskStatus(d,principal,id,body={}) {
     reconcileTaskSupervision(d,task.id,{actorId:null});
     const scope=[],seen=new Set();
     const collect=row=>{if(seen.has(row.id))return;seen.add(row.id);scope.push(row);
-      if(['done','open'].includes(body.status))for(const child of actionableSubtasks(d,row.id)) {
-        if(body.status==='done' && (child.is_optional || child.status==='done'))continue;collect(child);
+      if(['done','open'].includes(body.status)&&!(body.status==='done'&&body.complete_remaining===false))for(const child of actionableSubtasks(d,row.id)) {
+        if(body.status==='done' && (child.is_optional || !['open','in_progress'].includes(child.status)))continue;collect(child);
       }};
     collect(task);
     for(const row of scope) {

@@ -8,7 +8,7 @@ const log = createLogger('TaskAutoArchive');
 const DAY_MS = 86_400_000;
 const TERMINAL = "('done','skipped','expired','closed_incomplete')";
 let stop = null;
-const closedAtSql = "CASE WHEN t.status='done' THEN c.completed_at ELSE t.skipped_at END";
+const closedAtSql = "CASE WHEN t.status='done' THEN COALESCE(c.completed_at,choice.first_completed_at) ELSE t.skipped_at END";
 const unfinishedSql = root => `WITH RECURSIVE linked(id) AS (
   SELECT ${root}
   UNION SELECT child.id FROM tasks child JOIN linked ON child.parent_task_id=linked.id
@@ -16,7 +16,8 @@ const unfinishedSql = root => `WITH RECURSIVE linked(id) AS (
   UNION SELECT action.counterpart_task_id FROM task_supervision_actions action JOIN linked ON action.source_task_id=linked.id
     WHERE action.counterpart_task_id IS NOT NULL
 ) SELECT 1 FROM linked JOIN tasks work ON work.id=linked.id
-  WHERE work.id!=${root} AND work.status NOT IN ${TERMINAL} LIMIT 1`;
+  WHERE work.id!=${root} AND work.status NOT IN ${TERMINAL}
+    AND NOT EXISTS(SELECT 1 FROM tasks completed WHERE completed.id=${root} AND completed.status='done' AND completed.completion_kept_subtasks=1) LIMIT 1`;
 const linkedProjectionSql = root => `WITH RECURSIVE source(id) AS (
   SELECT ${root}
   UNION SELECT child.id FROM tasks child JOIN source ON child.parent_task_id=source.id
@@ -28,8 +29,8 @@ const linkedProjectionSql = root => `WITH RECURSIVE source(id) AS (
 ) SELECT work.id,work.archived_at,work.auto_archived_at FROM support JOIN tasks work ON work.id=support.id`;
 
 const closure = (d, id) => d.prepare(`SELECT t.id,t.status,t.archived_at,t.auto_archive_after,t.parent_task_id,
-  CASE WHEN t.status='done' THEN c.completed_at ELSE t.skipped_at END AS closed_at
-  FROM tasks t LEFT JOIN task_completions c ON c.task_id=t.id WHERE t.id=?`).get(id);
+  ${closedAtSql} AS closed_at
+  FROM tasks t LEFT JOIN task_completions c ON c.task_id=t.id LEFT JOIN task_completion_choices choice ON choice.task_id=t.id WHERE t.id=?`).get(id);
 
 function unfinishedLinkedWork(d, id) {
   return !!d.prepare(unfinishedSql('@root')).get({ root: id });
@@ -58,9 +59,10 @@ export function reconcileTaskAutoArchive(d, { now = new Date(), maxBatch = 20,
   // page forever. The scheduler keeps the keyset cursor and wraps after the end.
   const candidates = d.prepare(`SELECT t.id,${closedAtSql} AS closed_at FROM tasks t
     LEFT JOIN task_completions c ON c.task_id=t.id
+    LEFT JOIN task_completion_choices choice ON choice.task_id=t.id
     WHERE t.parent_task_id IS NULL AND t.archived_at IS NULL
       AND (t.auto_archive_after IS NULL OR t.auto_archive_after<=?)
-      AND ((t.status='done' AND c.completed_at IS NOT NULL AND c.completed_at<=?)
+      AND ((t.status='done' AND COALESCE(c.completed_at,choice.first_completed_at) IS NOT NULL AND COALESCE(c.completed_at,choice.first_completed_at)<=?)
         OR (t.status='skipped' AND t.skipped_at IS NOT NULL AND t.skipped_at<=?))
       AND NOT EXISTS (${unfinishedSql('t.id')})
       AND (? IS NULL OR ${closedAtSql}>? OR (${closedAtSql}=? AND t.id>?))

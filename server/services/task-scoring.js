@@ -70,7 +70,7 @@ function aggregate(recipients){
 }
 const recipients=row=>JSON.parse(row.recipients_json);
 function everEarned(settlements){return settlements.some(row=>row.earned_once||recipients(row).some(member=>member.points>0));}
-function blockedWindow(d,id){return taskWindowAncestors(d,id).some(row=>['expired','skipped','closed_incomplete'].includes(row.status));}
+function blockedWindow(d,id){return taskWindowAncestors(d,id).some(row=>['expired','skipped','closed_incomplete'].includes(row.status)||row.status==='done'&&row.completion_kept_subtasks);}
 function enrolled(d){return new Set(taskReadStatement(d,'SELECT user_id FROM reward_participants WHERE enabled=1').all().map(row=>row.user_id));}
 
 /** One recipient/source resolver is shared by previews and every award caller.

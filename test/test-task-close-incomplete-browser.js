@@ -16,7 +16,7 @@ const row=id=>d.prepare('SELECT * FROM tasks WHERE id=?').get(id);
 const ledgers=()=>JSON.stringify(Object.fromEntries(['reward_ledger','reward_task_awards','task_completions','task_scoring_settlements','task_scoring_completion_events'].map(table=>[table,d.prepare(`SELECT * FROM ${table}`).all().map(value=>JSON.stringify(value)).sort()])));
 const api=(page,method,path,body)=>page.evaluate(async({method,path,body})=>(await import('/api.js')).api[method](path,body),{method,path,body});
 async function open(page,id){await page.evaluate(async()=>{await(await import('/components/modal.js')).closeModal({force:true});});await page.waitForSelector('#shared-modal-overlay',{hidden:true});await page.evaluate(async id=>{await(await import('/pages/tasks.js')).openTaskById(id,{user:window.yuvomi.user});},id);await page.waitForSelector('#shared-modal-overlay .modal-panel');}
-async function press(page,selector){await page.waitForSelector(selector,{visible:true});await page.focus(selector);await page.keyboard.press('Enter');}
+async function press(page,selector){await page.waitForSelector(selector,{visible:true});if(page.viewport().hasTouch)await page.locator(selector).click();else {await page.focus(selector);await page.keyboard.press('Enter');}}
 async function client(width,username='Close Parent'){
   const context=await browser.createBrowserContext();contexts.push(context);const page=await context.newPage();page.setDefaultTimeout(15000);
   await page.setViewport({width,height:width<500?844:960,isMobile:width<500,hasTouch:width<500});
@@ -61,48 +61,83 @@ test.after(async()=>{
   assert.equal(dirname(resolve(temporary)),resolve(tmpdir()));assert.ok(temporary.startsWith(join(tmpdir(),'vidamia-close-browser-')));rmSync(temporary,{recursive:true,force:true});
 });
 
-for(const mode of (process.env.CLOSE_INCOMPLETE_QA_MODES?.split(',')||['one-off','calendar','completion-relative']))test(`real Activity Details ${mode}: Cancel, keyboard close, unchecked steps, preserved points and observer refresh`,{timeout:150000},async()=>{
-  const desktop=await client(1366),mobile=await client(390),observer=await client(1280);
-  const today=new Date().toISOString().slice(0,10),yesterday=new Date(Date.now()-86400000).toISOString().slice(0,10);
-  const root=(await api(desktop,'post','/tasks',{title:`Synthetic close ${mode}`,assigned_to:[3],scoring_mode:'subtasks',points:5,
-    ...(mode==='one-off'?{}:{is_recurring:true,recurrence_from_completion:mode==='completion-relative',recurrence_rule:'FREQ=DAILY;INTERVAL=3',start_date:yesterday,due_date:yesterday}),
-    subtasks:[{title:'Already earned',points:2},{title:'Leave unchecked',points:3}]})).data;
+for(const width of [390,1366])for(const choice of [false,true])test(`real completion choice ${choice} at ${width}px uses done and retains truthful progress`,{timeout:120000},async()=>{
+  const desktop=await client(width),observer=await client(1280);
+  const mode=width<500?'subtasks':'whole_task',date=new Date(Date.now()-86400000).toISOString().slice(0,10);
+  const root=(await api(desktop,'post','/tasks',{title:`Synthetic completion ${width} ${choice}`,assigned_to:[3],scoring_mode:mode,points:5,
+    is_recurring:true,recurrence_from_completion:true,recurrence_rule:'FREQ=DAILY;INTERVAL=3',start_date:date,due_date:date,
+    subtasks:[{title:'Already earned',points:2},{title:'Remaining action',points:3}]})).data;
   const first=(await api(desktop,'get',`/tasks/${root.subtasks[0].id}`)).data,current=(await api(desktop,'get',`/tasks/${root.id}`)).data;
   await api(desktop,'patch',`/tasks/${first.id}/status`,{status:'done',expected_revision:first.revision,expected_parent_revision:current.revision});
-  const earned=ledgers(),unchecked=row(root.subtasks[1].id);
-  await open(mobile,root.id);await open(observer,root.id);
-  assert.ok(await mobile.$eval('[data-focus-key="status"]',select=>[...select.options].some(option=>option.value==='done'&&option.textContent==='Completed')));
-  await mobile.screenshot({path:join(output,mode+'-phone-before.png'),fullPage:true});
-  console.log('CLOSE_BUTTON_GEOMETRY',mode,await mobile.$eval('#task-detail-close-incomplete',element=>{const rect=element.getBoundingClientRect();return {x:rect.x,y:rect.y,width:rect.width,height:rect.height,disabled:element.disabled,hit:document.elementFromPoint(rect.x+rect.width/2,rect.y+rect.height/2)?.outerHTML.slice(0,180),viewport:{width:innerWidth,height:innerHeight}};}));
-  // The real first-install update toast lasts 15 seconds and can cover the
-  // existing footer. Wait for its ordinary dismissal before exercising a tap.
-  await mobile.waitForFunction(()=>{const element=document.getElementById('task-detail-close-incomplete');if(!element)return false;const rect=element.getBoundingClientRect();return document.elementFromPoint(rect.x+rect.width/2,rect.y+rect.height/2)?.closest('button')===element;},{timeout:30000});
-  await mobile.locator('#task-detail-close-incomplete').click();await mobile.waitForSelector('#confirm-modal-ok',{visible:true});
-  const confirmation=await mobile.$eval('#confirm-modal-ok',element=>element.closest('.modal-panel').textContent);
-  assert.match(confirmation,/Unfinished subtasks stay unchecked/);assert.match(confirmation,/earned points remain/);
-  await mobile.screenshot({path:join(output,mode+'-phone-confirm.png'),fullPage:true});
-  const before=d.prepare('SELECT COUNT(*) n FROM task_activity_events').get().n;
-  await mobile.locator('#confirm-modal-cancel').click();assert.equal(row(root.id).status,'in_progress');assert.equal(d.prepare('SELECT COUNT(*) n FROM task_activity_events').get().n,before);
-  await open(desktop,root.id);await press(desktop,'#task-detail-close-incomplete');await press(desktop,'#confirm-modal-ok');
-  await desktop.waitForFunction(()=>document.querySelector('[data-focus-key="status"]')?.value==='closed_incomplete');
-  await observer.waitForFunction(()=>document.querySelector('[data-focus-key="status"]')?.value==='closed_incomplete');
-  assert.equal(row(root.id).status,'closed_incomplete');assert.deepEqual(row(root.subtasks[1].id),unchecked);assert.equal(ledgers(),earned);
-  const summary=await desktop.$eval('.task-detail-summary',element=>element.textContent);assert.match(summary,/Closed without completing remaining subtasks/);assert.doesNotMatch(summary,/Expired incomplete/);
-  const button=await desktop.$eval(`[data-subtask-id="${root.subtasks[1].id}"] .detail-subtask__toggle`,element=>({disabled:element.disabled,pressed:element.getAttribute('aria-pressed')}));
-  assert.deepEqual(button,{disabled:true,pressed:'false'});
-  const successors=d.prepare('SELECT * FROM tasks WHERE recurrence_origin_id=? AND parent_task_id IS NULL').all(root.id);
-  assert.equal(successors.length,mode==='one-off'?0:1);
-  if(mode!=='one-off'){const base=mode==='completion-relative'?today:yesterday;assert.equal(successors[0].due_date,new Date(Date.parse(base+'T00:00:00Z')+3*86400000).toISOString().slice(0,10));}
-  await desktop.screenshot({path:join(output,mode+'-desktop-closed.png'),fullPage:true});await open(mobile,root.id);await mobile.screenshot({path:join(output,mode+'-phone-closed.png'),fullPage:true});
-  const child=await client(390,'Close Child');await open(child,root.id);assert.equal(await child.$('#task-detail-close-incomplete'),null);assert.equal(await child.$('#task-detail-reopen-incomplete'),null);
-  const denied=await child.evaluate(async id=>{try{await(await import('/api.js')).api.post(`/tasks/${id}/close-incomplete`,{operation_id:'child-denied',expected_revision:1});return 200;}catch(error){return error.status;}},root.id);assert.equal(denied,403);
-  await press(desktop,'#task-detail-reopen-incomplete');await press(desktop,'#confirm-modal-ok');
-  await desktop.waitForFunction(()=>document.querySelector('[data-focus-key="status"]')?.value==='in_progress');
-  assert.equal(ledgers(),earned);assert.deepEqual(row(root.subtasks[1].id),unchecked);
-  await press(desktop,`[data-subtask-id="${root.subtasks[1].id}"] .detail-subtask__toggle`);
+  const untouched=row(root.subtasks[1].id);
+  await open(desktop,root.id);await open(observer,root.id);
+  assert.equal(await desktop.$('#task-detail-close-incomplete'),null);
+  assert.equal(await desktop.$('#task-detail-reopen-incomplete'),null);
+  await desktop.select('[data-focus-key="status"]','done');
+  await desktop.waitForSelector('#confirm-modal-checkbox',{visible:true});
+  assert.equal(await desktop.$eval('#confirm-modal-checkbox',element=>element.checked),true);
+  const text=await desktop.$eval('#confirm-modal-ok',element=>element.closest('.modal-panel').textContent);
+  assert.match(text,/Complete remaining subtasks/);assert.doesNotMatch(text,/Closed without completing remaining subtasks/);
+  await press(desktop,'#confirm-modal-cancel');assert.equal(row(root.id).status,'in_progress');assert.deepEqual(row(root.subtasks[1].id),untouched);
+  await desktop.waitForSelector('#confirm-modal-checkbox',{hidden:true});
+  await desktop.waitForFunction(()=>{const select=document.querySelector('[data-focus-key="status"]');return select?.value==='in_progress'&&!select.disabled;});
+  await desktop.select('[data-focus-key="status"]','done');await desktop.waitForSelector('#confirm-modal-checkbox',{visible:true});
+  // The ordinary first-install update toast can cover the mobile checkbox for
+  // fifteen seconds. Wait for its normal dismissal before testing the choice.
+  await desktop.waitForFunction(()=>{const element=document.getElementById('confirm-modal-checkbox'),rect=element?.getBoundingClientRect();return rect&&document.elementFromPoint(rect.x+rect.width/2,rect.y+rect.height/2)===element;},{timeout:30000});
+  if(!choice)await desktop.click('#confirm-modal-checkbox');
+  await desktop.screenshot({path:join(output,`${width}-${choice}-confirmation.png`),fullPage:true});
+  await press(desktop,'#confirm-modal-ok');
   await desktop.waitForFunction(()=>document.querySelector('[data-focus-key="status"]')?.value==='done');
-  assert.deepEqual(d.prepare('SELECT * FROM tasks WHERE recurrence_origin_id=? AND parent_task_id IS NULL').all(root.id),successors);
-  assert.equal(d.prepare('SELECT SUM(delta) total FROM reward_ledger WHERE task_id IN (?,?)').get(root.subtasks[0].id,root.subtasks[1].id).total,5);
-  await desktop.screenshot({path:join(output,mode+'-reopened-completed.png'),fullPage:true});
-  assert.deepEqual(errors,[]);results.push({mode,cancel:true,keyboard:true,phone:true,observer:true,unchecked:true,earnedPreserved:true,childDenied:true,reopened:true,normalNewEarnings:true,successorsPreserved:true,successors:successors.length});
+  await observer.waitForFunction(()=>document.querySelector('[data-focus-key="status"]')?.value==='done');
+  assert.equal(row(root.id).status,'done');assert.equal(row(root.subtasks[1].id).status,choice?'done':'open');
+  if(!choice)assert.deepEqual(row(root.subtasks[1].id),untouched);
+  const ids=[root.id,...root.subtasks.map(child=>child.id)],marks=ids.map(()=>'?').join(',');
+  const points=d.prepare(`SELECT COALESCE(SUM(delta),0) AS n FROM reward_ledger WHERE task_id IN (${marks})`).get(...ids).n;
+  assert.equal(points,mode==='whole_task'?5:choice?5:2);
+  const successors=d.prepare('SELECT * FROM tasks WHERE recurrence_origin_id=? AND parent_task_id IS NULL').all(root.id);assert.equal(successors.length,1);
+  const writes=requests.filter(request=>request.path===`/api/v1/tasks/${root.id}/status`&&request.body.status==='done');
+  assert.equal(writes.length,1);assert.equal(writes[0].body.complete_remaining,choice);
+  assert.equal(d.prepare('SELECT COUNT(*) n FROM task_completions WHERE task_id=?').get(root.id).n,1);
+  await desktop.screenshot({path:join(output,`${width}-${choice}-completed.png`),fullPage:true});
+  await desktop.select('[data-focus-key="status"]','in_progress');
+  await desktop.waitForFunction(()=>document.querySelector('[data-focus-key="status"]')?.value==='in_progress');
+  assert.equal(row(root.subtasks[1].id).status,choice?'done':'open');assert.ok(row(successors[0].id));
+  const statusOptions=await desktop.$$eval('[data-focus-key="status"] option',nodes=>nodes.map(node=>node.value));assert.ok(!statusOptions.includes('closed_incomplete'));
+  results.push({width,choice,mode,status:'done',points,successor_count:successors.length});
+  assert.deepEqual(errors,[]);
+});
+
+test('legacy saved filters and collapse preferences show converted Done work through archive and restore',{timeout:90000},async()=>{
+  const page=await client(1366),root=(await api(page,'post','/tasks',{title:'Synthetic converted legacy completion',assigned_to:[3],points:5,scoring_mode:'whole_task',subtasks:[{title:'Saved unfinished action',points:5}]})).data;
+  const at=new Date().toISOString(),child=row(root.subtasks[0].id);
+  d.transaction(()=>{
+    d.prepare("UPDATE tasks SET status='done',completion_kept_subtasks=1,closed_incomplete_at=? WHERE id=?").run(at,root.id);
+    d.prepare('INSERT INTO task_incomplete_closures(task_id,first_closed_at,recurrence_handled) VALUES(?,?,0)').run(root.id,at);
+    d.prepare('INSERT INTO task_completion_choices(task_id,first_completed_at,legacy_incomplete,completion_recorded) VALUES(?,?,1,0)').run(root.id,at);
+    d.prepare("INSERT INTO task_activity_events(task_id,action_task_id,actor_user_id,event_type,details_json) VALUES(?,?,1,'closed_incomplete',?)").run(root.id,root.id,JSON.stringify({closed_incomplete_at:at,points_awarded:0}));
+  })();
+  await page.evaluate(()=>{
+    localStorage.setItem('yuvomi:recentTaskFilters',JSON.stringify([{status:'closed_incomplete'}]));
+    localStorage.setItem('yuvomi:taskCollapsedGroups',JSON.stringify(['status:closed_incomplete']));
+  });
+  await page.goto(origin+'/tasks');await page.waitForSelector('#btn-new-task');
+  await page.evaluate(async()=>{
+    const module=await import('/pages/tasks.js');
+    module.__test.state.filters=JSON.parse(localStorage.getItem('yuvomi:recentTaskFilters'))[0];
+    module.__test.state.collapsedBoardSections.add('household:status:closed_incomplete:closed_incomplete');
+    await module.render(document.getElementById('main-content'),{user:window.yuvomi.user});
+  });
+  await page.waitForFunction(async id=>{const state=(await import('/pages/tasks.js')).__test.state;return state.filters.status.includes('done')&&state.tasks.some(task=>task.id===id&&task.status==='done');},{},root.id);
+  const preferences=await page.evaluate(async()=>{const state=(await import('/pages/tasks.js')).__test.state;return {filters:state.filters.status,collapsed:[...state.collapsedGroups,...state.collapsedBoardSections],stored:JSON.parse(localStorage.getItem('yuvomi:taskCollapsedGroups'))};});
+  assert.deepEqual(preferences.filters,['done']);assert.ok(!preferences.collapsed.some(key=>key.includes('closed_incomplete')));assert.deepEqual(preferences.stored,[]);
+  assert.ok(!(await page.$eval('body',element=>element.innerText)).includes('Closed without completing remaining subtasks'));
+  await api(page,'patch',`/tasks/${root.id}/archive`,{archived:true,expected_revision:row(root.id).revision});
+  await api(page,'patch',`/tasks/${root.id}/archive`,{archived:false,expected_revision:row(root.id).revision});
+  await open(page,root.id);assert.equal(await page.$eval('[data-focus-key="status"]',element=>element.value),'done');
+  assert.deepEqual(row(root.subtasks[0].id),child);assert.equal(row(root.id).completion_kept_subtasks,1);
+  assert.equal(d.prepare('SELECT COUNT(*) n FROM reward_ledger WHERE task_id=?').get(root.id).n,0);
+  assert.equal(await page.$('#task-detail-close-incomplete'),null);
+  await page.screenshot({path:join(output,'legacy-filter-restored-done.png'),fullPage:true});
+  results.push({legacy_filter:'done',obsolete_collapse_removed:true,restored_status:'done',legacy_new_points:0});
 });

@@ -32,7 +32,8 @@ import { ensureSeriesDefinition, seriesMaterializationPlan, recordOccurrenceDefi
   normalizeSeriesSchedule, effectiveSeriesScoringDefinition, seriesActionAuthorization, planSeriesOccurrence,
   prepareSeriesOccurrenceWork, seriesRotationAssignment, translatedSeriesDate } from '../services/task-series.js';
 import { proposedSeriesDefinition, proposedFutureSeriesDefinition, resolveSeriesDraftClientKeys, sameSeriesBindingPolicy, futureActionCapabilities, futureRootCapabilities, assertSeriesEdit, assertSeriesDefinitionMutation, reconcileSeriesFuture, seriesOccurrencePreservationReason } from '../services/task-series-edit.js';
-import {normalizeSubtaskRule} from '../services/subtask-assignment-rules.js';
+import {normalizeSubtaskRule,normalizeSupervisorPool,saveTaskSubtaskRule} from '../services/subtask-assignment-rules.js';
+import {resolveSubtaskOccurrence,materializeSavedSubtaskOccurrence,isSubtaskOccurrenceRoot} from '../services/subtask-occurrence-resolution.js';
 import {taskScoringSummary,previewTaskScoring,assertTaskScoringMutation,taskScoringRoot,taskScoringRows,taskScoringIdentity} from '../services/task-scoring.js';
 import { readTaskActivityDefinition, updateTaskActivitySnapshotSkills, captureActivityTemplateDefinition } from '../services/task-activity-snapshot.js';
 import { syncTaskRewards } from '../services/rewards.js';
@@ -180,7 +181,7 @@ router.param('id',(req,res,next,value)=>{
     return res.status(404).json({error:'Task not found.',code:404});
   if (!['POST','PUT','PATCH','DELETE'].includes(req.method)) return next();
   const route=req.route.path;
-  if (route==='/:id/supervisor' || route==='/:id/location/promote' || route==='/:id/rotation/reconcile' || route==='/:id/accept' || route==='/:id/skip' || route==='/:id/close-incomplete' || route==='/:id/reopen-incomplete') return next();
+  if (route==='/:id/subtasks/resolve' || route==='/:id/supervisor' || route==='/:id/location/promote' || route==='/:id/rotation/reconcile' || route==='/:id/accept' || route==='/:id/skip' || route==='/:id/close-incomplete' || route==='/:id/reopen-incomplete') return next();
   try {
     const task=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(Number(value));
     if (!task) return res.status(404).json({error:'Task not found.',code:404});
@@ -915,6 +916,7 @@ function decorateScoringUnits(preview,before,after,{futureIds=null,drafts=[]}={}
   return preview;
 }
 function futureEditProjection(req,task,definition,state) {
+  const groupVisible=hasCapability(db.get(),req,'rotations.view');
   const fields=Object.fromEntries(['title','description','points','scoring_mode','visibility','priority','category','start_date','start_time','due_date','due_time','due_date_offset_days','is_recurring','recurrence_rule','recurrence_from_completion','expiration_policy','locked','countdown','assignment_mode','rotation_group','rotation_slot'].map(key=>[key,definition.task[key]]));
   fields.card_color_choice=definition.task.card_color_policy;
   fields.assigned_to=definition.assigned_user_ids;fields.skill_ids=definition.skill_ids;fields.tags=definition.tags;
@@ -927,7 +929,9 @@ function futureEditProjection(req,task,definition,state) {
   return {task_id:task.id,effective_generation:state.occurrence.generation+1,review_required:!!definition.task.scoring_review_required,permissions:futureRootCapabilities(db.get(),req,task,definition),fields,
     actions:definition.subtasks.filter(a=>futureActionCapabilities(db.get(),req,task,a).view).map(action=>({action_key:action.action_key,
     fields:{...Object.fromEntries(['title','description','category','priority','start_date','start_time','due_date','due_time','points','visibility','locked','expiration_policy','is_optional'].map(key=>[key,action.task[key]])),assignment_group:action.task.assignment_group_json?JSON.parse(action.task.assignment_group_json):null,
-      assigned_user_ids:action.assigned_user_ids,skill_ids:action.skill_ids,tags:action.tags},permissions:futureActionCapabilities(db.get(),req,task,action)})),
+      assigned_user_ids:action.assigned_user_ids,skill_ids:action.skill_ids,tags:action.tags,
+      ...(action.assignment_rule&&(action.assignment_rule.kind!=='group'||groupVisible)?{assignment_rule:action.assignment_rule,
+        ...(action.supervisor_pool?.kind!=='group'||groupVisible?{supervisor_pool:action.supervisor_pool??null}:{})}:{})},permissions:futureActionCapabilities(db.get(),req,task,action)})),
     revisions:{expected_revision:task.revision,...(task.parent_task_id?{expected_parent_revision:db.get().prepare('SELECT revision FROM tasks WHERE id=?').get(task.parent_task_id)?.revision}:{}),expected_series_revision:state.revision}};
 }
 function saveFutureTaskDefinition(req,res,task) {
@@ -1159,12 +1163,15 @@ function independentlyAssignedTaskMembers(taskId, userIds, previousUserIds, prim
     || !previous.has(Number(id)) || !derived.has(Number(id)));
 }
 
-function initialSubtasksInput(body, {preserveProvenance=false,parentTaskId=null}={}) {
+function initialSubtasksInput(body, {preserveProvenance=false,parentTaskId=null,actor=null,deferRuleUsageCheck=false}={}) {
   if (body.subtasks === undefined) return undefined;
-  if (body.parent_task_id || !Array.isArray(body.subtasks) || body.subtasks.length > 50) {
+  const parent=parentTaskId?db.get().prepare('SELECT * FROM tasks WHERE id=?').get(parentTaskId):null;
+  if (body.parent_task_id&&!(preserveProvenance&&parent&&isSubtaskOccurrenceRoot(db.get(),parent)) || !Array.isArray(body.subtasks) || body.subtasks.length > 50) {
     throw new TaskSkillError('A new Task can contain at most 50 subtasks.');
   }
   return body.subtasks.map((item) => {
+    if(actor&&(item?.assignment_rule?.kind==='group'||item?.supervisor_pool?.kind==='group'||item?.assignment_group))
+      assertCapability(db.get(),actor,'rotations.view');
     if (!item || typeof item !== 'object' || typeof item.title !== 'string' || !item.title.trim() || item.title.trim().length > 200) {
       throw new TaskSkillError('Give each subtask a name of at most 200 characters.');
     }
@@ -1198,8 +1205,16 @@ function initialSubtasksInput(body, {preserveProvenance=false,parentTaskId=null}
     const assignmentGroup=normalizeGroupAssignment(db.get(),proposedGroup,
       {allowInactive:!!savedGroup&&Number(proposedGroupId)===Number(savedGroup.group_id)});
     if(assignmentGroup&&assignedUsers?.length)throw new TaskSkillError('Choose a person or a Rotation Group for a subtask.');
+    const previousRule=item.id&&parentTaskId?db.get().prepare(`SELECT r.source_json FROM task_subtask_assignment_rules r
+      JOIN tasks t ON t.id=r.task_id WHERE t.id=? AND t.parent_task_id=?`).get(Number(item.id),parentTaskId)?.source_json:null;
+    const assignmentRule=Object.hasOwn(item,'assignment_rule')?item.assignment_rule==null?null:
+      previousRule===JSON.stringify(item.assignment_rule)?JSON.parse(previousRule):
+      normalizeSubtaskRule(db.get(),item.assignment_rule,{dateKey:body.due_date||parent?.due_date||todayInHouseholdZone(),deferUsageCheck:deferRuleUsageCheck}):undefined;
+    const supervisorPool=Object.hasOwn(item,'supervisor_pool')?normalizeSupervisorPool(db.get(),item.supervisor_pool):undefined;
+    if(assignmentRule&&(assignmentGroup||assignedUsers?.length&&!item.id))throw new TaskSkillError('Keep the subtask rule separate from its resolved worker.');
+    if(supervisorPool&&!assignmentRule&&!item.id)throw new TaskSkillError('Choose a subtask rule before choosing its supervisor.');
     return { title: item.title.trim(), skillIds: normalizeSkillIds(db.get(), item.skill_ids), points, assignedUsers,templateItemId,
-      assignmentGroup,
+      assignmentGroup,assignmentRule,supervisorPool,
       isOptional: item.is_optional === undefined ? undefined : item.is_optional ? 1 : 0 };
   });
 }
@@ -1217,8 +1232,8 @@ function assertOptionalityEdit(task, value) {
 
 function editedSubtasksInput(task, body, actor, { definitionOnly = false } = {}) {
   if(body.subtasks===undefined)return undefined;
-  if(task.parent_task_id)throw new TaskSkillError('Edit subtasks on the original Task.');
-  const normalized=initialSubtasksInput(body,{preserveProvenance:true,parentTaskId:task.id});
+  if(task.parent_task_id&&!isSubtaskOccurrenceRoot(db.get(),task))throw new TaskSkillError('Edit subtasks on the original Task.');
+  const normalized=initialSubtasksInput(body,{preserveProvenance:true,parentTaskId:task.id,actor,deferRuleUsageCheck:definitionOnly});
   const existing=ordinaryActivitySubtasks(db.get(),task.id).filter(child=>!child.archived_at);
   const seen=new Set();
   const next=normalized.map((item,index)=>{
@@ -1252,7 +1267,10 @@ function editedSubtasksInput(task, body, actor, { definitionOnly = false } = {})
       if(item.assignmentGroup)assertCapability(db.get(),actor,'rotations.view');
       assertTaskMutation(db.get(),actor,null,{parent_task_id:task.id,points:item.points,skill_ids:item.skillIds,is_optional:item.isOptional,...(item.assignedUsers===undefined?{}:{assigned_to:item.assignedUsers})},{operation:'create'});
     }
-    return {...item,points:item.points ?? 0,isOptional:item.isOptional ?? 0,id,clientKey};
+    const savedRule=id?db.get().prepare('SELECT source_json,supervisor_pool_json FROM task_subtask_assignment_rules WHERE task_id=?').get(id):null;
+    const assignmentRuleChanged=item.assignmentRule!==undefined&&JSON.stringify(item.assignmentRule)!==(savedRule?.source_json||'null')
+      ||item.supervisorPool!==undefined&&JSON.stringify(item.supervisorPool)!==(savedRule?.supervisor_pool_json||'null');
+    return {...item,points:item.points ?? 0,isOptional:item.isOptional ?? 0,id,clientKey,assignmentRuleChanged};
   });
   for(const child of existing.filter(row=>!seen.has(row.id)))
     assertTaskMutation(db.get(),actor,child,{}, {operation:'delete'});
@@ -1289,6 +1307,14 @@ function applyEditedSubtasks(task, edited, actorId) {
       parent_task_id,created_by,visibility,sort_order,start_time,is_optional,points) VALUES(?,?,'open',?,?,?,?,?,?,?,?,?,?)`)
       .run(child.title,task.category,task.start_date,task.due_date,task.due_time,task.id,actorId,task.visibility,order,task.start_time,child.isOptional,child.points).lastInsertRowid);assignNewTaskCardColor(db.get(),id,{inheritFrom:task.id});}
     if(!sameIdOrder(loadTaskSkillIds(db.get(),id),child.skillIds))setTaskSkills(db.get(),id,child.skillIds);
+    if(child.assignmentRule!==undefined||child.supervisorPool!==undefined){
+      const saved=db.get().prepare('SELECT source_json,supervisor_pool_json FROM task_subtask_assignment_rules WHERE task_id=?').get(id);
+      const source=child.assignmentRule===undefined?saved?.source_json?JSON.parse(saved.source_json):null:child.assignmentRule;
+      const pool=child.supervisorPool===undefined?saved?.supervisor_pool_json?JSON.parse(saved.supervisor_pool_json):null:child.supervisorPool;
+      if(JSON.stringify(source)!==(saved?.source_json||'null')||JSON.stringify(pool)!==(saved?.supervisor_pool_json||'null'))
+        saveTaskSubtaskRule(db.get(),{taskId:id,source,supervisorPool:pool,actorId,expectedRevision:db.get().prepare('SELECT revision FROM tasks WHERE id=?').get(id).revision});
+      if(source)child.assignedUsers=undefined;
+    }
     if(child.assignmentGroup){
       const existing=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(id);
       const unchanged=child.id&&existing.assignment_group_json===JSON.stringify(child.assignmentGroup);
@@ -1766,10 +1792,15 @@ function loadSubtasks(taskId, me, supervisionViews) {
   if(assignable.length){
     const marks=assignable.map(()=>'?').join(','),allowed=new Map(assignable.map(row=>[row.id,row]));
     const maySeeGroups=hasCapability(db.get(),me,'rotations.view');
-    for(const rule of db.get().prepare(`SELECT task_id,source_json FROM task_subtask_assignment_rules
-      WHERE task_id IN (${marks})`).all(...assignable.map(row=>row.id))){
+    for(const rule of db.get().prepare(`SELECT r.task_id,r.source_json,r.supervisor_pool_json,x.state,x.reason
+      FROM task_subtask_assignment_rules r LEFT JOIN task_subtask_resolution_decisions x ON x.task_id=r.task_id AND x.root_task_id=?
+      WHERE r.task_id IN (${marks})`).all(taskId,...assignable.map(row=>row.id))){
       const source=JSON.parse(rule.source_json);
       if(source.kind!=='group'||maySeeGroups)allowed.get(rule.task_id).subtask_assignment_rule=source;
+      const pool=rule.supervisor_pool_json?JSON.parse(rule.supervisor_pool_json):null;
+      if(taskSupervisionManagementAllowed(db.get(),me,taskId)&&(!pool||pool.kind!=='group'||maySeeGroups))
+        allowed.get(rule.task_id).subtask_supervisor_pool=pool;
+      if(rule.state)allowed.get(rule.task_id).subtask_resolution={state:rule.state,reason:rule.reason};
     }
     for(const override of db.get().prepare(`SELECT task_id,mode,after_user_ids_json FROM task_subtask_occurrence_overrides
       WHERE task_id IN (${marks}) ORDER BY id`).all(...assignable.map(row=>row.id)))
@@ -2741,7 +2772,7 @@ export function createTaskDefinition(req, res) {
       return res.status(400).json({error:'Choose subtask People and Groups on the parent Activity.',code:400});
     if(subtaskPool?.group_ids.length&&JSON.stringify(subtaskPool)!==JSON.stringify(templatePool))
       assertCapability(db.get(),req,'rotations.view');
-    const initialSubtasks = initialSubtasksInput(req.body);
+    const initialSubtasks = initialSubtasksInput(req.body,{actor:req});
     if(initialSubtasks?.some(child=>child.assignmentGroup))assertCapability(db.get(),req,'rotations.view');
     for (const child of initialSubtasks || []) assertTaskMutation(db.get(), req, null, {points:child.points}, {operation:'create'});
     if (activityBinding && parent_task_id) {
@@ -2903,6 +2934,9 @@ export function createTaskDefinition(req, res) {
           persistNewTaskAssignees(db.get(),childId,child.assignedUsers??[]);
           authoredRotationFields.set(childId,{title:child.title});
           setTaskSkills(db.get(), childId, child.skillIds);
+          if(child.assignmentRule)saveTaskSubtaskRule(db.get(),{taskId:childId,source:child.assignmentRule,
+            supervisorPool:child.supervisorPool,actorId:req.authUserId||req.session.userId,
+            expectedRevision:db.get().prepare('SELECT revision FROM tasks WHERE id=?').get(childId).revision});
           const fixedTemplateTarget=child.templateItemId&&db.get().prepare(
             'SELECT fixed_user_id FROM activity_template_checklist_items WHERE id=?').get(child.templateItemId)?.fixed_user_id;
           if(child.assignmentGroup){
@@ -2956,6 +2990,7 @@ export function createTaskDefinition(req, res) {
       initializeTaskRotationRendering(db.get(),Number(result.lastInsertRowid),{draft:activityDraft?.data,inputs:req.body.activity_inputs||{},authoredFields:authoredRotationFields,actor:req.authUserId||req.session.userId});
       const actual = db.get().prepare('SELECT assigned_to FROM tasks WHERE id=?').get(result.lastInsertRowid);
       if (actual.assigned_to) assertTaskSupervisionAssignee(db.get(),Number(result.lastInsertRowid),actual.assigned_to);
+      materializeSavedSubtaskOccurrence(db.get(),Number(result.lastInsertRowid));
       reconcileTaskSupervision(db.get(),Number(result.lastInsertRowid),{actorId:req.authUserId||req.session.userId});
       notifyTaskAssignments(db.get(), Number(result.lastInsertRowid));
       if(is_recurring) {
@@ -3409,6 +3444,7 @@ export function updateTaskDefinition(req, res) {
     const currentChildren=editedSubtasks?ordinaryActivitySubtasks(db.get(),task.id).filter(row=>!row.archived_at):null;
     const childrenChanged=editedSubtasks&&(editedSubtasks.remove.length||editedSubtasks.next.length!==currentChildren.length
       ||editedSubtasks.next.some((child,index)=>child.id!==currentChildren[index]?.id||child.title!==currentChildren[index]?.title
+        ||child.assignmentRuleChanged
         ||JSON.stringify(child.assignmentGroup)!==(currentChildren[index]?.assignment_group_json||'null')
         ||child.isOptional!==Number(currentChildren[index]?.is_optional||0)
         ||child.points!==Number(currentChildren[index]?.points||0)
@@ -3588,6 +3624,7 @@ export function updateTaskDefinition(req, res) {
       }
       if(isTripStep(db.get(),task.id))refreshTripStepReminders(db.get(),task.id);
 
+      materializeSavedSubtaskOccurrence(db.get(),task.id);
       reconcileTaskSupervision(db.get(),task.id,{actorId:req.authUserId||req.session.userId});
       const sharedWindowChanged=taskWindowChanged&&parseRotationBindings(rotationBindingsJson).length>0;
       if(rotationsChanged||sharedWindowChanged){
@@ -4071,6 +4108,7 @@ function spawnRecurrenceFollowupSingle(task, {expirationAnchor=false}={}) {
     }
     bindTaskRotations(db.get(),Number(newTask.lastInsertRowid),{actorId:task.created_by,sharedPreviewOnly:sourceTask.status==='skipped'});
     applyTaskRotationRendering(db.get(),Number(newTask.lastInsertRowid),definition.rotation_rendering);
+    materializeSavedSubtaskOccurrence(db.get(),Number(newTask.lastInsertRowid));
     reconcileTaskSupervision(db.get(),Number(newTask.lastInsertRowid),{actorId:task.created_by});
     notifyTaskAssignments(db.get(), Number(newTask.lastInsertRowid));
     recordTaskActivity(db.get(),Number(newTask.lastInsertRowid),'recurrence_generated',task.created_by,
@@ -4520,7 +4558,20 @@ for(const [path,run] of [['preview',previewSubtaskReassignment],['apply',applySu
     }catch(error){res.status(error.status||500).json({error:error.status?error.message:'Could not reassign this occurrence.',code:error.status||500});}
   });
 
-router.post('/:id/supervisor',(req,res)=>{
+  router.post('/:id/subtasks/resolve',(req,res)=>{
+    try{
+      if(!Number.isSafeInteger(req.body.expected_revision))throw Object.assign(new Error('Refresh the Activity before resolving its unfinished work.'),{status:409});
+      const receipt=resolveSubtaskOccurrence(db.get(),{rootTaskId:Number(req.params.id),actorId:req.authUserId||req.session.userId,
+        idempotencyKey:req.body.idempotency_key,expectedRevision:req.body.expected_revision});
+      const groupsVisible=hasCapability(db.get(),req,'rotations.view');
+      res.json({data:{...receipt,decisions:receipt.decisions.map(({source,...decision})=>({...decision,
+        ...(source.kind!=='group'||groupsVisible?{source:source.kind==='group'?{
+          kind:'group',group_id:source.group_id,mode:source.mode}:source}:{})})),
+        cursor_advances:groupsVisible?receipt.cursor_advances:[]}});
+    }catch(error){res.status(error.status||500).json({error:error.status?error.message:'Could not resolve this occurrence.',code:error.status||500});}
+  });
+
+  router.post('/:id/supervisor',(req,res)=>{
   try {
     const me=req.authUserId||req.session.userId;
     const task=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(req.params.id);

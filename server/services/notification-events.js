@@ -79,7 +79,7 @@ function delegatedLearner(database, taskId) {
   return action?.execution_mode === 'delegated' && action.state !== 'not_required' ? Number(action.learner_user_id) : null;
 }
 
-export function notifyTaskAssignments(database, taskId, previousIds = [], { managed = false, role = null, sourceKey = null } = {}) {
+export function notifyTaskAssignments(database, taskId, previousIds = [], { managed = false, role = null, sourceKey = null, supervision = null } = {}) {
   const task = database.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
   if (!task || task.status === 'expired') return;
   // Policy-managed requests carry an obligation ID, so they use the adapter
@@ -87,7 +87,9 @@ export function notifyTaskAssignments(database, taskId, previousIds = [], { mana
   if (!managed && database.prepare('SELECT 1 FROM task_assignment_context WHERE task_id = ?').get(taskId)) return;
   const before = new Set(previousIds.map(Number));
   const recipients = database.prepare('SELECT user_id FROM task_assignments WHERE task_id = ?').all(taskId);
-  const excludedLearner = delegatedLearner(database, taskId);
+  const action=supervision?.actions.find(row=>Number(row.action_task_id)===Number(taskId));
+  const excludedLearner = supervision?(action?.execution_mode==='delegated'&&action.state!=='not_required'?Number(action.learner_user_id):null)
+    :delegatedLearner(database, taskId);
   const eventKey = sourceKey || `task:${taskId}:assigned:${randomUUID()}`;
   for (const { user_id: userId } of recipients) {
     if (before.has(Number(userId)) || Number(userId) === excludedLearner) continue;
@@ -96,6 +98,14 @@ export function notifyTaskAssignments(database, taskId, previousIds = [], { mana
       title: role ? `New ${role} responsibility` : 'Task assigned to you', body: task.title,
     });
   }
+}
+
+/** One committed occurrence shares its fresh supervision read across notices. */
+export function notifyResolvedSubtaskAssignments(database,rootTaskId,taskIds){
+  if(!taskIds.length)return;
+  const supervision=inspectTaskSupervision(database,rootTaskId);
+  for(const taskId of taskIds)notifyTaskAssignments(database,taskId,[],{
+    sourceKey:`task:${taskId}:assigned:subtask-resolution:${rootTaskId}`,supervision});
 }
 
 export function notifyTaskObligations(database, taskId, { eligibleIds = [] } = {}) {

@@ -25,6 +25,8 @@ export function taskEditDefinition(value) {
       id: Number(step.id) || null, ...(step.action_key ? {action_key:step.action_key} : {}), ...(step.client_key ? {client_key:step.client_key} : {}), title: text(step.title), points: point(step.points), is_optional: !!step.is_optional, skill_ids: ids(step.skill_ids),
       ...(step.assigned_user_ids===undefined?{}:{assigned_user_ids:ids(step.assigned_user_ids)}),
       assignment_group:assignmentGroup(step.assignment_group??step.assignment_group_json),
+      ...(step.assignment_rule||step.subtask_assignment_rule?{assignment_rule:step.assignment_rule??step.subtask_assignment_rule,
+        supervisor_pool:step.supervisor_pool??step.subtask_supervisor_pool??null}:{}),
     })),
     skill_ids: ids(value.skill_ids), assigned_to: ids(value.assigned_to),
     owner_user_id: Number(value.owner_user_id) || null,
@@ -72,7 +74,7 @@ export function taskEditResultMessage(result, fallback) {
 }
 
 const futureFields = ['card_color_choice','title','description','category','priority','start_date','start_time','due_date','due_date_offset_days','is_recurring','recurrence_rule','recurrence_from_completion','assignment_mode','assignment_group','subtask_candidate_pool','rotation_group','rotation_slot','points','visibility','countdown','locked','expiration_policy','scoring_mode','assigned_to','rotation_user_ids','skill_ids','tags','rotation_bindings'];
-const actionFields = ['title','description','category','priority','start_date','start_time','due_date','due_time','points','visibility','locked','expiration_policy','is_optional','assigned_user_ids','assignment_group','skill_ids','tags'];
+const actionFields = ['title','description','category','priority','start_date','start_time','due_date','due_time','points','visibility','locked','expiration_policy','is_optional','assigned_user_ids','assignment_group','assignment_rule','supervisor_pool','skill_ids','tags'];
 const comparable = (key, value) => ['is_optional','is_recurring','countdown','locked','recurrence_from_completion'].includes(key) ? !!value
   : key === 'points' ? point(value) : value;
 const writable = (key, value) => value !== undefined && (key !== 'points' || validTaskPoints(value)) && (key !== 'scoring_mode' || ['whole_task','subtasks'].includes(value));
@@ -96,6 +98,10 @@ export function taskFuturePatch(definition, draft, rootIntent = []) {
   for (const row of next) {
     const old = original.get(row.action_key), changed = {};
     for (const key of actionFields) if (writable(key,row[key]) && (!old || JSON.stringify(comparable(key,row[key])) !== JSON.stringify(comparable(key,old.fields[key])))) changed[key] = key==='points'?point(row[key]):row[key];
+    if(changed.assignment_rule){delete changed.assignment_group;delete changed.assigned_user_ids;}
+    else if(Object.hasOwn(changed,'assignment_rule')&&(Object.hasOwn(changed,'assignment_group')||Object.hasOwn(changed,'assigned_user_ids'))){
+      delete changed.assignment_rule;delete changed.supervisor_pool;
+    }
     if (old) { order.push(row.action_key); if (Object.keys(changed).length) update.push({action_key:row.action_key,fields:changed}); }
     else { add.push({client_key:row.client_key,fields:changed}); order.push(`new:${row.client_key}`); }
   }
@@ -111,7 +117,7 @@ export function taskFuturePatch(definition, draft, rootIntent = []) {
 export function hasTaskScoringChanges(before, after) {
   const terms = value => [value.scoring_mode,point(value.points),value.assigned_to,value.owner_user_id,value.assignment_mode,value.rotation_user_ids,
     value.rotation_group,value.rotation_slot,value.rotation_bindings,value.assignment_group,value.skill_ids,
-    (value.subtasks || []).map(row => [row.id || row.action_key || row.client_key,point(row.points),row.assigned_user_ids,row.assignment_group,row.skill_ids])];
+    (value.subtasks || []).map(row => [row.id || row.action_key || row.client_key,point(row.points),row.assigned_user_ids,row.assignment_group,row.assignment_rule,row.supervisor_pool,row.skill_ids])];
   return JSON.stringify(terms(before)) !== JSON.stringify(terms(after));
 }
 

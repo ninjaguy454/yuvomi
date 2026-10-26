@@ -4,6 +4,7 @@ process.env.DB_PATH=':memory:';process.env.SESSION_SECRET='isolated-scoring-api'
 const {ALL_MIGRATIONS,_setTestDatabase}=await import('../../server/db.js');
 const {default:router}=await import('../../server/routes/tasks.js');
 const {default:wallRouter}=await import('../../server/routes/wall.js');
+const {default:automationRouter}=await import('../../server/routes/automation.js');
 export async function scoringFixture(t) {
   t.mock.timers.enable({apis:['Date'],now:new Date('2026-11-01T12:00:00Z')});
   const d=new Database(':memory:');d.pragma('foreign_keys=ON');
@@ -12,6 +13,7 @@ export async function scoringFixture(t) {
   for(const [id,role] of [[1,'admin'],[2,'member'],[3,'member']])d.prepare("INSERT INTO users(id,username,display_name,password_hash,role,family_role) VALUES(?,?,?,'x',?,'other')").run(id,'Synthetic '+id,'Synthetic '+id,role);
   d.exec("INSERT INTO reward_participants(user_id,enabled) VALUES(2,1),(3,1); INSERT OR REPLACE INTO sync_config(key,value) VALUES('household_timezone','UTC')");
   const app=express();app.use(express.json());app.use((req,_res,next)=>{const id=Number(req.headers['x-test-user'])||1;req.authUserId=id;req.authRole=id===1?'admin':'member';req.authMethod='session';req.sessionID='scoring-wall-fixture';req.session={userId:id,role:req.authRole};next();});app.use('/tasks',router);app.use('/wall',wallRouter);
+  app.use('/automation',automationRouter);
   const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));
   t.after(async()=>{server.closeAllConnections();await new Promise(r=>server.close(r));_setTestDatabase(null);d.close();});
   const row=id=>d.prepare('SELECT * FROM tasks WHERE id=?').get(id);

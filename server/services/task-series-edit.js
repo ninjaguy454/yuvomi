@@ -20,6 +20,7 @@ import { applyTaskRotationRendering } from './task-rotation-rendering.js';
 import {normalizeGroupAssignment} from './group-assignment.js';
 import {normalizeSubtaskCandidatePool} from './subtask-candidate-pool.js';
 import {normalizeSubtaskRule,normalizeSupervisorPool,assertSubtaskCandidatePool} from './subtask-assignment-rules.js';
+import {materializeSavedSubtaskOccurrence} from './subtask-occurrence-resolution.js';
 
 const ROOT_FIELDS = ['title','description','category','priority','start_date','start_time','due_date','due_time',
   'due_date_offset_days','is_recurring','recurrence_rule','recurrence_from_completion','assignment_mode',
@@ -219,7 +220,14 @@ export function proposedSeriesDefinition(before, { fields, editedSubtasks, assig
       assigned_user_ids:[],tags:[],authorization:{created_by:authorId,assigned_user_ids:[]}};
     Object.assign(row.task,{title:step.title,sort_order:order,is_optional:step.isOptional,points:step.points,
       assignment_group_json:step.assignmentGroup?JSON.stringify(step.assignmentGroup):null});
-    if(existing?.assignment_rule){
+    if(step.assignmentRule!==undefined){
+      if(step.assignmentRule)row.assignment_rule=clone(step.assignmentRule);
+      else {delete row.assignment_rule;delete row.supervisor_pool;}
+    }
+    if(step.supervisorPool!==undefined){
+      if(step.supervisorPool)row.supervisor_pool=clone(step.supervisorPool);else delete row.supervisor_pool;
+    }
+    if(row.assignment_rule){
       // A full-form edit may echo the current occurrence's resolved person.
       // That person is never the future rule or future access roster. The
       // sparse future editor carries an explicit replacement operation.
@@ -422,6 +430,16 @@ function reconcileOccurrence(d,task,definition,window,actor) {
       throw new TaskStateError('This future subtask has a different Group assignment plan. Preserve it and apply the new plan to later occurrences.',{reason:'rotation_snapshot'},409);}
   const actionAssignments=action=>{
     const existing=children.find(row=>row.action_key===action.action_key&&!row.archived_at);
+    if(existing){
+      const decision=d.prepare('SELECT state FROM task_subtask_resolution_decisions WHERE task_id=? AND root_task_id=?').get(existing.id,task.id);
+      if(decision&&decision.state!=='unresolved'){
+        const saved=d.prepare('SELECT source_json,supervisor_pool_json FROM task_subtask_assignment_rules WHERE task_id=?').get(existing.id);
+        if((saved?.source_json||'null')!==JSON.stringify(action.assignment_rule??null)
+          ||(saved?.supervisor_pool_json||'null')!==JSON.stringify(action.supervisor_pool??null))
+          throw new TaskStateError('This future subtask already has a saved assignment decision.',{reason:'rotation_snapshot'},409);
+        return d.prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(existing.id).map(row=>row.user_id);
+      }
+    }
     if(action.assignment_rule)return [];
     return action.task.assignment_group_json&&existing
       ?[existing.assigned_to,...d.prepare('SELECT user_id FROM task_assignments WHERE task_id=?').all(existing.id).map(row=>row.user_id).filter(id=>id!==existing.assigned_to)].filter(Boolean)
@@ -483,6 +501,7 @@ function reconcileOccurrence(d,task,definition,window,actor) {
   const rotations=bindTaskRotations(d,task.id,{actorId:actorId(actor),scope:'future'});
   if(rotations.preserved?.length)throw new TaskStateError('This future occurrence already has a resolved rotation snapshot.',{reason:'rotation_snapshot'});
   applyTaskRotationRendering(d,task.id,data.rotation_rendering);
+  materializeSavedSubtaskOccurrence(d,task.id);
   reconcileTaskSupervision(d,task.id,{actorId:actorId(actor)});
   const resultingAssignee=read(d,task.id).assigned_to;if(resultingAssignee)assertTaskSupervisionAssignee(d,task.id,resultingAssignee);
   return rotations;

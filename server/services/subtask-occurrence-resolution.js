@@ -1,4 +1,4 @@
-/** Internal, opt-in occurrence resolver. No route writes these rules yet. */
+/** Persisted occurrence resolution; never called by a read or render path. */
 import {createHash} from 'node:crypto';
 import {planSubtaskAssignments} from './subtask-assignment-plan.js';
 import {householdMembers,effectiveSkillProficiency,sharedEligibleInterval} from './activity-eligibility.js';
@@ -11,6 +11,9 @@ import {setTaskAssignmentsBatch} from './task-assignments.js';
 import {updateCapturedDirectAssignees} from './task-assignee-policy.js';
 import {inspectTaskSupervision,reconcileTaskSupervision} from './task-supervision.js';
 import {todayKey} from '../utils/timezone.js';
+import {notifyResolvedSubtaskAssignments} from './notification-events.js';
+import {assertAssigneeCount,categoryAssigneePolicy} from './task-assignee-policy.js';
+import {taskWindowAncestors} from './task-window.js';
 
 const fail=(message,status=409)=>{throw Object.assign(new Error(message),{status,code:'subtask_resolution_conflict'});};
 const uniqueIds=value=>Array.isArray(value)?[...new Set(value.map(Number))].filter(id=>Number.isSafeInteger(id)&&id>0):[];
@@ -23,6 +26,13 @@ const childRows=(d,rootId)=>d.prepare(`SELECT t.*,r.source_json,r.supervisor_poo
       AND NOT EXISTS(SELECT 1 FROM task_activity_support_tasks s WHERE s.task_id=t.id)
       AND NOT EXISTS(SELECT 1 FROM task_supervision_actions a WHERE a.counterpart_task_id=t.id)
     ORDER BY t.sort_order,t.id`).all(rootId);
+
+// A workflow Activity is a real assignment scope nested beneath its event.
+// Arbitrary checklist children cannot become a second resolver root.
+export const isSubtaskOccurrenceRoot=(d,root)=>!root.parent_task_id||!!d.prepare(`SELECT 1 FROM workflow_instance_tasks w
+  JOIN workflow_instances i ON i.id=w.workflow_instance_id
+  JOIN task_activity_bindings b ON b.task_id=w.task_id
+  WHERE w.task_id=? AND w.role='primary' AND i.parent_task_id=?`).get(root.id,root.parent_task_id);
 
 
 function assignmentContext(d,root,row,policy){
@@ -37,8 +47,7 @@ function assignmentContext(d,root,row,policy){
 
 function cursorKey(d,root,groupId){
   const recurring=d.prepare('SELECT series_id FROM task_recurrence_occurrences WHERE task_id=?').get(root.id);
-  const bound=d.prepare('SELECT activity_template_id FROM task_activity_bindings WHERE task_id=?').get(root.id);
-  const owner=recurring?`series:${recurring.series_id}`:bound?`template:${bound.activity_template_id}`:`task:${root.id}`;
+  const owner=recurring?`series:${recurring.series_id}`:`task:${root.id}`;
   return `subtask-synced:${owner}:group:${groupId}`;
 }
 
@@ -46,9 +55,11 @@ function cursorKey(d,root,groupId){
  * Supervised candidates are held unresolved until the scope's supervisor can be coordinated. */
 export function buildSubtaskOccurrenceSnapshot(d,rootTaskId,{overrideSources=new Map(),reconsiderTaskIds=new Set(),allowInProgress=false,selectedTaskIds=null}={}){
   const root=d.prepare('SELECT * FROM tasks WHERE id=?').get(rootTaskId);
-  if(!root||root.parent_task_id||root.archived_at
+  if(!root||!isSubtaskOccurrenceRoot(d,root)||root.archived_at
     ||!(allowInProgress?['open','unavailable','in_progress']:['open','unavailable']).includes(root.status))
     fail('Choose an open Activity occurrence.');
+  if(root.parent_task_id&&taskWindowAncestors(d,root.id).some(row=>row.archived_at||['done','expired','skipped','closed_incomplete'].includes(row.status)))
+    fail('Reopen the workflow before resolving its Activity.');
   const members=householdMembers(d),memberById=new Map(members.map(member=>[member.id,member]));
   const saved=childRows(d,root.id);
   if(saved.length>50)fail('This Activity has too many subtasks for automatic resolution.',400);
@@ -68,7 +79,7 @@ export function buildSubtaskOccurrenceSnapshot(d,rootTaskId,{overrideSources=new
     WHERE r.task_id IN (${saved.map(()=>'?').join(',')}) ORDER BY r.task_id,r.sort_order,s.id`).all(...saved.map(row=>row.id)):[];
   const skillsByTask=new Map();for(const skill of skillRows){if(!skillsByTask.has(skill.task_id))skillsByTask.set(skill.task_id,[]);skillsByTask.get(skill.task_id).push(skill);}
   const proficiency=new Map(),availability=new Map(),cursorKeys=new Map(),defaultPools=new Map(),
-    usageByGroupDate=new Map(),periodByGroupDate=new Map(),cursorByKey=new Map(),memberOrderByRule=new Map();
+    usageByGroupDate=new Map(),periodByGroupDate=new Map(),cursorByKey=new Map(),memberOrderByRule=new Map(),configurationByRule=new Map(),supervisorPools=new Map();
   const rows=saved.map(row=>{
     const existing=assigned.get(row.id)||[];
     if(existing.length&&!reconsiderTaskIds.has(row.id)){
@@ -85,11 +96,14 @@ export function buildSubtaskOccurrenceSnapshot(d,rootTaskId,{overrideSources=new
     }
     if(selectedTaskIds&&!selectedTaskIds.has(row.id))return null;
     if(!row.source_json&&!overrideSources.has(row.id))return null;
-    if(!['open','unavailable',...(allowInProgress&&reconsiderTaskIds.has(row.id)?['in_progress']:[])].includes(row.status))
-      fail('Started or completed subtasks cannot be resolved.');
     const storedSource=row.source_json?JSON.parse(row.source_json):null;
     const raw=overrideSources.get(row.id)??storedSource;
     if(!raw||typeof raw!=='object'||Array.isArray(raw))fail('Invalid stored subtask rule.');
+    const unresolved=reason=>({key:String(row.id),points:Number(row.points)||0,is_optional:!!row.is_optional,
+      source:raw,eligible_user_ids:[],normal_user_ids:[],supervised_candidates:[],prior_decision:prior.has(row.id),
+      previous_user_ids:existing,skill_ids:(skillsByTask.get(row.id)||[]).map(skill=>skill.id),task_revision:row.revision,invalid_reason:reason});
+    if(!['open','unavailable',...(allowInProgress&&reconsiderTaskIds.has(row.id)?['in_progress']:[])].includes(row.status))
+      return unresolved('work_started_or_completed');
     let source;
     if(raw.kind==='fixed'){
       const userIds=uniqueIds(raw.user_ids);
@@ -97,16 +111,23 @@ export function buildSubtaskOccurrenceSnapshot(d,rootTaskId,{overrideSources=new
       source={kind:'fixed',user_ids:userIds};
     }else if(raw.kind==='group'){
       if(!['global','random','synced','smart'].includes(raw.mode))fail('Invalid Group assignment mode.');
-      const config=normalizeGroupAssignment(d,raw,{allowInactive:false,allowImported:false});
+      const configKey=JSON.stringify([raw.group_id,raw.start_mode,raw.direction,raw.member_order]);
+      if(!configurationByRule.has(configKey)){
+        try{configurationByRule.set(configKey,{...normalizeGroupAssignment(d,{...raw,member_order:undefined},{allowInactive:false,allowImported:false}),
+          ...(raw.member_order?.length?{member_order:raw.member_order}:{})});}
+        catch(error){if(![400,409].includes(error.status))throw error;configurationByRule.set(configKey,null);}
+      }
+      const config=configurationByRule.get(configKey);
+      if(!config)return unresolved('group_unavailable');
       const date=row.due_date||root.due_date||todayKey(d),groupDate=`${config.group_id}:${date}`;
       if(!usageByGroupDate.has(groupDate))usageByGroupDate.set(groupDate,rotationGroupUsageVersion(d,config.group_id,date));
       const usage=usageByGroupDate.get(groupDate);
       const shared=usage?.usage_mode==='shared';
-      if(shared&&raw.mode!=='global'||!shared&&raw.mode==='global')fail('This Group mode conflicts with its shared or independent rotation policy.');
+      if(shared&&raw.mode!=='global'||!shared&&raw.mode==='global')return unresolved('group_mode_policy_conflict');
       const orderKey=JSON.stringify([config.group_id,config.member_order||null]);
       if(!memberOrderByRule.has(orderKey))memberOrderByRule.set(orderKey,groupAssignmentMembers(d,config));
       const memberOrder=memberOrderByRule.get(orderKey);
-      const key=cursorKey(d,root,config.group_id);cursorKeys.set(config.group_id,key);
+      const key=cursorKeys.get(config.group_id)||cursorKey(d,root,config.group_id);cursorKeys.set(config.group_id,key);
       if(!cursorByKey.has(key))cursorByKey.set(key,d.prepare('SELECT cursor_user_id FROM assignment_rotation_state WHERE rotation_key=?').get(key)??null);
       const cursor=cursorByKey.get(key);
       if(shared&&!periodByGroupDate.has(groupDate))periodByGroupDate.set(groupDate,previewSharedRotation(d,config.group_id,{dateKey:date}));
@@ -121,8 +142,12 @@ export function buildSubtaskOccurrenceSnapshot(d,rootTaskId,{overrideSources=new
     const defaultGroupId=storedSource?.kind==='group'?Number(storedSource.group_id):source.kind==='group'?source.group_id:null;
     if(defaultGroupId&&!defaultPools.has(defaultGroupId))defaultPools.set(defaultGroupId,
       d.prepare('SELECT pool_json FROM rotation_group_supervisor_defaults WHERE group_id=?').get(defaultGroupId)?.pool_json??null);
-    const supervisorIds=supervisorPool(d,row.supervisor_pool_json??(defaultGroupId?defaultPools.get(defaultGroupId):null),
-      members,memberById,dateKey);
+    const encodedPool=row.supervisor_pool_json??(defaultGroupId?defaultPools.get(defaultGroupId):null),poolKey=JSON.stringify([encodedPool,dateKey]);
+    if(!supervisorPools.has(poolKey)){
+      try{supervisorPools.set(poolKey,supervisorPool(d,encodedPool,members,memberById,dateKey));}
+      catch{supervisorPools.set(poolKey,[]);}
+    }
+    const supervisorIds=supervisorPools.get(poolKey);
     for(const id of candidateIds){
       const member=memberById.get(id);if(!member)continue;
       const capabilities=skills.map(skill=>{
@@ -169,18 +194,26 @@ export function buildSubtaskOccurrenceSnapshot(d,rootTaskId,{overrideSources=new
       normal_user_ids:eligible,supervised_candidates:supportedSupervised,
       prior_decision:prior.has(row.id),previous_user_ids:existing,skill_ids:skills.map(skill=>skill.id),task_revision:row.revision};
   }).filter(Boolean);
-  const inputHash=hash({root_id:root.id,root_revision:root.revision,rows});
+  // Revision CAS belongs to the command boundary. A receipt/helper/title write
+  // can advance a revision without changing any allocation input.
+  const inputHash=hash({root_id:root.id,rows:rows.map(({task_revision,...row})=>row)});
   return {root,rows,input_hash:inputHash,cursor_keys:cursorKeys};
 }
 
 export function planWithSupervisor(snapshot,d){
   const occurrenceKey=`task:${snapshot.root.id}`;
-  const existing=inspectTaskSupervision(d,snapshot.root.id);
-  const previous=new Map(existing.actions.map(action=>[String(action.action_task_id),action.supervisor_user_id]));
+  const previous=new Map(snapshot.rows.some(row=>row.supervised_candidates.length)
+    ?inspectTaskSupervision(d,snapshot.root.id).actions.map(action=>[String(action.action_task_id),action.supervisor_user_id]):[]);
   const rows=snapshot.rows.map(row=>({...row,eligible_user_ids:[...row.normal_user_ids,
     ...(row.source?.kind==='fixed'&&row.source.user_ids?.length>1?[]
       :row.supervised_candidates.filter(item=>item.supervisor_ids.length).map(item=>item.user_id))]}));
   const plan=planSubtaskAssignments({snapshotVersion:snapshot.input_hash,occurrenceKey,rows});
+  for(const row of snapshot.rows.filter(row=>row.invalid_reason)){
+    const decision=plan.decisions.find(item=>item.key===row.key);decision.state='unresolved';decision.assignee_ids=[];delete decision.decision_key;
+    const conflict=plan.conflicts.find(item=>item.key===row.key);
+    if(conflict)conflict.reason=row.invalid_reason;else plan.conflicts.push({key:row.key,reason:row.invalid_reason});
+    plan.cursor_advances=plan.cursor_advances.filter(advance=>advance.group_id!==row.source.group_id);
+  }
   const supervisorAssignments={};
   for(const decision of plan.decisions){
     if(decision.state!=='assigned')continue;
@@ -196,25 +229,61 @@ export function planWithSupervisor(snapshot,d){
     supervisor_user_id:unique.length===1?unique[0]:null};
 }
 
-/** All writes, including cursor changes, happen inside one immediate SQLite transaction.
- * This is intentionally not wired to the public Task route while supervision
- * pools and an occurrence reassignment path are unfinished. */
-export function resolveSubtaskOccurrence(d,{rootTaskId,idempotencyKey,actorId}={}){
-  if(!Number.isSafeInteger(Number(rootTaskId))||!Number.isSafeInteger(Number(actorId))
+/** All writes, including cursor changes, happen in one immediate transaction.
+ * Explicit commands reauthorize saved receipts; render paths never resolve. */
+export function resolveSubtaskOccurrence(d,input={}){
+  return resolveOccurrence(d,input);
+}
+
+/** Automatic execution takes authority from the stored creator and saved rules.
+ * No request flag can opt out of authorization. Revocation is an explicit
+ * unresolved result, allowing an unrelated completion to finish safely. */
+export function materializeSavedSubtaskOccurrence(d,rootTaskId){
+  return d.transaction(()=>{
+  const root=d.prepare('SELECT * FROM tasks WHERE id=?').get(rootTaskId);
+  if(!root||root.archived_at||!['open','unavailable','in_progress'].includes(root.status))return null;
+  const rules=d.prepare(`SELECT r.task_id FROM task_subtask_assignment_rules r JOIN tasks t ON t.id=r.task_id
+    WHERE t.parent_task_id=? AND t.archived_at IS NULL`).all(rootTaskId);
+  if(!rules.length)return null;
+  const prior=d.prepare('SELECT * FROM task_subtask_resolution_runs WHERE root_task_id=?').get(rootTaskId);
+  const missing=d.prepare(`SELECT 1 FROM task_subtask_assignment_rules r JOIN tasks t ON t.id=r.task_id
+    LEFT JOIN task_subtask_resolution_decisions x ON x.task_id=t.id AND x.root_task_id=?
+    WHERE t.parent_task_id=? AND t.archived_at IS NULL AND x.task_id IS NULL LIMIT 1`).get(rootTaskId,rootTaskId);
+  if(prior&&!JSON.parse(prior.receipt_json).conflicts?.length&&!missing)return JSON.parse(prior.receipt_json);
+  const snapshot=buildSubtaskOccurrenceSnapshot(d,rootTaskId,{allowInProgress:true});
+  const authority=resolutionAuthority(d,root,root.created_by);
+  const key=hash([snapshot.input_hash,authority]);
+  if(prior?.recovery_hash===key)return JSON.parse(prior.receipt_json);
+  return resolveOccurrence(d,{rootTaskId,idempotencyKey:`saved:${key}`,actorId:root.created_by},{automatic:true,snapshot});
+  }).immediate();
+}
+
+function resolutionAuthority(d,root,actorId){
+  if(!actorId||!householdMembers(d).some(member=>Number(member.id)===Number(actorId)))return false;
+  const rights=taskCapabilities(d,actorId,root);
+  if(!rights.view||!rights.change_assignment||!rights.reassign)return false;
+  return childRows(d,root.id).every(child=>{const r=taskCapabilities(d,actorId,child);return r.view&&r.change_assignment&&r.reassign;});
+}
+
+function resolveOccurrence(d,{rootTaskId,idempotencyKey,actorId,expectedRevision}={},{automatic=false,snapshot:savedSnapshot=null}={}){
+  if(!Number.isSafeInteger(Number(rootTaskId))||(!automatic&&!Number.isSafeInteger(Number(actorId)))
     ||typeof idempotencyKey!=='string'||!idempotencyKey.trim()||idempotencyKey.length>128)
     fail('Provide an Activity, actor and idempotency key.',400);
   return d.transaction(()=>{
     const root=d.prepare('SELECT * FROM tasks WHERE id=?').get(rootTaskId);
-    const rootRights=root&&taskCapabilities(d,actorId,root);
-    if(!rootRights?.change_assignment||!rootRights.reassign)fail('This actor cannot change Activity assignments.',403);
+    const availableActor=householdMembers(d).some(member=>Number(member.id)===Number(actorId));
+    const rootRights=root&&availableActor&&taskCapabilities(d,actorId,root);
+    let authorized=!!rootRights?.view&&!!rootRights?.change_assignment&&!!rootRights?.reassign
+      &&availableActor;
+    if(!authorized&&!automatic)fail('This actor cannot change Activity assignments.',403);
     const children=d.prepare(`SELECT t.* FROM tasks t WHERE t.parent_task_id=? AND t.archived_at IS NULL
       AND NOT EXISTS(SELECT 1 FROM task_activity_support_tasks s WHERE s.task_id=t.id)
       AND NOT EXISTS(SELECT 1 FROM task_supervision_actions a WHERE a.counterpart_task_id=t.id)`).all(rootTaskId);
     const checked=new Set();
     for(const child of children){
-      const rights=taskCapabilities(d,actorId,child);
-      if(!rights.view||!rights.change_assignment||!rights.reassign)
-        fail('This actor cannot change a subtask assignment.',403);
+      const rights=availableActor?taskCapabilities(d,actorId,child):null;
+      if(!rights?.view||!rights?.change_assignment||!rights?.reassign){authorized=false;
+        if(!automatic)fail('This actor cannot change a subtask assignment.',403);}
       checked.add(child.id);
     }
     const prior=d.prepare('SELECT * FROM task_subtask_resolution_runs WHERE root_task_id=?').get(rootTaskId);
@@ -237,12 +306,25 @@ export function resolveSubtaskOccurrence(d,{rootTaskId,idempotencyKey,actorId}={
       }
       return receipt;
     }
-    if(prior&&!JSON.parse(prior.receipt_json).conflicts?.length)
+    if(expectedRevision!==undefined&&(!Number.isSafeInteger(expectedRevision)||root.revision!==expectedRevision))
+      fail('This Activity changed. Refresh before resolving its unfinished work.');
+    const missing=d.prepare(`SELECT 1 FROM task_subtask_assignment_rules r JOIN tasks t ON t.id=r.task_id
+      LEFT JOIN task_subtask_resolution_decisions x ON x.task_id=t.id AND x.root_task_id=?
+      WHERE t.parent_task_id=? AND t.archived_at IS NULL AND x.task_id IS NULL LIMIT 1`).get(rootTaskId,rootTaskId);
+    if(prior&&!JSON.parse(prior.receipt_json).conflicts?.length&&!missing)
       fail('This occurrence already has a complete saved resolution.');
-    const snapshot=buildSubtaskOccurrenceSnapshot(d,rootTaskId);
-    if(prior&&prior.recovery_hash===snapshot.input_hash)
+    const snapshot=savedSnapshot||buildSubtaskOccurrenceSnapshot(d,rootTaskId,{allowInProgress:true});
+    const recoveryKey=hash([snapshot.input_hash,resolutionAuthority(d,root,actorId)]);
+    if(prior&&prior.recovery_hash===recoveryKey)
       fail('The unresolved work has no changed eligibility or assignment inputs.');
-    const plan=planWithSupervisor(snapshot,d);
+    let plan=planWithSupervisor(snapshot,d);
+    if(automatic&&authorized&&Object.keys(plan.supervisor_assignments).length&&!taskSupervisionManagementAllowed(d,actorId,rootTaskId))authorized=false;
+    if(!authorized){
+      plan={...plan,decisions:plan.decisions.map(decision=>snapshot.rows.find(row=>row.key===decision.key)?.locked?decision
+        :{...decision,assignee_ids:[],state:'unresolved',decision_key:undefined}),
+        conflicts:snapshot.rows.filter(row=>!row.locked).map(row=>({key:row.key,reason:'assignment_authorization_required'})),
+        cursor_advances:[],supervisor_assignments:{},supervisor_user_id:null};
+    }
     if(plan.decisions.some(decision=>decision.state==='assigned'&&snapshot.rows.find(row=>row.key===decision.key)?.supervised_candidates
       .some(item=>decision.assignee_ids.includes(item.user_id)))
       &&!taskSupervisionManagementAllowed(d,actorId,rootTaskId))
@@ -261,6 +343,7 @@ export function resolveSubtaskOccurrence(d,{rootTaskId,idempotencyKey,actorId}={
         continue;
       }
       if(decision.state==='assigned'&&!preserved){
+        assertAssigneeCount(categoryAssigneePolicy(d,children.find(child=>child.id===id)?.category),decision.assignee_ids);
         // The tasks revision trigger observes assigned_to; incrementing the
         // revision explicitly would advance the parent/change clock twice.
         d.prepare('UPDATE tasks SET assigned_to=? WHERE id=? AND status IN (\'open\',\'unavailable\')')
@@ -292,11 +375,13 @@ export function resolveSubtaskOccurrence(d,{rootTaskId,idempotencyKey,actorId}={
     if(plan.decisions.some(decision=>decision.state==='assigned'&&snapshot.rows.find(row=>row.key===decision.key)?.supervised_candidates
       .some(item=>decision.assignee_ids.includes(item.user_id)))){
       const reconciled=reconcileTaskSupervision(d,rootTaskId,{actorId,
-        supervisorAssignments:plan.supervisor_assignments,perActionPlanning:true,notify:false});
+        supervisorAssignments:plan.supervisor_assignments,perActionPlanning:true});
       if(reconciled.state!=='assigned')fail('The supervisor could not be linked to this occurrence.');
     }
+    notifyResolvedSubtaskAssignments(d,rootTaskId,materialized.map(row=>row.taskId));
     const receipt={...plan,input_hash:snapshot.input_hash};
-    const recoveryHash=plan.conflicts.length?buildSubtaskOccurrenceSnapshot(d,rootTaskId).input_hash:null;
+    const recoverySnapshot=plan.conflicts.length?buildSubtaskOccurrenceSnapshot(d,rootTaskId,{allowInProgress:true}):null;
+    const recoveryHash=recoverySnapshot?hash([recoverySnapshot.input_hash,resolutionAuthority(d,root,actorId)]):null;
     d.prepare(`INSERT INTO task_subtask_resolution_runs
       (root_task_id,idempotency_key,input_hash,receipt_json,recovery_hash) VALUES(?,?,?,?,?)
       ON CONFLICT(root_task_id) DO UPDATE SET idempotency_key=excluded.idempotency_key,

@@ -116,7 +116,11 @@ function context(d, source, action) {
     ancestorIds.add(ancestor.id);
     if (['expired','skipped','closed_incomplete'].includes(ancestor.status)||ancestor.status==='done'&&ancestor.completion_kept_subtasks) expiredTask = ancestor;
   }
-  return { occurrence, dateKey, learnerId: chain.find(item => item.assigned_to)?.assigned_to || null,
+  const unassignedRule=action.id!==source.id&&!action.assigned_to
+    &&taskReadTableExists(d,'task_subtask_assignment_rules')
+    &&taskReadStatement(d,`SELECT 1 FROM task_subtask_assignment_rules r WHERE r.task_id=?
+      AND NOT EXISTS(SELECT 1 FROM task_assignments a WHERE a.task_id=r.task_id)`).get(action.id);
+  return { occurrence, dateKey, learnerId: unassignedRule?null:chain.find(item => item.assigned_to)?.assigned_to || null,
     archived: chain.some(item => item.archived_at), expired: expiredTask?.status==='expired', expired_at: expiredTask?.expired_at ?? null,
     skipped:expiredTask?.status==='skipped',skipped_at:expiredTask?.skipped_at??null,
     closed_incomplete:expiredTask?.status==='closed_incomplete'||Boolean(expiredTask?.completion_kept_subtasks),closed_incomplete_at:expiredTask?.closed_incomplete_at??null,

@@ -29,6 +29,7 @@ import {
 } from './activity-eligibility.js';
 import { recordTaskAssignment } from './assignment-responsibilities.js';
 import { loadActivityChecklist, materializeActivityChecklist, renderActivityChecklistTitle } from './activity-template-checklist.js';
+import {materializeSavedSubtaskOccurrence} from './subtask-occurrence-resolution.js';
 import { setTags } from '../utils/task-tags.js';
 import { previewTaskActivityBinding } from './task-activity-bindings.js';
 import { taskOptionalContext } from './task-optional.js';
@@ -671,6 +672,8 @@ function instantiateWorkflowTasks(d, workflowId, {
         startTime: schedule.start_time,
         dueDateOffsetDays: schedule.due_date_offset_days,
       });
+      if(activity.subtask_candidate_pool_json)d.prepare('UPDATE tasks SET subtask_candidate_pool_json=? WHERE id=?')
+        .run(activity.subtask_candidate_pool_json,primaryTaskId);
       d.prepare(`
         INSERT INTO workflow_instance_tasks (
           workflow_instance_id, workflow_step_id, task_id, role
@@ -733,6 +736,7 @@ function instantiateWorkflowTasks(d, workflowId, {
         ...planning,
       });
 
+      materializeSavedSubtaskOccurrence(d,primaryTaskId);
       const supervision = reconcileTaskSupervision(d, primaryTaskId, { actorId: createdBy });
       if (supervision.support_task_id) {
         const supervisionTaskId = supervision.support_task_id;

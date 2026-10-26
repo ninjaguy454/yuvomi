@@ -51,6 +51,7 @@ import { listRotationGroups, finalizeRotation, getRotationTrack } from '../servi
 import { rotationGroupUsage } from '../services/rotation-shared.js';
 import {normalizeGroupAssignment} from '../services/group-assignment.js';
 import {normalizeSubtaskCandidatePool} from '../services/subtask-candidate-pool.js';
+import {normalizeSubtaskRule,normalizeSupervisorPool,assertSubtaskCandidatePool} from '../services/subtask-assignment-rules.js';
 import { rotationOccurrenceOptions } from '../services/rotation-access.js';
 import { normalizeWorkflowRotationOperations, executeWorkflowRotationOperation } from '../services/workflow-rotation-operations.js';
 import {
@@ -106,6 +107,16 @@ function rotationPickerData(d, actor) {
     rotation_occurrences: rotationOccurrenceOptions(d,actor) };
 }
 
+function activityForViewer(d,actor,activity){
+  if(!activity||hasCapability(d,actor,'rotations.view'))return activity;
+  const pool=activity.subtask_candidate_pool_json?JSON.parse(activity.subtask_candidate_pool_json):null;
+  return {...activity,assignment_group_json:null,
+    ...(pool?{subtask_candidate_pool_json:JSON.stringify({...pool,group_ids:[]})}:{}),
+    checklist:activity.checklist.map(item=>({...item,assignment_group_json:null,
+      assignment_rule_json:item.assignment_rule_json&&JSON.parse(item.assignment_rule_json).kind==='group'?null:item.assignment_rule_json,
+      supervisor_pool_json:item.supervisor_pool_json&&JSON.parse(item.supervisor_pool_json).kind==='group'?null:item.supervisor_pool_json}))};
+}
+
 function skillRowsWithMembers(d) {
   const members = householdMembers(d);
   return d.prepare('SELECT * FROM skills ORDER BY name COLLATE NOCASE, id').all().map((skill) => ({
@@ -153,7 +164,9 @@ function validPlace(d, id, { activeOnly = false } = {}) {
   return !!d.prepare(`SELECT 1 FROM places WHERE id = ?${activeOnly ? ' AND active = 1' : ''}`).get(id);
 }
 
-function normalizeActivityInput(d, body, existing = null) {
+function normalizeActivityInput(d, body, existing = null, actor = null) {
+  if(actor&&(body.assignment_group||(Array.isArray(body.checklist)?body.checklist:[]).some(item=>item?.assignment_group||item?.assignment_rule?.kind==='group'||item?.supervisor_pool?.kind==='group')))
+    assertCapability(d,actor,'rotations.view');
   const name = text(body.name ?? existing?.name, { required: true, max: 120 });
   const titleTemplate = text(body.title_template ?? existing?.title_template ?? name, { required: true, max: 200 });
   const description = text(body.description ?? existing?.description, { max: 2000 });
@@ -268,11 +281,23 @@ function normalizeActivityInput(d, body, existing = null) {
     const assignmentGroup=normalizeGroupAssignment(d,item?.assignment_group===undefined?prior?.assignment_group_json:item.assignment_group,
       {allowInactive:!!prior?.assignment_group_json&&Number((typeof item?.assignment_group==='string'?JSON.parse(item.assignment_group):item?.assignment_group)?.group_id??JSON.parse(prior.assignment_group_json).group_id)===Number(JSON.parse(prior.assignment_group_json).group_id)});
     if(fixedUserId&&assignmentGroup)throw new Error('Choose either a fixed Person or a Group for this subtask.');
+    const legacyChoice=!!(fixedUserId||assignmentGroup);
+    const assignmentRule=item?.assignment_rule===undefined
+      ?legacyChoice?null:prior?.assignment_rule_json?JSON.parse(prior.assignment_rule_json):null
+      :item.assignment_rule==null?null:prior?.assignment_rule_json===JSON.stringify(item.assignment_rule)
+        ?JSON.parse(prior.assignment_rule_json):normalizeSubtaskRule(d,item.assignment_rule);
+    const supervisorPool=assignmentRule?(item?.supervisor_pool===undefined
+      ?prior?.supervisor_pool_json?JSON.parse(prior.supervisor_pool_json):null:normalizeSupervisorPool(d,item.supervisor_pool)):null;
+    if(assignmentRule&&legacyChoice)throw new Error('Choose a subtask rule or a legacy Person/Group target.');
+    if(item?.supervisor_pool&&!assignmentRule)throw new Error('Choose a subtask rule before choosing its supervisor.');
+    assertSubtaskCandidatePool(d,subtaskCandidatePool?JSON.stringify(subtaskCandidatePool):null,assignmentRule,
+      prior?.assignment_rule_json?JSON.parse(prior.assignment_rule_json):null);
     return {
       id:retainedId,
       titleTemplate,
       sortOrder: index,
       assignmentGroup,
+      assignmentRule,supervisorPool,
       fixedUserId,
       isOptional: item?.is_optional === undefined ? prior?.is_optional ?? 0 : item.is_optional ? 1 : 0,
       points: pointAmount(item?.points===undefined?prior?.points??0:item.points),
@@ -475,6 +500,8 @@ function saveActivityChecklist(d, activityId, checklist) {
           replaceRule?1:0,replaceRule?1:0,item.id,activityId);
       itemId=item.id;
     }else itemId=insert.run(activityId,item.titleTemplate,item.sortOrder,item.isOptional,item.points,groupJson,item.fixedUserId).lastInsertRowid;
+    d.prepare('UPDATE activity_template_checklist_items SET assignment_rule_json=?,supervisor_pool_json=? WHERE id=?')
+      .run(item.assignmentRule?JSON.stringify(item.assignmentRule):null,item.supervisorPool?JSON.stringify(item.supervisorPool):null,itemId);
     d.prepare('DELETE FROM activity_template_checklist_skills WHERE checklist_item_id=?').run(itemId);
     item.skillIds.forEach((skillId, order) => insertSkill.run(itemId, skillId, order));
   });
@@ -1015,7 +1042,7 @@ router.get('/activity-options', (req, res) => {
         ...(row.type === 'rotation_group' ? {module_options:picker.rotation_groups} : row.type === 'rotation_occurrence' ? {module_options:picker.rotation_occurrences} : {}) })) }; }
       catch (error) { return { input_schema: [], variable_error: error.message }; }
     };
-    const activities = listActivityTemplates(db.get(), { activeOnly: true }).map((activity) => ({
+    const activities = listActivityTemplates(db.get(), { activeOnly: true }).map(activity=>activityForViewer(db.get(),req,activity)).map((activity) => ({
       id: activity.id,
       name: activity.name,
       title_template: activity.title_template,
@@ -1043,6 +1070,7 @@ router.get('/activity-options', (req, res) => {
       rotation_group: activity.rotation_group,
       rotation_bindings: activity.rotation_bindings,
       assignment_group_json:activity.assignment_group_json,
+      subtask_candidate_pool_json:activity.subtask_candidate_pool_json,
       location_variable_id: activity.location_variable_id,
       presence_policy: activity.presence_policy,
       presence_window: activity.presence_window,
@@ -1069,8 +1097,9 @@ router.post('/activity-templates/:id/resolve', (req, res) => {
     const assigned=req.body.assigned_to;
     if(assigned!==undefined && (!Array.isArray(assigned)||assigned.length!==1||!Number.isSafeInteger(Number(assigned[0]))||Number(assigned[0])<=0))
       throw new Error('Choose one valid Activity Template assignee.');
-    res.json(resolveActivityTemplate(db.get(), Number(req.params.id), { inputs: req.body.inputs ?? {}, subjectUserId: req.body.subject_user_id ?? null,
-      assignmentOverrideUserId:assigned?.[0]??null,task:req.body.task??null }));
+    const resolved=resolveActivityTemplate(db.get(), Number(req.params.id), { inputs: req.body.inputs ?? {}, subjectUserId: req.body.subject_user_id ?? null,
+      assignmentOverrideUserId:assigned?.[0]??null,task:req.body.task??null });
+    res.json({...resolved,data:activityForViewer(db.get(),req,resolved.data)});
   } catch (error) { expressionErrorResponse(res, error); }
 });
 
@@ -1505,7 +1534,7 @@ router.get('/admin/activity-templates', requireCapability('activities.view'), (r
   try {
     const d = db.get();
     res.json({
-      data: listActivityTemplates(d),
+      data: listActivityTemplates(d).map(activity=>activityForViewer(d,req,activity)),
       ...rotationPickerData(d, req),
       skills: d.prepare('SELECT * FROM skills WHERE active = 1 ORDER BY name COLLATE NOCASE').all(),
       members: householdMembers(d),
@@ -1522,8 +1551,8 @@ router.get('/admin/activity-templates', requireCapability('activities.view'), (r
 router.post('/admin/activity-templates', requireCapability('activities.create'), (req, res) => {
   try {
     const d = db.get();
-    const input = normalizeActivityInput(d, req.body);
-if(input.assignmentGroup||input.checklist.some(item=>item.assignmentGroup)||input.subtaskCandidatePool?.group_ids.length)assertCapability(d,req,'rotations.view');
+    const input = normalizeActivityInput(d, req.body,null,req);
+if(input.assignmentGroup||input.checklist.some(item=>item.assignmentGroup||item.assignmentRule?.kind==='group'||item.supervisorPool?.kind==='group')||input.subtaskCandidatePool?.group_ids.length)assertCapability(d,req,'rotations.view');
     assertRotationBindingsChange(d, req, [], input.rotationBindings);
     const id = d.transaction(() => {
       const result = d.prepare(`
@@ -1561,7 +1590,10 @@ router.put('/admin/activity-templates/:id', requireCapability('activities.edit')
     const d = db.get();
     const existing = getActivityTemplate(d, Number(req.params.id));
     if (!existing) return res.status(404).json({ error: 'Activity template not found.', code: 404 });
-    const input = normalizeActivityInput(d, req.body, existing);
+    const input = normalizeActivityInput(d, req.body, existing,req);
+    if(input.checklist.some(item=>(item.assignmentRule?.kind==='group'||item.supervisorPool?.kind==='group')
+      &&(JSON.stringify(item.assignmentRule)!==(existing.checklist.find(old=>old.id===item.id)?.assignment_rule_json||'null')
+        ||JSON.stringify(item.supervisorPool)!==(existing.checklist.find(old=>old.id===item.id)?.supervisor_pool_json||'null'))))assertCapability(d,req,'rotations.view');
       const changedGroup=JSON.stringify(input.assignmentGroup)!==(existing.assignment_group_json||'null')
         ||input.checklist.some(item=>JSON.stringify(item.assignmentGroup)!==(existing.checklist.find(old=>old.id===item.id)?.assignment_group_json||'null'));
       if(changedGroup&&(input.assignmentGroup||input.checklist.some(item=>item.assignmentGroup)))assertCapability(d,req,'rotations.view');
@@ -1622,7 +1654,7 @@ router.get('/admin/workflow-templates', requireCapability('workflows.view'), (re
     res.json({
       data: workflows,
       ...rotationPickerData(d, req),
-      activities: listActivityTemplates(d, { activeOnly: true }),
+      activities: listActivityTemplates(d, { activeOnly: true }).map(activity=>activityForViewer(d,req,activity)),
       members: householdMembers(d),
       categories: d.prepare('SELECT key, name, label_key FROM task_categories ORDER BY sort_order, key').all(),
       variables: householdVariableRows(d).filter((variable) => variable.active),

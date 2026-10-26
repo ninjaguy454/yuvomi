@@ -1070,11 +1070,16 @@ function occurrenceReassignmentRows(task) {
 
 function renderOccurrenceReassignment(task,users=state.users) {
   const rows=occurrenceReassignmentRows(task);
-  if (!rows.length) return '';
+  const occurrenceRoot=!task?.parent_task_id||!!task?.activity_template_id&&isTaskScoringOwner(task);
+  const unresolved=occurrenceRoot&&!task?.archived_at&&['open','unavailable','in_progress'].includes(task?.status)
+    &&canTask(task,'change_assignment')&&canTask(task,'reassign')
+    &&structuralSubtasks(task).some(child=>child.subtask_resolution?.state==='unresolved'&&canTask(child,'change_assignment')&&canTask(child,'reassign'));
+  if (!rows.length&&!unresolved) return '';
   const workers=[...new Map(rows.flatMap(child=>subtaskParticipants(child))
     .map(person=>[Number(person.id),person])).values()];
   return `<section class="task-occurrence-reassign" data-task-occurrence-reassign aria-labelledby="task-occurrence-reassign-heading">
     <h4 id="task-occurrence-reassign-heading">Reassign this occurrence</h4>
+    ${unresolved?'<button type="button" class="btn btn--secondary" data-occurrence-resolve>Resolve unfinished assignments</button><p data-occurrence-resolve-status role="status" aria-live="polite"></p>':''}
     <p class="task-field-hint">Choose a person, then select only their unfinished subtasks. Future occurrences keep their saved rules.</p>
     <div class="task-occurrence-reassign__people" role="group" aria-label="People with subtask work">
       ${workers.map(person=>`<button class="task-occurrence-reassign__person" type="button" data-occurrence-person="${Number(person.id)}" aria-pressed="false" aria-label="Reassign work from ${esc(memberLabel(person))}">
@@ -1102,6 +1107,28 @@ function wireOccurrenceReassignment(panel,task,onChanged,subtasks,users=state.us
   scoringScope?.addEventListener('change',updateScope);updateScope();
   form?.querySelector('#task-scoring-edit')?.addEventListener('click',()=>queueMicrotask(updateScope));
   let editorBaseline=JSON.stringify(subtasks?.getValue()??[]);
+  const recovery=section.querySelector('[data-occurrence-resolve]');
+  let recoveryKey=null;
+  recovery?.addEventListener('click',async()=>{
+    const status=section.querySelector('[data-occurrence-resolve-status]');
+    if(section.hidden)return;
+    if(JSON.stringify(subtasks?.getValue()??[])!==editorBaseline){status.textContent='Save subtask changes before resolving unfinished assignments.';return;}
+    recoveryKey||=globalThis.crypto.randomUUID();recovery.disabled=true;
+    try{
+      const response=await api.post(`/tasks/${task.id}/subtasks/resolve`,{expected_revision:task.revision,idempotency_key:recoveryKey});
+      const fresh=(await api.get(`/tasks/${task.id}`,{requireFresh:true})).data;
+      Object.assign(task,{revision:fresh.revision,parent_revision:fresh.parent_revision,subtasks:fresh.subtasks});
+      subtasks?.setValue(structuralSubtasks(fresh));editorBaseline=JSON.stringify(subtasks?.getValue()??[]);
+      const controls=taskFormControls.get(form);
+      if(controls){controls.originalTask={...controls.originalTask,revision:fresh.revision,parent_revision:fresh.parent_revision,subtasks:fresh.subtasks};
+        if(controls.editBaseline)controls.editBaseline.definition.subtasks=readTaskEditState(form,controls).definition.subtasks;
+        const occurrence=controls.scopeSnapshots?.get('occurrence');if(occurrence)occurrence.subtasks=controls.subtasks?.getValue({withKeys:true})||[];
+        controls.scoringVersion++;}
+      recoveryKey=null;status.textContent=response.data.conflicts?.length?'Some assignments remain unresolved.':'Assignments saved for this occurrence.';
+      recovery.hidden=!response.data.conflicts?.length;await onChanged();
+    }catch(error){status.textContent=error.data?.error||error.message;}
+    finally{recovery.disabled=false;}
+  });
   let fromId=null,ready=null,key=null;
   const work=section.querySelector('[data-occurrence-work]');
   const boxes=section.querySelector('[data-occurrence-rows]');

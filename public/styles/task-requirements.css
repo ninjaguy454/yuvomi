@@ -73,6 +73,14 @@
 }
 
 .task-subtask-editor__main > input { width: 100%; min-width: 0; }
+.task-subtask-editor__group-controls { grid-column: 2 / -1; grid-row: 2; display: flex; flex-wrap: wrap; align-items: start; gap: var(--space-2); min-width: 0; }
+.task-subtask-editor__group-controls:not(:has([data-task-subtask-group])):has(.task-subtask-editor__mode[hidden]) { display: none; }
+.task-subtask-editor__group-controls details { min-width: 0; max-width: 100%; order: -1; }
+.task-subtask-editor__group-controls details[open] { flex-basis: 100%; }
+.task-subtask-editor__mode { display: inline-flex; align-items: center; gap: var(--space-1); }
+.task-subtask-editor__mode select { min-height: 44px; max-width: 8rem; }
+.task-subtask-editor__mode[hidden], .task-subtask-editor__supervisor[hidden] { display: none; }
+.task-subtask-editor__supervisor select { min-height: 44px; max-width: 100%; }
 .task-subtask-editor__main:has(.task-subtask-editor__points:not([hidden])) {
   grid-template-columns: 28px minmax(0, 1fr) auto auto var(--target-base);
 }
@@ -89,6 +97,7 @@
   min-height: 44px;
 }
 @media (max-width: 639px) {
+  .task-subtask-editor__group-controls { grid-row: 3; }
   .task-subtask-editor__main:has(.task-subtask-editor__points:not([hidden])) {
     grid-template-columns: 28px minmax(0, 1fr) auto var(--target-base);
   }

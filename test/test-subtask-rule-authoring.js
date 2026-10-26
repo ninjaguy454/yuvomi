@@ -29,6 +29,8 @@ test('Task subtask rule authoring checks access, revision and current occurrence
     error=>error.status===409);
   f.d.prepare('INSERT INTO task_subtask_resolution_runs(root_task_id,idempotency_key,input_hash,receipt_json) VALUES(?,?,?,?)')
     .run(created.data.id,'existing','hash',JSON.stringify({decisions:[]}));
+  f.d.prepare(`INSERT INTO task_subtask_resolution_decisions(task_id,root_task_id,source_json,selected_user_ids_json,state,input_hash)
+    VALUES(?,?,?,'[2]','assigned','hash')`).run(child.id,created.data.id,JSON.stringify(rule));
   assert.throws(()=>saveTaskSubtaskRule(f.d,{taskId:child.id,source:rule,actorId:1,
     expectedRevision:f.row(child.id).revision}),error=>error.status===409);
 });
@@ -85,7 +87,7 @@ test('future recurrence copies a saved rule without changing the current occurre
   assert.deepEqual(JSON.parse(f.d.prepare('SELECT source_json FROM task_subtask_assignment_rules WHERE task_id=?').get(nextChild.id).source_json),authored);
   assert.deepEqual(JSON.parse(f.d.prepare('SELECT source_json FROM task_subtask_assignment_rules WHERE task_id=?').get(child.id).source_json),authored);
   assert.deepEqual(f.d.prepare('SELECT user_id FROM task_assignments WHERE task_id=?').all(child.id).map(row=>row.user_id),historical);
-  assert.deepEqual(f.d.prepare('SELECT user_id FROM task_assignments WHERE task_id=?').all(nextChild.id),[]);
+  assert.deepEqual(f.d.prepare('SELECT user_id FROM task_assignments WHERE task_id=?').all(nextChild.id),[{user_id:3}]);
 });
 
 test('new subtask sources use the selected pool while an existing source survives pool edits',async t=>{
@@ -228,7 +230,7 @@ test('future-only rule authoring keeps the current occurrence and resolves from 
   assert.ok(next);
   const nextChild=f.d.prepare('SELECT id FROM tasks WHERE parent_task_id=?').get(next.id);
   assert.equal(JSON.parse(f.d.prepare('SELECT source_json FROM task_subtask_assignment_rules WHERE task_id=?').get(nextChild.id).source_json).mode,'smart');
-  assert.deepEqual(f.d.prepare('SELECT user_id FROM task_assignments WHERE task_id=?').all(nextChild.id),[]);
+  assert.deepEqual(f.d.prepare('SELECT user_id FROM task_assignments WHERE task_id=?').all(nextChild.id),[{user_id:2}]);
 });
 
 test('future-only rule edits reconcile a pristine successor and reject stale series revisions',async t=>{
@@ -249,7 +251,7 @@ test('future-only rule edits reconcile a pristine successor and reject stale ser
   assert.equal(f.d.prepare('SELECT source_json FROM task_subtask_assignment_rules WHERE task_id=?').get(firstChild),undefined);
   assert.deepEqual(JSON.parse(f.d.prepare('SELECT source_json FROM task_subtask_assignment_rules WHERE task_id=?').get(nextChild).source_json),
     {kind:'fixed',user_ids:[3]});
-  assert.deepEqual(f.d.prepare('SELECT user_id FROM task_assignments WHERE task_id=?').all(nextChild),[]);
+  assert.deepEqual(f.d.prepare('SELECT user_id FROM task_assignments WHERE task_id=?').all(nextChild),[{user_id:3}]);
   const again=await f.edit(root,{edit_scope:'future_only',expected_series_revision:firstState.revision,
     future_patch:{actions:{update:[{action_key:key,fields:{assignment_rule:{kind:'fixed',user_ids:[2]}}}]}}});
   assert.equal(again.status,409,JSON.stringify(again));

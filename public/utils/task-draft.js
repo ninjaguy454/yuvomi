@@ -33,6 +33,8 @@ export function createManualTaskDraft({ template = null, places = [], defaultPoi
       ?template.fixed_assignee_ids?.length?[...template.fixed_assignee_ids]:Number(template.fixed_user_id)||null:null,
     skill_ids: [...(template?.skill_ids || [])],
     subtasks: (template?.checklist || []).map((step) => ({ title: step.title_template || step.title || '', skill_ids: [...(step.skill_ids || [])], is_optional: step.is_optional ? 1 : 0,
+      ...(step.assignment_rule||step.assignment_rule_json?{assignment_rule:structuredClone(typeof step.assignment_rule_json==='string'?JSON.parse(step.assignment_rule_json):step.assignment_rule),
+        supervisor_pool:structuredClone(typeof step.supervisor_pool_json==='string'?JSON.parse(step.supervisor_pool_json):step.supervisor_pool??null)}:{}),
       ...(step.fixed_user_id?{assigned_user_ids:[Number(step.fixed_user_id)]}:{}),
       ...(step.assignment_group_json||step.assignment_group
         ?{assignment_group:instanceGroup(step.assignment_group_json||step.assignment_group)}:{}),
@@ -77,7 +79,8 @@ export function taskDraftToActivity(draft, template = null) {
     recurrence_from_completion: draft.recurrence_from_completion ? 1 : 0,
     rotation_bindings: structuredClone(draft.rotation_bindings || []),
     checklist: (draft.subtasks || []).map((step) => ({ title_template: step.title, skill_ids: [...(step.skill_ids || [])], is_optional: step.is_optional ? 1 : 0,
-      ...(!step.assignment_group&&!step.assignment_group_json&&step.assigned_user_ids?.length
+      ...(step.assignment_rule||step.subtask_assignment_rule?{assignment_rule:structuredClone(step.assignment_rule??step.subtask_assignment_rule),supervisor_pool:structuredClone(step.supervisor_pool??step.subtask_supervisor_pool??null)}:{}),
+      ...(!step.assignment_rule&&!step.subtask_assignment_rule&&!step.assignment_group&&!step.assignment_group_json&&step.assigned_user_ids?.length
         ?{fixed_user_id:Number(step.assigned_user_ids[0])}:{}),
       ...(Object.hasOwn(step,'assignment_group')||Object.hasOwn(step,'assignment_group_json')
         ?{assignment_group:decodeGroup(Object.hasOwn(step,'assignment_group')?step.assignment_group:step.assignment_group_json)}:{}),

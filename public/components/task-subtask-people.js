@@ -64,7 +64,7 @@ export function bindSubtaskPeople(editor, { users = [],groups=[],groupBehavior=g
     if(template&&selectFor(row)?.value){selectFor(row).value='';selectFor(row).dispatchEvent(new Event('change',{bubbles:true}));}
     control.value=String(groupId);control.dispatchEvent(new Event('change',{bubbles:true}));
     row.querySelector('[data-task-subtask-group-behavior]').open=true;
-    refresh();row.querySelector('[data-task-subtask-group-start]').focus({preventScroll:true});return true;
+    refresh();(row.querySelector('[data-task-subtask-mode]:not(:disabled)')||row.querySelector('[data-task-subtask-group]')).focus({preventScroll:true});return true;
   }
   function showPerson(id, anchor) {
     if (!valid() || pool.hidden || anchor.disabled || !people.has(id)) return;
@@ -122,7 +122,8 @@ export function bindSubtaskPeople(editor, { users = [],groups=[],groupBehavior=g
       const groupId=Number(row.querySelector('[data-task-subtask-group]')?.value)||null;
       const group=groupId?(groups.find(item=>Number(item.id)===groupId)||{id:groupId,name:'Saved Group'}):null;
       const dueDate=editor.closest('form')?.querySelector('#task-due-date')?.value||null;
-      const mode=group?(groups.some(item=>Number(item.id)===groupId)
+      const selectedMode=row.querySelector('[data-task-subtask-mode]')?.value;
+      const mode=group?(selectedMode?selectedMode[0].toUpperCase()+selectedMode.slice(1):groups.some(item=>Number(item.id)===groupId)
         ?groupBehavior(group,{dateKey:dueDate})?.usage_mode==='shared'?'Global':'Rotate':'Group'):null;
       const name=person?`${memberLabel(person,users)}${group?` via Group ${group.name} (${mode})`:''}`
         :group?`Group ${group.name} (${mode})`:userId?t('tasks.acceptMember'):t('tasks.acceptUnassigned');
@@ -150,7 +151,7 @@ export function bindSubtaskPeople(editor, { users = [],groups=[],groupBehavior=g
     if (source) { showPerson(Number(source.dataset.taskSubtaskPerson), source); return; }
     const anchor = event.target.closest('[data-task-subtask-target]'), row = anchor?.closest('[data-task-subtask-row]');
     if (!anchor || !enabled(row)) return;
-    if(row.querySelector('[data-task-subtask-group]')?.value){const behavior=row.querySelector('[data-task-subtask-group-behavior]');behavior.open=true;behavior.querySelector('[data-task-subtask-group-start]').focus({preventScroll:true});return;}
+    if(row.querySelector('[data-task-subtask-group]')?.value){const behavior=row.querySelector('[data-task-subtask-group-behavior]');behavior.open=true;(row.querySelector('[data-task-subtask-mode]:not(:disabled)')||row.querySelector('[data-task-subtask-group]')).focus({preventScroll:true});return;}
     const id = key(row), selected = Number(selectFor(row).value) || null;
     const child = { id, title: row.querySelector('[data-task-subtask-title]').value, eligible_assignee_ids: eligible(row) };
     // The shared chooser uses this small local adapter only; no acceptance write occurs.
@@ -190,7 +191,7 @@ export function bindSubtaskPeople(editor, { users = [],groups=[],groupBehavior=g
   editor.addEventListener('keydown', event => {
     if (event.key === 'Escape' && gesture.pointerCancel()) { event.preventDefault(); event.stopImmediatePropagation(); suppressClick = true; }
   }, options);
-  editor.addEventListener('change', event => { if (event.target.matches('[data-task-subtask-assignee], [data-task-subtask-group]')) refresh(); }, options);
+  editor.addEventListener('change', event => { if (event.target.matches('[data-task-subtask-assignee], [data-task-subtask-group], [data-task-subtask-mode]')) refresh(); }, options);
   for (const name of ['auth:context-ending', 'auth:expired', 'auth:context-rejected']) window.addEventListener(name, dispose, options);
   window.addEventListener('vidamia:auth-context', () => { if (!sameAuthentication(authentication)) dispose(); }, options);
   function dispose() {

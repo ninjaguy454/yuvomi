@@ -1,10 +1,11 @@
-/** Authoring storage only. Public editors do not expose these modes yet. */
+/** Source policy authoring stays separate from materialized occurrence work. */
 import {hasCapability} from '../permissions.js';
 import {householdMembers} from './activity-eligibility.js';
 import {groupAssignmentMembers,normalizeGroupAssignment} from './group-assignment.js';
 import {rotationGroupUsageVersion} from './rotation-shared.js';
 import {taskCapabilities,taskSupervisionManagementAllowed} from './task-access.js';
 import {todayKey} from '../utils/timezone.js';
+import {isSubtaskOccurrenceRoot} from './subtask-occurrence-resolution.js';
 
 const fail=(message,status=400)=>{throw Object.assign(new Error(message),{status,code:'subtask_rule_invalid'});};
 const object=value=>value&&typeof value==='object'&&!Array.isArray(value);
@@ -73,15 +74,18 @@ export function saveTaskSubtaskRule(d,{taskId,source,supervisorPool=undefined,ac
   return d.transaction(()=>{
     const child=d.prepare('SELECT * FROM tasks WHERE id=?').get(taskId);
     const root=child?.parent_task_id?d.prepare('SELECT * FROM tasks WHERE id=?').get(child.parent_task_id):null;
-    if(!root||root.parent_task_id||child.archived_at||root.archived_at
-      ||!['open','unavailable'].includes(child.status)||!['open','unavailable'].includes(root.status))
+    if(!root||!isSubtaskOccurrenceRoot(d,root)||child.archived_at||root.archived_at
+      ||!['open','unavailable'].includes(child.status)||!['open','unavailable','in_progress'].includes(root.status))
       fail('Choose an open Activity subtask.');
     for(const row of [root,child]){
       const rights=taskCapabilities(d,actorId,row);
       if(!rights.view||!rights.change_assignment||!rights.reassign)
         fail('This actor cannot change this Activity subtask rule.',403);
     }
-    if(!taskSupervisionManagementAllowed(d,actorId,root.id)&&supervisorPool!==undefined)
+    const existing=d.prepare('SELECT source_json,supervisor_pool_json FROM task_subtask_assignment_rules WHERE task_id=?').get(child.id);
+    const poolChanged=supervisorPool!==undefined&&JSON.stringify(supervisorPool)!==(existing?.supervisor_pool_json||'null')
+      ||source==null&&!!existing?.supervisor_pool_json;
+    if(!taskSupervisionManagementAllowed(d,actorId,root.id)&&poolChanged)
       fail('This actor cannot choose supervisors for this Activity.',403);
     if(child.revision!==expectedRevision)fail('This subtask changed. Refresh before saving.',409);
     const receipt=d.prepare('SELECT 1 FROM task_subtask_resolution_runs WHERE root_task_id=?').get(root.id);
@@ -89,19 +93,18 @@ export function saveTaskSubtaskRule(d,{taskId,source,supervisorPool=undefined,ac
       .get(child.id,root.id):null;
     // A failed decision is still editable. The next resolution attempt sees
     // the changed rule, while materialized decisions stay immutable.
-    if(receipt&&decision?.state!=='unresolved')
+    if(receipt&&decision&&decision.state!=='unresolved')
       fail('This occurrence already has a saved assignment resolution.',409);
     if(decision?.state==='unresolved'&&source==null)
       fail('Resolve or explicitly cancel this unfinished subtask before removing its rule.',409);
     if(d.prepare('SELECT 1 FROM task_assignments WHERE task_id=?').get(child.id))
       fail('Use occurrence Reassign for a subtask that already has work assigned.',409);
-    const existing=d.prepare('SELECT source_json,supervisor_pool_json FROM task_subtask_assignment_rules WHERE task_id=?').get(child.id);
     const normalized=source==null?null:normalizeSubtaskRule(d,source,{dateKey:child.due_date||root.due_date||todayKey(d)});
     assertSubtaskCandidatePool(d,root.subtask_candidate_pool_json,normalized,
       existing?.source_json?JSON.parse(existing.source_json):null);
     const pool=normalized?supervisorPool===undefined?existing?.supervisor_pool_json?JSON.parse(existing.supervisor_pool_json):null
       :normalizeSupervisorPool(d,supervisorPool):null;
-    authorizeGroup(d,actorId,normalized,pool);
+    authorizeGroup(d,actorId,normalized,poolChanged?pool:null);
     if(normalized)d.prepare(`INSERT INTO task_subtask_assignment_rules(task_id,source_json,supervisor_pool_json)
       VALUES(?,?,?) ON CONFLICT(task_id) DO UPDATE SET source_json=excluded.source_json,
       supervisor_pool_json=excluded.supervisor_pool_json`).run(child.id,JSON.stringify(normalized),pool?JSON.stringify(pool):null);

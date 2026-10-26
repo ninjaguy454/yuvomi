@@ -142,9 +142,16 @@ export function bindSkillPicker(root, { onChange = null, onCreateSkill = null } 
   };
 }
 
+const decode=value=>typeof value==='string'?JSON.parse(value):value??null;
+const subtaskSource=value=>decode(value.assignment_rule??value.subtask_assignment_rule??value.assignment_rule_json);
+const sourceGroup=value=>{const rule=subtaskSource(value);return rule?.kind==='group'?rule:decode(value.assignment_group??value.assignment_group_json);};
+const sourceSupervisor=value=>decode(value.supervisor_pool??value.subtask_supervisor_pool??value.supervisor_pool_json);
+const groupConfiguration=value=>value?{group_id:Number(value.group_id),start_mode:value.start_mode||'first',direction:value.direction||'first_to_last',
+  ...(value.member_order?.length?{member_order:value.member_order}:{})}:null;
+
 function subtaskRow(subtask, skills, template, index, canCreateSkill = false, users = [], groups = [],canCreateGroup=false) {
   const assigned = Number((template&&subtask.fixed_user_id)||subtask.assigned_to || subtask.assigned_user_ids?.[0] || subtask.assigned_users?.[0]?.id) || null;
-  const group=typeof subtask.assignment_group_json==='string'?JSON.parse(subtask.assignment_group_json):subtask.assignment_group||subtask.assignment_group_json;
+  const source=subtaskSource(subtask),group=sourceGroup(subtask),supervisor=sourceSupervisor(subtask);
   const selectedGroup=groups.find(item=>Number(item.id)===Number(group?.group_id));
   const assignment = users.length ? `<span class="task-subtask-editor__assignment" data-task-subtask-assignment hidden>
     <button type="button" class="task-allocation__target task-allocation__target--empty" data-task-subtask-target aria-haspopup="dialog" aria-expanded="false"><span aria-hidden="true">?</span></button>
@@ -157,6 +164,10 @@ function subtaskRow(subtask, skills, template, index, canCreateSkill = false, us
         aria-label="Subtask ${index + 1}" maxlength="200" placeholder="Subtask name"
         value="${esc(subtask.title ?? subtask.title_template ?? '')}">
       ${assignment}
+      <div class="task-subtask-editor__group-controls">
+      <label class="task-subtask-editor__mode" ${group?'':'hidden'}>Mode<select class="input" data-task-subtask-mode aria-label="Subtask ${index+1} mode">
+        ${!source?'<option value="">Rotate</option>':''}${['global','random','synced','smart'].map(mode=>`<option value="${mode}" ${source?.mode===mode?'selected':''}>${mode[0].toUpperCase()+mode.slice(1)}</option>`).join('')}</select></label>
+      <button type="button" class="btn btn--secondary btn--sm" data-task-subtask-confirm-global hidden>Use Global</button>
       ${groups.length||canCreateGroup||group?`<details class="task-subtask-editor__group" data-task-subtask-group-behavior><summary>${group?`Group: ${esc(groups.find(item=>Number(item.id)===Number(group.group_id))?.name||'Rotation Group')}`:'Assign a Rotation Group'}</summary>
         <p class="form-hint" data-task-subtask-group-summary>${selectedGroup?.members?.filter(member=>member.active).map(member=>esc(member.display_name)).join(' → ')||'Group membership is shared.'} ${selectedGroup?.usage_mode==='shared'?'The shared Group schedule controls direction, start and timing.':'This subtask chooses its member order, starting member and direction.'} Presence follows this Activity's window and required skills.</p>
         <label class="form-label">Group<select class="input" data-task-subtask-group><option value="">No Group</option>${group&&!groups.some(item=>Number(item.id)===Number(group.group_id))?`<option value="${Number(group.group_id)}" selected>Saved Rotation Group</option>`:''}${groups.map(item=>`<option value="${Number(item.id)}" ${Number(item.id)===Number(group?.group_id)?'selected':''} ${item.active||Number(item.id)===Number(group?.group_id)?'':'disabled'}>${esc(item.name)}${item.active?'':' (inactive)'}</option>`).join('')}</select></label>
@@ -165,6 +176,7 @@ function subtaskRow(subtask, skills, template, index, canCreateSkill = false, us
         <div data-task-subtask-group-order></div>
         ${canCreateGroup?'<button class="btn btn--secondary btn--sm" type="button" data-task-subtask-manage-group>Manage Group members and order</button>':''}
       </details>`:''}
+      </div>
       <label class="task-subtask-editor__points">Points<input class="input" type="number" name="subtask_points" data-task-subtask-points ${template ? 'required' : ''}
         aria-label="Subtask ${index + 1} points" inputmode="numeric" min="0" max="10000" step="1"
         value="${esc(subtask.points ?? 0)}"></label>
@@ -179,6 +191,15 @@ function subtaskRow(subtask, skills, template, index, canCreateSkill = false, us
       </details>
     </div>
     ${renderSkillPicker({ skills, selectedIds: subtask.skill_ids ?? subtask.skills ?? [], name: 'subtask_skill_ids', canCreateSkill })}
+    ${subtask.subtask_resolution?.state==='unresolved'?'<span role="status" class="task-field-hint">Unresolved assignment</span>':''}
+    <details class="task-subtask-editor__supervisor" data-task-subtask-supervisor-control ${skillIds(subtask.skill_ids??subtask.skills).length?'':'hidden'}>
+      <summary aria-label="Supervisor pool" title="Supervisor pool"><span aria-hidden="true">&#x1f6e1;</span><span class="sr-only">Supervisor pool</span></summary>
+      <label class="form-label">Supervisor<select class="input" data-task-subtask-supervisor>
+        <option value="">${group?'Group default':'Eligible household adults'}</option>${users.map(person=>`<option value="person:${Number(person.id)}" ${supervisor?.kind==='person'&&Number(supervisor.user_id)===Number(person.id)?'selected':''}>${esc(memberLabel(person,users))}</option>`).join('')}
+        ${groups.map(item=>`<option value="group:${Number(item.id)}" ${supervisor?.kind==='group'&&Number(supervisor.group_id)===Number(item.id)?'selected':''}>${esc(item.name)}</option>`).join('')}
+        ${supervisor&&!((supervisor.kind==='person'?users:groups).some(item=>Number(item.id)===Number(supervisor.user_id??supervisor.group_id)))?`<option selected value="${esc(supervisor.kind)}:${Number(supervisor.user_id??supervisor.group_id)}">Saved supervisor pool</option>`:''}
+      </select></label>
+    </details>
   </div>`;
 }
 
@@ -226,23 +247,34 @@ export function bindSubtaskEditor(root, { skills = [], template = false, dateKey
     const groupConfig=groupId?{group_id:groupId,start_mode:row.querySelector('[data-task-subtask-group-start]').value,
       direction:row.querySelector('[data-task-subtask-group-direction]').value,
       ...(groupOrders.get(row)?.getValue()?{member_order:groupOrders.get(row).getValue()}:{})}:null;
-    const originalGroup=typeof original.assignment_group_json==='string'?JSON.parse(original.assignment_group_json):original.assignment_group||original.assignment_group_json||null;
-    const groupChanged=JSON.stringify(groupConfig)!==JSON.stringify(originalGroup);
+    const originalRule=subtaskSource(original),originalGroup=sourceGroup(original);
+    const groupChanged=JSON.stringify(groupConfig)!==JSON.stringify(groupConfiguration(originalGroup));
     const selected=groupId&&!groupChanged?(Number(original.assigned_to||previous[0])||null)
       :Number(row.querySelector('[data-task-subtask-assignee]')?.value)||null;
     const assignmentChanged = groupChanged || selected !== (Number(original.assigned_to || previous[0]) || null);
     const includeAssignment = oldIds !== undefined || !original.id || assignmentChanged;
+    const mode=row.querySelector('[data-task-subtask-mode]')?.value;
+    const supervisorValue=row.querySelector('[data-task-subtask-supervisor]')?.value||'';
+    const [poolKind,poolId]=supervisorValue.split(':');
+    const supervisor=poolKind==='person'?{kind:'person',user_id:Number(poolId)}:poolKind==='group'?{kind:'group',group_id:Number(poolId)}:null;
+    const modeActive=!!originalRule||!originalGroup||!!row.dataset.modeTouched;
+    const rule=originalRule?.kind==='group'&&!groupChanged&&!row.dataset.modeTouched?originalRule
+      :groupId&&(mode&&modeActive||supervisor)?{kind:'group',...groupConfig,mode:mode||'synced'}
+      :originalRule?.kind==='fixed'&&!assignmentChanged?originalRule:supervisor&&selected?{kind:'fixed',user_ids:[selected]}:null;
     return ({
     ...original,
     ...(row.dataset.subtaskId ? { id: Number(row.dataset.subtaskId) } : {}),
     title: row.querySelector('[data-task-subtask-title]').value,
     ...(template ? { title_template: row.querySelector('[data-task-subtask-title]').value } : {}),
-    ...(template?{fixed_user_id:groupId?null:selected}:{}),
+    ...(template?{fixed_user_id:groupId||rule?null:selected}:{}),
     points: pointsValue,
     skill_ids: pickers.get(row).getValue(),
     is_optional: row.querySelector('[data-task-subtask-optional]').checked ? 1 : 0,
-    ...(groupId||originalGroup?{assignment_group:groupConfig}:{}),
-    ...(!template && assignmentsEnabled && includeAssignment && row.querySelector('[data-task-subtask-assignee]') ? {assigned_user_ids: assignmentChanged ? groupId?[]:selected ? [selected] : [] : previous} : {}),
+    ...(groupId||originalGroup?{assignment_group:rule?null:groupConfig}:{}),
+    ...(rule||originalRule?{assignment_rule:rule,
+      ...(!original.id||template||Object.hasOwn(original,'supervisor_pool')||Object.hasOwn(original,'subtask_supervisor_pool')||Object.hasOwn(original,'supervisor_pool_json')||row.dataset.supervisorTouched
+        ?{supervisor_pool:rule?supervisor:null}:{})}:{}),
+    ...(!rule&&!template && assignmentsEnabled && includeAssignment && row.querySelector('[data-task-subtask-assignee]') ? {assigned_user_ids: assignmentChanged ? groupId?[]:selected ? [selected] : [] : previous} : {}),
   });});
   const changed = () => onChange?.(getValue());
   const refresh = () => {
@@ -263,14 +295,29 @@ export function bindSubtaskEditor(root, { skills = [], template = false, dateKey
       }
       const assignee=row.querySelector('[data-task-subtask-assignee]');
       const closedAssignment = preserveAssignmentHistory && (!!originals.get(row)?.archived_at || ['done','expired','skipped'].includes(originals.get(row)?.status));
-      if(assignee){assignee.closest('[data-task-subtask-assignment]').hidden=!assignmentsEnabled;assignee.disabled=rowReadOnly||closedAssignment||!canAssign||permissions?.change_assignment===false;}
+      const sourceLocked=!template&&preserveAssignmentHistory&&['assigned','preserved'].includes(originals.get(row)?.subtask_resolution?.state);
+      if(assignee){assignee.closest('[data-task-subtask-assignment]').hidden=!assignmentsEnabled;assignee.disabled=rowReadOnly||closedAssignment||sourceLocked||!canAssign||permissions?.change_assignment===false;}
       const selectedGroup=assignmentGroupBehavior(groups.find(group=>String(group.id)===row.querySelector('[data-task-subtask-group]')?.value),
         {dateKey:typeof dateKey==='function'?dateKey():dateKey,template});
       const shared=selectedGroup?.usage_mode==='shared';
-      groupOrders.get(row)?.set(selectedGroup,undefined,{readOnly:rowReadOnly||closedAssignment||!canAssign||permissions?.change_assignment===false});
-      row.querySelectorAll('[data-task-subtask-group], [data-task-subtask-group-start], [data-task-subtask-group-direction]').forEach(control=>control.disabled=rowReadOnly||closedAssignment||!canAssign||permissions?.change_assignment===false||(shared&&!control.matches('[data-task-subtask-group]')));
+      const mode=row.querySelector('[data-task-subtask-mode]');
+      if(mode){
+        mode.closest('label').hidden=!row.querySelector('[data-task-subtask-group]')?.value;
+        if(shared)mode.value='global';
+        else if(mode.value==='global')mode.value='smart';
+        for(const option of mode.options)option.hidden=shared?option.value!=='global':option.value==='global';
+        mode.disabled=shared||rowReadOnly||closedAssignment||sourceLocked||!canAssign||permissions?.change_assignment===false;
+        const confirm=row.querySelector('[data-task-subtask-confirm-global]');
+        confirm.hidden=!shared||!subtaskSource(originals.get(row)||{})||subtaskSource(originals.get(row)||{})?.mode==='global'||sourceLocked||!!row.dataset.modeTouched;
+        confirm.disabled=rowReadOnly||closedAssignment||!canAssign||permissions?.change_assignment===false;
+      }
+      const supervisor=row.querySelector('[data-task-subtask-supervisor]');
+      if(supervisor){supervisor.disabled=rowReadOnly||closedAssignment||sourceLocked||!canAssign||permissions?.change_assignment===false;
+        row.querySelector('[data-task-subtask-supervisor-control]').hidden=!pickers.get(row).getValue().length;}
+      groupOrders.get(row)?.set(selectedGroup,undefined,{readOnly:rowReadOnly||closedAssignment||sourceLocked||!canAssign||permissions?.change_assignment===false});
+      row.querySelectorAll('[data-task-subtask-group], [data-task-subtask-group-start], [data-task-subtask-group-direction]').forEach(control=>control.disabled=rowReadOnly||closedAssignment||sourceLocked||!canAssign||permissions?.change_assignment===false||(shared&&!control.matches('[data-task-subtask-group]')));
       const summary=row.querySelector('[data-task-subtask-group-summary]');if(summary)summary.textContent=assignmentGroupSummary(selectedGroup,{scope:'subtask'});
-      for(const field of ['start','direction']){const label=row.querySelector(`[data-task-subtask-group-${field}]`)?.closest('label');if(label)label.hidden=shared;}
+      for(const field of ['start','direction']){const label=row.querySelector(`[data-task-subtask-group-${field}]`)?.closest('label');if(label)label.hidden=shared||!!mode?.value&&mode.value!=='synced';}
       const manage=row.querySelector('[data-task-subtask-manage-group]');if(manage)manage.disabled=!selectedGroup;
       const menu = row.querySelector('.task-subtask-editor__actions');
       menu.querySelector('summary').setAttribute('aria-label', `Subtask ${index + 1} actions`);
@@ -305,10 +352,10 @@ export function bindSubtaskEditor(root, { skills = [], template = false, dateKey
     const original=JSON.parse(row.dataset.subtaskValue || '{}');
     originals.set(row,original);
     delete row.dataset.subtaskValue;
-    pickers.set(row, bindSkillPicker(row, { onChange: changed, onCreateSkill: createSkill }));
+    pickers.set(row, bindSkillPicker(row, { onChange:()=>{refresh();changed();}, onCreateSkill: createSkill }));
     const orderRoot=row.querySelector('[data-task-subtask-group-order]');
     if(orderRoot){
-      const config=typeof original.assignment_group_json==='string'?JSON.parse(original.assignment_group_json):original.assignment_group||original.assignment_group_json;
+      const config=sourceGroup(original);
       const order=bindGroupAssignmentOrder(orderRoot,{onChange:()=>row.dispatchEvent(new Event('input',{bubbles:true}))});
       order.set(assignmentGroupBehavior(groups.find(group=>Number(group.id)===Number(config?.group_id)),
         {dateKey:typeof dateKey==='function'?dateKey():dateKey,template}),config?.member_order||[]);
@@ -317,6 +364,8 @@ export function bindSubtaskEditor(root, { skills = [], template = false, dateKey
   };
   const click = (event) => {
     if (readOnly) { if (event.target.closest('.task-subtask-editor__actions')) event.preventDefault(); return; }
+    const confirm=event.target.closest('[data-task-subtask-confirm-global]');
+    if(confirm&&!confirm.disabled){const row=confirm.closest('[data-task-subtask-row]');row.dataset.modeTouched='true';refresh();changed();return;}
     const manage=event.target.closest('[data-task-subtask-manage-group]');
     if(manage){const groupId=Number(manage.closest('[data-task-subtask-row]').querySelector('[data-task-subtask-group]')?.value);
       if(groupId)import('/components/rotation-groups.js').then(module=>module.openRotationGroup(groupId,{onChanged:async()=>{
@@ -355,8 +404,13 @@ export function bindSubtaskEditor(root, { skills = [], template = false, dateKey
     changed();
   };
   const input = (event) => { if (!readOnly && event.target.matches('[data-task-subtask-title], [data-task-subtask-points]')) changed(); };
-  const change = (event) => { if (!readOnly && event.target.matches('[data-task-subtask-optional], [data-task-subtask-assignee], [data-task-subtask-group], [data-task-subtask-group-start], [data-task-subtask-group-direction]')) {
-    if(event.target.matches('[data-task-subtask-group]')){const row=event.target.closest('[data-task-subtask-row]');if(event.target.value){const person=row.querySelector('[data-task-subtask-assignee]');if(person){person.value='';person.dispatchEvent(new Event('change',{bubbles:true}));}}refresh();}
+  const change = (event) => { if (!readOnly && event.target.matches('[data-task-subtask-optional], [data-task-subtask-assignee], [data-task-subtask-group], [data-task-subtask-group-start], [data-task-subtask-group-direction], [data-task-subtask-mode], [data-task-subtask-supervisor]')) {
+    if(event.target.matches('[data-task-subtask-group]')){const row=event.target.closest('[data-task-subtask-row]');if(event.target.value){
+      row.dataset.modeTouched='true';
+      const mode=row.querySelector('[data-task-subtask-mode]');if(mode&&!mode.value)mode.value='smart';
+      const person=row.querySelector('[data-task-subtask-assignee]');if(person){person.value='';person.dispatchEvent(new Event('change',{bubbles:true}));}}refresh();}
+    if(event.target.matches('[data-task-subtask-mode]')){event.target.closest('[data-task-subtask-row]').dataset.modeTouched='true';refresh();}
+    if(event.target.matches('[data-task-subtask-supervisor]'))event.target.closest('[data-task-subtask-row]').dataset.supervisorTouched='true';
     changed();
   } };
   const keydown = (event) => {

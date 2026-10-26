@@ -111,7 +111,9 @@ test('helper response does not hydrate an inaccessible learner parent', async ()
   const response = await change(await read(action.counterpart_task_id, helper), 'done', helper);
   assert.equal(response.http, 200, JSON.stringify(response));
   assert.equal(response.data.parent_task, undefined);
-  assert.ok(response.data.projection_parent_task);
+  assert.equal(response.data.projection_parent_task,undefined,'a child-only supervisor grant does not expose the helper parent');
+  const supportId=inspectTaskSupervision(d,x.root).support_task_id;
+  assert.equal((await call('GET',`/${supportId}`,undefined,helper)).http,404);
   assert.ok(!JSON.stringify(response.data).includes('Private learner title'));
 });
 
@@ -160,8 +162,10 @@ test('two clients completing and reopening the same action cannot overwrite the 
     assert.equal(status(x.first), winner.data.status);
     assert.equal(earnings(x.first).length, winner.data.status === 'done' ? 1 : 0);
     assert.equal(events(x.first, 'completed').length, winner.data.status === 'done' ? 1 : 0);
-    const fresh = await read(x.first), reopening = await change(fresh, 'in_progress', learner);
-    assert.equal(reopening.http, 200); assert.equal(status(x.first), 'in_progress'); assert.deepEqual(earnings(x.first), []);
+    const originalEarnings=earnings(x.first),fresh=await read(x.first),reopening=await change(fresh,'in_progress',learner);
+    assert.equal(reopening.http,200);assert.equal(status(x.first),'in_progress');
+    assert.deepEqual(earnings(x.first),originalEarnings,'reopen preserves append-only earning history');
+    assert.equal(d.prepare('SELECT COALESCE(SUM(delta),0) n FROM reward_ledger WHERE task_id=?').get(x.first).n,0,'reopen reverses the credit exactly once');
   }
 });
 

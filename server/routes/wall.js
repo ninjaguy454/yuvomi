@@ -6,8 +6,8 @@ import { isPasswordLoginEnabled } from '../auth.js';
 import { verifyPassword } from '../utils/password.js';
 import * as twoFactor from '../services/two-factor.js';
 import { hydrateTask,authorizedScoringHistoryIds } from './tasks.js';
-import { assertTaskMutation,withTaskReadSnapshot } from '../services/task-access.js';
-import { taskScoringSummary } from '../services/task-scoring.js';
+import { assertTaskMutation,withTaskReadSnapshot,taskCapabilities } from '../services/task-access.js';
+import { taskScoringSummary,taskScoringRoot } from '../services/task-scoring.js';
 import { actionableSubtasks, assertTaskRevision, changeTaskStatus } from '../services/task-lifecycle.js';
 import { claimTask } from '../services/assignment-responsibilities.js';
 import { createParentPrizeRedemption as createRedemption } from '../services/reward-fulfillment.js';
@@ -113,7 +113,10 @@ function projectedTask(req,id,userId=null) {
 }
 function sharedScoring(task,hostId,viewerId=null) {
   task.subtasks=(task.subtasks||[]).map(child=>sharedScoring(child,hostId,viewerId));
-  try {const live=[task.id,...task.subtasks.map(child=>child.id)];
+  try {const root=taskScoringRoot(db.get(),task.id);
+    if(!root||![hostId,...(viewerId?[viewerId]:[])].every(actor=>taskCapabilities(db.get(),actor,root).view))
+      throw wallError('Task not found.',404);
+    const live=[task.id,...task.subtasks.map(child=>child.id)];
     const allowed=authorizedScoringHistoryIds(task,viewerId?[hostId,viewerId]:hostId,live,{publicOnly:true});
     task.scoring=taskScoringSummary(db.get(),task.id,{viewerId:null,authorizedTaskIds:allowed});
     if(viewerId)task.scoring.personal_total=[...task.scoring.earned,...task.scoring.potential].filter(row=>row.user_id===viewerId).reduce((sum,row)=>sum+row.points,0);

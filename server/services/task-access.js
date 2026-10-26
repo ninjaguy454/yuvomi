@@ -201,7 +201,7 @@ export function taskAssignedSupervisionActions(d, actor) {
 export function taskAssignedSupervisionWhere(d,actor,alias='t') {
   const assessed=taskAssignedSupervisionActions(d,actor),proof=supervisionAccessProofs.get(assessed);
   const actions=assessed.filter(row=>Number.isSafeInteger(row.id)&&row.id>0
-    &&Number.isSafeInteger(row.revision)&&row.revision>0);
+    &&Number.isSafeInteger(row.revision)&&row.revision>0&&row.action_task_id!==row.source_task_id);
   if(!actions.length||!proof)return '0';
   // The caller can prepare/execute this fragment after another connection
   // commits. Recheck the saved assignment and responsibility in SQL too.
@@ -274,10 +274,11 @@ export function taskCapabilities(d, actor, sourceTask) {
     || (!projection && parent && !assigned.length && parentOwn);
   const canSeeRow = row => row && (row.visibility === 'all' || !row.visibility || Number(row.created_by) === me
     || (row.visibility === 'assignees' && assignments(d,row).includes(me)));
-  const visible = canSeeRow(task) && (!mappedSource || canSeeRow(mappedSource))
+  const visible = canSeeRow(task) && (!mappedSource || canSeeRow(mappedSource)&&taskCapabilities(d,actor,mappedSource).view)
     &&(!supportSource||taskCapabilities(d,actor,{id:supportSource.source_task_id}).view);
   const ordinaryView=visible&&(allow('view_household')||own&&allow('view_own'));
-  const view = Boolean(ordinaryView || supervised.length&&(allow('view_household')||allow('view_own')));
+  const childGrant=supervised.some(row=>row.action_task_id!==row.source_task_id);
+  const view = Boolean(ordinaryView || childGrant&&(allow('view_household')||allow('view_own')));
   const locked = task?.locked ? task : parent?.locked ? parent : null;
   const definition = ordinaryView && !projection && (p.admin || !locked || Number(locked.created_by) === me);
   const result = { view, own: Boolean(own), create: allow('create'), edit: definition && allow(own ? 'edit_own' : 'edit_others'), complete: view && allow((own || supervised.some(row => row.action_task_id === task.id || row.counterpart_task_id === task.id)) ? 'complete_own' : 'complete_others') };

@@ -64,7 +64,7 @@ export function closeIncompleteTask(d,taskId,{principal,body={},now=new Date()}=
     if(unsupported)throw new TaskStateError(unsupported,{reason:'close_incomplete_unsupported'});
     if(task.archived_at)throw new TaskStateError('Restore this activity from the archive before closing it.');
     if(!['open','in_progress'].includes(task.status))throw new TaskStateError('Only an active, unfinished activity can be closed without completing its remaining subtasks.');
-    assertTaskWindowAction(d,taskId,now);assertRecurringCompletionStarted(d,taskId,now);
+    assertTaskWindowAction(d,taskId,now);assertRecurringCompletionStarted(d,taskId,now,principal);
     const at=now.toISOString(),actor=actorId(principal);
     changeTaskStatus(d,taskId,'done',{actorId:actor,principal,body:{expected_revision:body.expected_revision,complete_remaining:false},now});
     d.prepare('INSERT INTO task_close_receipts(principal_key,operation_id,request_hash,task_id,action,created_at) VALUES(?,?,?,?,?,?)').run(identity.principalKey,body.operation_id,identity.requestHash,taskId,'close',at);

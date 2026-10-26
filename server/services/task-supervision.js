@@ -307,6 +307,17 @@ export function reconcileTaskSupervision(d, taskId, { actorId = null, supervisor
       throw new TaskSupervisionError('Choose the supervisor for each affected action.');
     const requestedSupervisor=supervisorUserId===undefined&&!perAction?requestedIds[0]:supervisorUserId;
     const localEligible=actionEligibleByView.get(view)||new Map();
+    if(view.actions.some(action=>action.action_task_id===source.id&&!action.completed&&action.state!=='not_required')){
+      // Whole-root supervision requires ordinary source visibility. The new
+      // private grant covers child action pairs, never an original Activity.
+      const visible=new Map();
+      const mayView=person=>{
+        if(!visible.has(person.id))visible.set(person.id,taskCapabilities(d,person.id,source).view);
+        return visible.get(person.id);
+      };
+      if(!perAction)view.eligible_supervisors=view.eligible_supervisors.filter(mayView);
+      localEligible.set(source.id,(localEligible.get(source.id)||[]).filter(mayView));
+    }
     const actionChoices=new Map();
     if(supervisorAssignments){
       if(Object.keys(supervisorAssignments).some(id=>!view.actions.some(action=>action.action_task_id===Number(id))))

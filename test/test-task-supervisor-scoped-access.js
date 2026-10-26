@@ -9,6 +9,7 @@ import {taskCapabilities,taskVisibilityWhere,withTaskReadProjection} from '../se
 import {callTool} from '../server/mcp/tools.js';
 import {wallTaskVisible} from '../server/services/wall.js';
 import {listNotificationInbox} from '../server/services/notification-inbox.js';
+import {taskScoringSummary} from '../server/services/task-scoring.js';
 import express from 'express';
 import readerRouter from '../server/routes/reader.js';
 import Database from 'better-sqlite3-multiple-ciphers';
@@ -45,6 +46,106 @@ async function privateSplit(t){
 }
 const visibleIds=(f,actor)=>f.d.prepare(`SELECT t.id FROM tasks t WHERE ${taskVisibilityWhere(f.d,actor,'t','@me')}`).all({me:actor}).map(row=>row.id).sort((a,b)=>a-b);
 const pair=a=>[a.action_task_id,a.counterpart_task_id].sort((a,b)=>a-b);
+
+test('public linked work does not expose a scoring root hidden by own-only capabilities',async t=>{
+  const f=await privateSplit(t);
+  // Record real earned history on the sibling before exercising the read
+  // boundary. That history and the root review state belong to its owner.
+  f.d.prepare("UPDATE tasks SET scoring_mode='subtasks',points=0 WHERE id=?").run(f.root);
+  f.d.prepare('UPDATE tasks SET points=13 WHERE id=?').run(f.mom.action_task_id);
+  const completed=await f.call('PATCH',`/tasks/${f.mom.counterpart_task_id}/status`,{status:'done'},5);
+  assert.equal(completed.status,200,JSON.stringify(completed));
+  assert.equal(f.d.prepare('SELECT COUNT(*) n FROM task_scoring_settlements WHERE root_task_id=? AND earned_once=1').get(f.root).n,1);
+  const ids=[f.root,f.view.support_task_id,...pair(f.dad),...pair(f.mom)];
+  f.d.prepare(`UPDATE tasks SET visibility='all' WHERE id IN (${ids.map(()=>'?').join(',')})`).run(...ids);
+  f.d.prepare("UPDATE tasks SET scoring_mode='whole_task',scoring_review_required=1,points=37 WHERE id=?").run(f.root);
+  f.d.prepare('UPDATE tasks SET points=7 WHERE id=?').run(f.dad.action_task_id);
+  assert.equal(taskCapabilities(f.d,4,{id:f.root}).view,false);
+  const owner=taskScoringSummary(f.d,f.root,{viewerId:1});
+  assert.equal(owner.root_task_id,f.root);assert.equal(owner.mode_locked,true);assert.equal(owner.review_required,true);
+  assert.deepEqual(owner.earned.map(row=>row.points),[13]);
+  const before=f.snapshot(),changes=f.changes();
+  assert.equal((await f.call('GET',`/tasks/${f.root}`,undefined,4)).status,404);
+  for(const id of pair(f.dad)){
+    assert.equal(taskCapabilities(f.d,4,{id}).view,true);
+    const detail=await f.call('GET',`/tasks/${id}`,undefined,4);
+    assert.equal(detail.status,200,JSON.stringify(detail));
+    assert.equal(detail.data.scoring,null,'a readable linked row cannot disclose root ID, earned history, lock or review aggregates');
+    assert.equal(detail.data.supervision.source_task_id,null);
+    assert.equal(detail.data.parent_task_id,null);
+    if(id===f.dad.action_task_id)assert.equal(detail.data.points,7,'the readable action retains its own stored points');
+  }
+  assert.throws(()=>taskScoringSummary(f.d,f.dad.action_task_id,{viewerId:4}),{status:404});
+  const list=await f.call('GET','/tasks?include_future=1',undefined,4);
+  assert.equal(list.status,200);assert.deepEqual(list.data.map(row=>row.id).sort((a,b)=>a-b),pair(f.dad));
+  assert.ok(list.data.every(row=>row.scoring===null));
+  for(const id of pair(f.dad)){
+    const wall=await f.call('GET',`/wall/tasks/${id}`,undefined,4);
+    assert.equal(wall.status,200,JSON.stringify(wall));assert.equal(wall.data.scoring,null,'the shared adapter must also honor its host root capability');
+  }
+  const mcp=await callTool({db:f.d,actor:{id:4,role:'member'}},'list_tasks',{include_future:true});
+  assert.deepEqual(mcp.map(row=>row.id).sort((a,b)=>a-b),pair(f.dad));
+  assert.ok(mcp.every(row=>!('scoring' in row)&&!('root_task_id' in row)&&!('mode_locked' in row)&&!('review_required' in row)));
+  const app=express();app.use((req,_res,next)=>{req.session={userId:4,role:'member',csrfToken:'a'.repeat(64)};next();});app.use('/reader',readerRouter);
+  const server=app.listen(0,'127.0.0.1');await new Promise(resolve=>server.once('listening',resolve));
+  try{
+    const response=await fetch(`http://127.0.0.1:${server.address().port}/reader?view=tasks`),html=await response.text();
+    assert.equal(response.status,200);assert.ok(html.includes(f.dad.action_title));
+    for(const hidden of ['SECRET ROOT',f.mom.action_title,'root_task_id','mode_locked','review_required'])assert.equal(html.includes(hidden),false);
+  }finally{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
+  assert.equal(f.changes(),changes,'personalized reads never mutate points or completion history');
+  assert.equal(f.snapshot(),before);
+});
+
+test('a future recurring root rejects own helper completion without disclosing the hidden root or its schedule',async t=>{
+  const f=await privateSplit(t);
+  f.d.prepare("UPDATE tasks SET is_recurring=1,recurrence_rule='FREQ=DAILY',start_date='2026-12-25',start_time='19:17',due_date='2026-12-26' WHERE id=?").run(f.root);
+  const before=f.snapshot(),changes=f.changes();
+  for(const id of pair(f.dad)){
+    assert.equal(taskCapabilities(f.d,4,{id}).view,true);
+    const result=await f.call('PATCH',`/tasks/${id}/status`,{status:'done'},4);
+    assert.equal(result.status,409,JSON.stringify(result));assert.equal(result.reason,'occurrence_not_started');
+    for(const key of ['task_id','start_date','start_time'])assert.equal(key in result,false,JSON.stringify(result));
+    assert.doesNotMatch(result.error,/2026-12-25|19:17/);
+    assert.equal(f.row(id).status,'open');
+  }
+  const owner=await f.call('PATCH',`/tasks/${f.root}/status`,{status:'done'},1);
+  assert.equal(owner.status,409);assert.equal(owner.task_id,f.root);assert.equal(owner.start_date,'2026-12-25');
+  assert.equal(f.changes(),changes);assert.equal(f.snapshot(),before);
+});
+
+test('root-skill supervision never creates a new private original-root visibility grant',async t=>{
+  const f=await scoringFixture(t);
+  f.d.prepare("INSERT INTO users(id,username,display_name,password_hash,role,family_role) VALUES(4,'root-helper','Root helper','x','member','parent')").run();
+  replaceSubjectPermissions(f.d,'user',4,{capabilities:{'tasks.view_household':'none','tasks.view_own':'allow','tasks.complete_own':'allow','tasks.complete_others':'none'}});
+  const created=await f.create({title:'PRIVATE ORIGINAL ROOT',visibility:'private',assigned_to:[2],due_date:'2026-11-01'});
+  assert.equal(created.status,201);const root=created.data.id;
+  const skill=Number(f.d.prepare("INSERT INTO skills(name,minimum_age,created_by) VALUES('Root-only requirement',0,1)").run().lastInsertRowid);
+  for(const [id,level] of [[1,'excluded'],[2,'supervised'],[3,'excluded'],[4,'normal']])
+    f.d.prepare('INSERT INTO user_skill_proficiency(user_id,skill_id,proficiency) VALUES(?,?,?)').run(id,skill,level);
+  f.d.prepare('INSERT INTO task_skill_requirements(task_id,skill_id) VALUES(?,?)').run(root,skill);
+  const reconciled=reconcileTaskSupervision(f.d,root,{actorId:1,notify:false});
+  assert.equal(reconciled.state,'needed','a root helper without ordinary source access stays unresolved');
+  const action=reconciled.actions.find(row=>row.action_task_id===root);
+  assert.ok(action?.counterpart_task_id);
+  // A saved legacy root assignment must not acquire the new child-only grant.
+  f.d.prepare("UPDATE task_supervision_actions SET state='assigned',supervisor_user_id=4 WHERE action_task_id=?").run(root);
+  f.d.prepare("INSERT INTO task_responsibilities(task_id,user_id,role,status,source) VALUES(?,4,'supervisor','active','task_supervision') ON CONFLICT(task_id,user_id,role) DO UPDATE SET status='active'").run(root);
+  f.d.prepare('UPDATE tasks SET assigned_to=4 WHERE id=?').run(action.counterpart_task_id);
+  f.d.prepare('INSERT OR IGNORE INTO task_assignments(task_id,user_id) VALUES(?,4)').run(action.counterpart_task_id);
+  for(const id of [root,action.counterpart_task_id,reconciled.support_task_id]){
+    assert.equal(taskCapabilities(f.d,4,{id}).view,false);
+    assert.equal((await f.call('GET',`/tasks/${id}`,undefined,4)).status,404);
+  }
+  assert.deepEqual(visibleIds(f,4),[]);
+  f.d.prepare('UPDATE tasks SET visibility=\'all\' WHERE id IN (?,?,?)').run(root,action.counterpart_task_id,reconciled.support_task_id);
+  assert.equal(taskCapabilities(f.d,4,{id:root}).view,false);
+  assert.equal(taskCapabilities(f.d,4,{id:action.counterpart_task_id}).view,false,'a generated root counterpart cannot inherit own-only visibility from its assignment');
+  assert.deepEqual(visibleIds(f,4),[]);
+  replaceSubjectPermissions(f.d,'user',4,{capabilities:{'tasks.view_household':'allow','tasks.complete_own':'allow','tasks.complete_others':'none'}});
+  assert.equal(taskCapabilities(f.d,4,{id:root}).view,true,'ordinary existing root visibility is preserved');
+  assert.equal(taskCapabilities(f.d,4,{id:action.counterpart_task_id}).complete,true,'ordinary visible root helper work retains its operational permission');
+});
 
 test('private Dad-only and Mom-only work is usable in SQL, REST and MCP without parent or sibling grants',async t=>{
   const f=await privateSplit(t);

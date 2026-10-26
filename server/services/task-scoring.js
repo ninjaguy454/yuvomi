@@ -1,7 +1,7 @@
 import {taskWindowAncestors} from './task-window.js';
 import {peekRewardOccurrenceProvenance} from './task-recurrence-frontier.js';
 import {visibilityWhere} from './visibility.js';
-import {taskReadStatement,taskReadTableExists,taskReadFacts,taskReadRecord} from './task-access.js';
+import {taskReadStatement,taskReadTableExists,taskReadFacts,taskReadRecord,taskCapabilities} from './task-access.js';
 
 export class TaskScoringError extends Error {
   constructor(message,status=400,reason=null){super(message);this.status=status;this.reason=reason;}
@@ -165,6 +165,15 @@ function configuredTotal(d,ctx,taskId,viewerId,authorizedTaskIds){
   },0);
 }
 export function taskScoringSummary(d,taskId,{viewerId=null,authorizedTaskIds=null,includeHistoricalSettlements=false}={}){
+  // Root IDs, lock/review state and earned history are root projections. A
+  // public visibility flag does not grant an own-only viewer that root scope.
+  // Keep this read guard out of canonical reward and completion computation.
+  if(viewerId!=null){
+    const root=taskScoringRoot(d,taskId);
+    if(!root||!taskCapabilities(d,viewerId,root).view
+      ||root.id!==Number(taskId)&&!taskCapabilities(d,viewerId,{id:Number(taskId)}).view)
+      throw new TaskScoringError('Task not found.',404);
+  }
   const authorized=authorizedTaskIds==null?null:new Set(authorizedTaskIds);
   const ctx=context(d,taskId,viewerId),settlements=publicSettlements(d,ctx,viewerId,authorized,includeHistoricalSettlements),earned=aggregate(settlements.flatMap(row=>row.recipients)),available=potential(d,ctx,{viewerId,authorizedTaskIds:authorized});
   return {mode:ctx.root.scoring_mode||'legacy',root_task_id:ctx.root.id,mode_locked:ctx.mode_locked,review_required:ctx.review_required,

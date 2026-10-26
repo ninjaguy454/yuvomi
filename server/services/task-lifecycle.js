@@ -49,7 +49,7 @@ export class TaskStateError extends Error {
  * linked helper actions may be completed before its household-local start day.
  * Use the structural ancestry too: a Workflow's Activity binding creates a
  * supervision boundary, not permission to bypass the enclosing occurrence. */
-export function assertRecurringCompletionStarted(d, taskId, now = new Date()) {
+export function assertRecurringCompletionStarted(d, taskId, now = new Date(),principal=null) {
   const day = todayKey(d, now);
   const mapped = d.prepare(`SELECT source_task_id FROM task_supervision_actions
     WHERE action_task_id=? OR counterpart_task_id=? UNION
@@ -61,9 +61,12 @@ export function assertRecurringCompletionStarted(d, taskId, now = new Date()) {
     seen.add(id);
     const task = d.prepare('SELECT * FROM tasks WHERE id=?').get(id);
     if(!task)continue;
-    if(task.is_recurring && task.start_date && (task.start_date > day || taskStartMs(d,task) > Number(now)))
+    if(task.is_recurring && task.start_date && (task.start_date > day || taskStartMs(d,task) > Number(now))) {
+      if(principal==null||!taskCapabilities(d,principal,task).view)
+        throw new TaskStateError('This work cannot be completed before its scheduled start.',{reason:'occurrence_not_started'});
       throw new TaskStateError(`This occurrence starts on ${task.start_date}${task.start_time ? ` at ${task.start_time}` : ''}; it cannot be completed yet.`,
         {reason:'occurrence_not_started',task_id:task.id,start_date:task.start_date,start_time:task.start_time});
+    }
     if(task.parent_task_id)pending.push(task.parent_task_id);
   }
 }
@@ -153,7 +156,7 @@ function applyTransition(d, task, status, actorId, effects, {preserveFollowup=fa
     // Review ambiguous positive policy before any progress, including suppressed
     // and no-recipient work. Award-time validation alone cannot cover those.
     assertTaskScoringMutation(d,taskScoringRoot(d,task.id)?.id??task.id,{});
-    assertRecurringCompletionStarted(d,task.id,now);
+    assertRecurringCompletionStarted(d,task.id,now,effects.authorizationActor);
     const dependencies = unresolvedDependencies(d, task.id);
     if (dependencies.length) throw new TaskStateError('Complete required earlier activities first.',
       {dependencies: dependencies.filter(item => effects.authorizationActor != null && taskCapabilities(d,effects.authorizationActor,item).view)});
@@ -216,7 +219,7 @@ export function changeTaskStatus(d, taskId, status, {actorId=null, principal=act
     if(retiredRecurrenceOccurrence(d,requested.id))throw new TaskStateError(
       'This historical occurrence was retired. Its recorded progress is preserved; use the current occurrence instead.',
       {reason:'occurrence_retired'});
-    if(status==='done')assertRecurringCompletionStarted(d,requested.id,now);
+    if(status==='done')assertRecurringCompletionStarted(d,requested.id,now,principal);
     // Includes legacy Tasks whose mappings did not exist before this action.
     reconcileTaskSupervision(d,requested.id,{actorId});
     const gate = taskSupervisionTransition(d,requested.id,status,actorId);

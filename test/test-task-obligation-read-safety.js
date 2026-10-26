@@ -68,7 +68,8 @@ function seed(strategy = 'eligible_round_robin', assigned = learner) {
 function snapshot() {
   const tables = d.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all()
     .map(row => row.name).filter(name => /^(tasks$|task_|planning_obligation|notification_|reward_|activity_rotation)/.test(name));
-  return Object.fromEntries(tables.map(name => [name, d.prepare(`SELECT * FROM "${name}" ORDER BY rowid`).all()]));
+  return Object.fromEntries(tables.map(name => [name, d.prepare(`SELECT * FROM "${name}"`).all()
+    .sort((left,right)=>JSON.stringify(left).localeCompare(JSON.stringify(right)))]));
 }
 const assigned = id => d.prepare('SELECT assigned_to FROM tasks WHERE id=?').get(id).assigned_to;
 const row = id => d.prepare('SELECT * FROM planning_obligations WHERE id=?').get(id);
@@ -123,7 +124,8 @@ test('a Task event-stream connection and live-client refreshes cannot reassign o
     close() {}
   }
   const context = vm.createContext({ document: events(), window: events(), navigator: { onLine: true }, EventSource,
-    auth: { me: async () => {} }, setTimeout: callback => (callbacks.push(callback), callbacks.length), clearTimeout() {} });
+    auth: { me: async () => {} },deviceContext:()=>null,
+    setTimeout: callback => (callbacks.push(callback), callbacks.length), clearTimeout() {} });
   vm.runInContext(`${source}\nthis.subject={watchTaskChanges,latestTaskLoader};`, context);
   let latestLoad, refreshes = 0;
   const loader = context.subject.latestTaskLoader(() => Promise.all([

@@ -91,16 +91,20 @@ test('restricted member cannot create own routine through retained Schedule API'
 test('capability configuration validates unknown keys and preserves previous rights atomically',()=>{configure({'tasks.create':'none'});assert.throws(()=>configure({'tasks.nonexistent':'allow'}),/Unknown/);assert.equal(getSubjectPermissions(d,'user',learner).capabilities['tasks.create'],'none');});
 test('assigned supervisor owns the linked action but not independent learner work',()=>{
   replaceSubjectPermissions(d,'user',supervisor,{capabilities:RESTRICTED_MEMBER_CAPABILITIES});
-  const action=seed({parent:own.id,assigned:null}), independent=seed({parent:own.id,assigned:null});
-  const support=seed({parent:own.id,assigned:supervisor}), counterpart=seed({parent:support.id,assigned:supervisor});
-  d.prepare("INSERT INTO task_supervision_actions(source_task_id,action_task_id,counterpart_task_id,learner_user_id,supervisor_user_id,state) VALUES (?,?,?,?,?,'assigned')").run(own.id,action.id,counterpart.id,learner,supervisor);
-  d.prepare("INSERT INTO task_responsibilities(task_id,user_id,role,status,source) VALUES (?,?,'supervisor','active','supervision')").run(own.id,supervisor);
+  const source=seed({title:'Current supervised scope'});
+  const action=seed({parent:source.id,assigned:null}), independent=seed({parent:source.id,assigned:null});
+  const support=seed({parent:source.id,assigned:supervisor}), counterpart=seed({parent:support.id,assigned:supervisor});
+  const skill=Number(d.prepare("INSERT INTO skills(name,minimum_age,age_promotion) VALUES ('Assigned helper skill',0,'normal')").run().lastInsertRowid);
+  d.prepare("INSERT INTO user_skill_proficiency(user_id,skill_id,proficiency) VALUES (?,?,'supervised')").run(learner,skill);
+  d.prepare('INSERT INTO task_skill_requirements(task_id,skill_id) VALUES (?,?)').run(action.id,skill);
+  d.prepare("INSERT INTO task_supervision_actions(source_task_id,action_task_id,counterpart_task_id,learner_user_id,supervisor_user_id,state) VALUES (?,?,?,?,?,'assigned')").run(source.id,action.id,counterpart.id,learner,supervisor);
+  d.prepare("INSERT INTO task_responsibilities(task_id,user_id,role,status,source) VALUES (?,?,'supervisor','active','supervision')").run(source.id,supervisor);
   assert.equal(taskCapabilities(d,supervisor,action).complete,true);
   assert.equal(taskCapabilities(d,supervisor,counterpart).complete,true);
-  assert.equal(taskCapabilities(d,supervisor,own).view,true);
+  assert.equal(taskCapabilities(d,supervisor,source).view,false);
   assert.equal(taskCapabilities(d,supervisor,independent).complete,false);
   const visible=d.prepare(`SELECT t.id FROM tasks t WHERE ${taskVisibilityWhere(d,supervisor,'t','@me')}`).all({me:supervisor});
-  assert.ok(visible.some(row=>row.id===own.id));assert.ok(visible.some(row=>row.id===action.id));
+  assert.ok(!visible.some(row=>row.id===source.id));assert.ok(visible.some(row=>row.id===action.id));
   d.prepare("UPDATE task_supervision_actions SET state='unresolved', supervisor_user_id=NULL WHERE action_task_id=?").run(action.id);
   assert.equal(taskCapabilities(d,supervisor,action).complete,false);
 });
@@ -358,8 +362,8 @@ test('unassigned supervision work does not inherit learner responsibility from i
   d.prepare("UPDATE task_supervision_actions SET supervisor_user_id=?,state='assigned' WHERE source_task_id=?").run(supervisor,source.id);
   const supervisorRows=d.prepare(`SELECT t.id FROM tasks t WHERE ${taskVisibilityWhere(d,supervisor,'t','@me')}`).all({me:supervisor});
   for(const projection of [support,counterpart]) {
-    assert.equal(taskCapabilities(d,supervisor,projection).own,true);
-    assert.equal(taskCapabilities(d,supervisor,projection).view,true);
-    assert.equal(supervisorRows.some(row=>row.id===projection.id),true);
+    assert.equal(taskCapabilities(d,supervisor,projection).own,false);
+    assert.equal(taskCapabilities(d,supervisor,projection).view,false);
+    assert.equal(supervisorRows.some(row=>row.id===projection.id),false);
   }
 });

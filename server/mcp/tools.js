@@ -31,7 +31,7 @@ import { moduleAccessVerdict, MODULE_ACCESS_ALLOW } from '../permissions.js';
 import { taskStartProjection, taskScopeWhere } from '../services/task-scope.js';
 import { taskUnskippedWhere } from '../services/task-window.js';
 import { visibilityWhere } from '../services/visibility.js';
-import { assertTaskMutation, taskVisibilityWhere } from '../services/task-access.js';
+import { assertTaskMutation, taskVisibilityWhere,taskAssignedSupervisionWhere } from '../services/task-access.js';
 import { loadTagsFor, normalizeTags, setTags, tagKey } from '../utils/task-tags.js';
 
 const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
@@ -55,7 +55,8 @@ function listTasks(db, actorId, args) {
   let sql = `
     SELECT t.id, t.title, t.status, t.priority, t.category, t.due_date, t.due_time
     FROM tasks t
-    WHERE ${taskScopeWhere('t', { includeFuture: true, includeSupervision })} AND ${startScope}
+    WHERE (${taskScopeWhere('t', { includeFuture: true, includeSupervision })}
+      OR ${taskAssignedSupervisionWhere(db,actorId,'t')}) AND ${startScope}
       -- Sichtbarkeit (#474): kein Zugriff auf private/eingeschränkte Aufgaben
       -- anderer. Stand hier bisher nicht, obwohl die Termin-Abfrage sie führt -
       -- ein MCP-Token sah damit jede private Aufgabe des Haushalts, und mit den

@@ -149,7 +149,7 @@ test('Dad-only and Mom-only subtask pools share a parent and preserve distinct l
   assert.deepEqual(assignments(f.d,support.task_id),[1]);
 });
 
-test('private split supervision rolls back before a helper parent can expose source details',async t=>{
+test('private split supervision grants the assigned action pair without exposing its parent',async t=>{
   const f=await scoringFixture(t);
   f.d.prepare("UPDATE users SET family_role='parent' WHERE id=1").run();
   f.d.prepare("INSERT INTO users(id,username,display_name,password_hash,role,family_role) VALUES(4,'private-helper','Private helper','x','member','parent')").run();
@@ -166,12 +166,14 @@ test('private split supervision rolls back before a helper parent can expose sou
     f.d.prepare('INSERT INTO task_subtask_assignment_rules(task_id,source_json,supervisor_pool_json) VALUES(?,?,?)')
       .run(id,JSON.stringify({kind:'group',group_id:group.id,mode:'random'}),JSON.stringify({kind:'person',user_id:index?4:1}));
   }
-  const before=f.snapshot();
-  assert.throws(()=>resolveSubtaskOccurrence(f.d,{rootTaskId:root,idempotencyKey:'private-split',actorId:1}),
-    /cannot access all of their linked work/);
-  assert.equal(f.snapshot(),before,'the failed transaction rolls back every projection and assignment');
-  assert.equal(f.d.prepare('SELECT COUNT(*) n FROM task_activity_support_tasks WHERE source_task_id=?').get(root).n,0);
-  assert.deepEqual(children.map(id=>assignments(f.d,id)),[[],[]]);
+  const receipt=resolveSubtaskOccurrence(f.d,{rootTaskId:root,idempotencyKey:'private-split',actorId:1});
+  assert.deepEqual(receipt.conflicts,[]);
+  const view=inspectTaskSupervision(f.d,root),own=view.actions.find(action=>action.action_task_id===children[1]);
+  assert.equal(taskCapabilities(f.d,4,{id:own.action_task_id}).view,true);
+  assert.equal(taskCapabilities(f.d,4,{id:own.counterpart_task_id}).view,true);
+  assert.equal(taskCapabilities(f.d,4,{id:root}).view,false);
+  assert.equal(taskCapabilities(f.d,4,{id:view.support_task_id}).view,false);
+  assert.deepEqual(children.map(id=>assignments(f.d,id)),[[2],[2]]);
 });
 
 test('an explicit ineligible supervisor override leaves the action unresolved without fallback',async t=>{

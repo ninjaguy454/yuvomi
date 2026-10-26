@@ -94,7 +94,7 @@ import * as v from '../middleware/validate.js';
 import { TaskSkillError, normalizeSkillIds, loadTaskSkillIds, setTaskSkills, copyTaskSkills,
   attachTaskSkills, assertTaskSkillAssignments, qualifiedTaskAssignees } from '../services/task-skills.js';
 import { assertTaskAssignmentAvailability, TaskAssignmentAvailabilityError } from '../services/assignment-responsibilities.js';
-import { assertTaskMutation, attachTaskCapabilities, taskCapabilities, taskVisibilityWhere, taskSupervisionManagementAllowed, withTaskReadProjection, withTaskReadSnapshot,taskReadRecord,taskReadStatement } from '../services/task-access.js';
+import { assertTaskMutation, attachTaskCapabilities, taskCapabilities, taskVisibilityWhere, taskAssignedSupervisionWhere, taskAssignedSupervisionActions, taskSupervisionManagementAllowed, withTaskReadProjection, withTaskReadSnapshot,taskReadRecord,taskReadStatement } from '../services/task-access.js';
 import { assertTaskRevision, changeTaskStatus, reopenExpiredTask, assertTaskWindowAction, configureTaskRecurrence, recordTaskActivity, taskActivity, TaskStateError } from '../services/task-lifecycle.js';
 import { attachTaskSupervision, inspectTaskSupervision, reconcileTaskSupervision, assertTaskSupervisionAssignee, deleteTaskSupervisionProjections, taskSupervisionRootId, prepareProspectiveTaskExecution } from '../services/task-supervision.js';
 import { configuredSubtaskSupervisorIds } from '../services/subtask-supervisor-pool.js';
@@ -1837,11 +1837,12 @@ export function hydrateTask(task, me, supervisionViews = new Map(), starts = nul
     let actions=row.supervision.actions.filter(action=>mayAccessTask(
       db.get().prepare('SELECT * FROM tasks WHERE id=?').get(action.action_task_id),me));
     const hiddenScope=actions.length!==row.supervision.actions.length;
-    if(hiddenScope) actions=actions.map(action=>({...action,
-      reason:action.completed ? 'Historical supervision is recorded for this completed action.'
+    if(hiddenScope) actions=actions.map(action=>{
+      const reason=action.completed ? 'Historical supervision is recorded for this completed action.'
         : action.state==='not_required' ? 'This action does not currently require supervision.'
-        : `This action ${action.execution_mode==='delegated'?'must be performed by the helper':'requires supervision'} for ${action.required_skills.map(skill=>skill.name).join(', ')}. ${row.supervision.supervisor_scope==='per_action'?'Its assigned helper must cover this action.':'One supervisor must cover the Task\'s entire remaining helper scope.'}`,
-      supervisor_explanations:[],blocked_requirements:[]}));
+        : `This action ${action.execution_mode==='delegated'?'must be performed by the helper':'requires supervision'} for ${action.required_skills.map(skill=>skill.name).join(', ')}.`;
+      return {...action,reason,display_reason:reason,supervisor_explanations:[],blocked_requirements:[]};
+    });
     const active=actions.filter(action=>!action.completed&&action.state!=='not_required');
     row.supervision={...row.supervision,actions,can_view_support:!!row.supervision.support_task_id&&mayAccessTask(
       db.get().prepare('SELECT * FROM tasks WHERE id=?').get(row.supervision.support_task_id),me),
@@ -1852,8 +1853,18 @@ export function hydrateTask(task, me, supervisionViews = new Map(), starts = nul
         ? 'Some supervision requirements are not visible to you; ask the creator or a household administrator for help.'
         : 'One supervisor must cover the Task\'s entire remaining supervised scope. Some requirements are not visible to you; ask the creator or a household administrator for help.' : null;
       row.supervision={...row.supervision,supervisor_user_id:null,supervisor_user_ids:[],supervisor_name:null,
+        eligible_supervisors:[],qualified_supervisor_count:0,
         blocked_requirements:[],supervisor_explanations:[],reason,display_reason:reason};
     }
+    const canViewSource=row.supervision.source_task_id===row.id?row.permissions?.view===true
+      :mayAccessTask(taskReadRecord(db.get(),row.supervision.source_task_id),me);
+    const sourceId=canViewSource?row.supervision.source_task_id:null;
+    const supportId=row.supervision.can_view_support?row.supervision.support_task_id:null;
+    row.supervision={...row.supervision,source_task_id:sourceId,
+      source_revision:canViewSource?row.supervision.source_revision:null,support_task_id:supportId,
+      actions:row.supervision.actions.map(action=>({...action,source_task_id:sourceId,
+        counterpart_task_id:action.counterpart_task_id&&mayAccessTask(
+          taskReadRecord(db.get(),action.counterpart_task_id),me)?action.counterpart_task_id:null}))};
     if(actions.length===0)row.supervision={...row.supervision,state:'none',reason:null,display_reason:null};
     // The convenience projection must use the same sanitized objects; keeping
     // attachTaskSupervision's original reference would leak aggregate reasons.
@@ -1882,6 +1893,11 @@ export function hydrateTask(task, me, supervisionViews = new Map(), starts = nul
     const closed=taskWindowAncestors(db.get(),task.id).find(row=>row.status==='closed_incomplete');
     if(closed){task.status='closed_incomplete';task.closed_incomplete_at=closed.closed_incomplete_at;}
   }
+  // A hidden container is not a navigation target. Retain only its numeric
+  // parent_revision: taskRevision forwards that CAS token independently, and
+  // the status endpoint resolves the actual parent from the stored Task.
+  for(const row of [task,...task.subtasks])if(row.parent_task_id
+    &&!taskCapabilities(db.get(),me,{id:row.parent_task_id}).view)row.parent_task_id=null;
   return task;
 }
 
@@ -2290,7 +2306,8 @@ function taskListQueryKey(query){
 function taskListAuthority(d,actor){
   // Permission edits do not necessarily advance the Task clock. Bind the
   // cursor to the current effective grants, including role changes.
-  return createHash('sha256').update(JSON.stringify(actorPermissions(d,actor))).digest('base64url');
+  return createHash('sha256').update(JSON.stringify({permissions:actorPermissions(d,actor),
+    supervision:taskAssignedSupervisionActions(d,actor).map(row=>[row.action_task_id,row.counterpart_task_id,row.revision])})).digest('base64url');
 }
 // The page is an authorized snapshot. A continuation is tied to its exact
 // query, offset, permission set and Task clock; any intervening change starts
@@ -2352,7 +2369,8 @@ router.get('/window',(req,res)=>{
         // from the requested result. Distinguish that from lost row access:
         // only the latter invalidates the loaded window for privacy.
         const allowed=new Set(d.prepare(`SELECT t.id FROM tasks t WHERE t.id IN (${ids.map(()=>'?').join(',')})
-          AND ${taskScopeWhere('t',{includeFuture:true,includeSupervision:true})}
+          AND (${taskScopeWhere('t',{includeFuture:true,includeSupervision:true})}
+            OR ${taskAssignedSupervisionWhere(d,me,'t')})
           AND ${taskVisibilityWhere(d,me,'t')}`).all(...ids,me,me).map(row=>row.id));
         return ids.every(id=>allowed.has(id));
       };
@@ -4222,6 +4240,8 @@ router.patch('/:id/status', (req,res) => {
     const previous=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(req.params.id);
     if(!previous||!mayAccessTask(previous,req.authUserId||req.session.userId))
       return res.status(404).json({error:'Task not found.',code:404});
+    const linkedAccess=taskAssignedSupervisionActions(db.get(),req.authUserId||req.session.userId)
+      .some(action=>action.action_task_id===previous.id||action.counterpart_task_id===previous.id);
     if(req.body.status===ARCHIVE_STATUS) {
       if(!mayEditTaskDefinition(previous,req))return res.status(403).json(LOCKED_ERROR);
       assertTaskMutation(db.get(),req,previous,req.body,{operation:'archive'});
@@ -4244,8 +4264,15 @@ router.patch('/:id/status', (req,res) => {
       return value;
     }).immediate():change();
     const task=withTaskReadSnapshot(db.get(),req.authUserId||req.session.userId,()=>{
-      if(!mayAccessTask(result.task,req.authUserId||req.session.userId))
+      // Completing private linked work ends its temporary read grant. The
+      // authorized write still needs an acknowledgement, without rehydrating
+      // private history or either container after the grant has ended.
+      if(!mayAccessTask(result.task,req.authUserId||req.session.userId)) {
+        if(linkedAccess&&req.body.status==='done'&&result.task.status==='done')
+          return {id:result.task.id,status:result.task.status,revision:result.task.revision,
+            access_ended:true,permissions:{view:false,complete:false,edit:false,comment:false,claim:false}};
         throw new TaskStateError('Task not found.',{},404);
+      }
       const supervisionViews=new Map();
       const task=hydrateTask(result.task,req.authUserId||req.session.userId,supervisionViews);
       if(result.parent_task && mayAccessTask(result.parent_task,req.authUserId||req.session.userId))

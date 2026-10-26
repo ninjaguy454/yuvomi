@@ -5,11 +5,13 @@ import { taskOptionalContext } from './task-optional.js';
 import { taskWindowAncestors } from './task-window.js';
 import { assertRewardTaskMutation, rewardTaskCapabilities } from './reward-fulfillment-access.js';
 import {taskDirectAssignmentSelection} from './task-assignee-policy.js';
+import {inspectTaskSupervision} from './task-supervision-inspection.js';
 
 // Only synchronous response hydration opts into this scope. It never survives
 // a request, contains no lifecycle decisions, and is suspended for mutations.
 const readProjections = new WeakMap();
 const readSnapshots = new WeakMap();
+const supervisionAccessProofs = new WeakMap();
 
 /** A synchronous list projection shares one SQLite read snapshot. On an
  * encrypted Windows bind mount, thousands of separate reads otherwise repeat
@@ -162,6 +164,60 @@ function ownSql(alias, me, projectionGuard = '') {
       AND EXISTS (SELECT 1 FROM tasks pp WHERE pp.id = ${alias}.parent_task_id AND (pp.created_by = ${me} OR pp.assigned_to = ${me} OR EXISTS (SELECT 1 FROM task_assignments pa WHERE pa.task_id = pp.id AND pa.user_id = ${me})))))`;
 }
 
+/** A saved assignment is a revocable operational link, never a visibility
+ * grant on its Activity or helper container. Inspect current skills, presence,
+ * learner, authored pool and lifecycle before admitting either linked row. */
+export function taskAssignedSupervisionActions(d, actor) {
+  const me=actorId(actor);
+  if(!Number.isSafeInteger(me)||me<=0||taskDevicePrincipal(actor)||!supervisionTable(d))return [];
+  return taskReadFacts(d,'assigned-supervision-access',me,()=>{
+    const saved=taskReadStatement(d,`SELECT sa.* FROM task_supervision_actions sa
+      JOIN tasks action ON action.id=sa.action_task_id
+      JOIN tasks source ON source.id=sa.source_task_id
+      JOIN task_responsibilities helper ON helper.task_id=sa.source_task_id
+        AND helper.user_id=sa.supervisor_user_id AND helper.role='supervisor' AND helper.status='active'
+      WHERE sa.supervisor_user_id=? AND sa.state='assigned'
+        AND action.status NOT IN ('done','expired','skipped','closed_incomplete') AND action.archived_at IS NULL
+        AND source.status NOT IN ('done','expired','skipped','closed_incomplete') AND source.archived_at IS NULL`).all(me);
+    const views=new Map(),allowed=[];
+    if(!saved.length)return allowed;
+    // Scope a qualification assessment to this connection's exact database
+    // state. data_version detects other connections; total_changes detects
+    // local writes, including writes later rolled back.
+    const proof=taskReadStatement(d,`SELECT total_changes() AS changes,
+      (SELECT data_version FROM pragma_data_version) AS version`).get();
+    for(const row of saved){
+      if(!views.has(row.source_task_id))views.set(row.source_task_id,inspectTaskSupervision(d,row.source_task_id));
+      const current=views.get(row.source_task_id).actions.find(action=>action.action_task_id===row.action_task_id);
+      if(current?.state==='assigned'&&!current.completed&&!current.archived
+        &&Number(current.supervisor_user_id)===me&&Number(current.learner_user_id)===Number(row.learner_user_id))allowed.push(row);
+    }
+    supervisionAccessProofs.set(allowed,proof);
+    return allowed;
+  });
+}
+
+/** Standalone board entries for linked work whose containers need not be visible. */
+export function taskAssignedSupervisionWhere(d,actor,alias='t') {
+  const assessed=taskAssignedSupervisionActions(d,actor),proof=supervisionAccessProofs.get(assessed);
+  const actions=assessed.filter(row=>Number.isSafeInteger(row.id)&&row.id>0
+    &&Number.isSafeInteger(row.revision)&&row.revision>0);
+  if(!actions.length||!proof)return '0';
+  // The caller can prepare/execute this fragment after another connection
+  // commits. Recheck the saved assignment and responsibility in SQL too.
+  const versions=actions.map(row=>`(live.id=${row.id} AND live.revision=${row.revision})`).join(' OR ');
+  return `EXISTS (SELECT 1 FROM task_supervision_actions live
+    JOIN task_responsibilities helper ON helper.task_id=live.source_task_id
+      AND helper.user_id=live.supervisor_user_id AND helper.role='supervisor' AND helper.status='active'
+    JOIN tasks live_action ON live_action.id=live.action_task_id
+    JOIN tasks live_source ON live_source.id=live.source_task_id
+    WHERE live.supervisor_user_id=${actorId(actor)} AND live.state='assigned' AND (${versions})
+      AND total_changes()=${proof.changes} AND (SELECT data_version FROM pragma_data_version)=${proof.version}
+      AND (${alias}.id=live.action_task_id OR ${alias}.id=live.counterpart_task_id)
+      AND live_action.status NOT IN ('done','expired','skipped','closed_incomplete') AND live_action.archived_at IS NULL
+      AND live_source.status NOT IN ('done','expired','skipped','closed_incomplete') AND live_source.archived_at IS NULL)`;
+}
+
 /** Adds no binds to the existing visibility fragment. Actor ID is strictly numeric. */
 export function taskVisibilityWhere(d, actor, alias = 't', bind = '?', {legacyStoredFields=false}={}) {
   const me = actorId(actor);
@@ -174,24 +230,24 @@ export function taskVisibilityWhere(d, actor, alias = 't', bind = '?', {legacySt
     :visibilityWhere(name,'task_assignments','task_id',user);
   const originalVisibility = rowVisibility(alias,bind);
   const sourceVisible = rowVisibility('mapped_source',String(Number.isSafeInteger(me) ? me : 0));
-  const base = supervisionTable(d) ? `(${originalVisibility} AND NOT EXISTS (
+  const mappedVisibility = supervisionTable(d) ? `(${originalVisibility} AND NOT EXISTS (
     SELECT 1 FROM task_supervision_actions mapped JOIN tasks mapped_source ON mapped_source.id=mapped.action_task_id
     WHERE mapped.counterpart_task_id=${alias}.id AND NOT ${sourceVisible}))` : originalVisibility;
-  if (actor == null) return base; // Shared Wall projections retain their existing public-visibility boundary.
-  if (!Number.isSafeInteger(me) || me <= 0) return `(${base} AND 0)`;
+  if (actor == null) return mappedVisibility; // Shared Wall projections retain their existing public-visibility boundary.
+  if (!Number.isSafeInteger(me) || me <= 0) return `(${mappedVisibility} AND 0)`;
   const p = readPermissions(d, actor);
-  if (p.capabilities['tasks.view_household'] === 'allow') return base;
-  if (p.capabilities['tasks.view_own'] !== 'allow') return `(${base} AND 0)`;
+  const household=p.capabilities['tasks.view_household']==='allow',own=p.capabilities['tasks.view_own']==='allow';
+  const supportVisibility=supportTable(d)?` AND NOT EXISTS (
+    SELECT 1 FROM task_activity_support_tasks support JOIN tasks support_source ON support_source.id=support.source_task_id
+    WHERE support.task_id=${alias}.id AND NOT (${rowVisibility('support_source',String(me))}
+      AND (${household?'1':own?ownSql('support_source',me):'0'})))`:'';
+  const base=`(${mappedVisibility}${supportVisibility})`;
+  if (!household&&!own) return `(${base} AND 0)`;
   const projectionGuard = (supportTable(d) ? ` AND NOT EXISTS (SELECT 1 FROM task_activity_support_tasks os WHERE os.task_id=${alias}.id)` : '')
     + (supervisionTable(d) ? ` AND NOT EXISTS (SELECT 1 FROM task_supervision_actions oc WHERE oc.counterpart_task_id=${alias}.id)` : '');
-  const supervision = supervisionTable(d) ? ` OR EXISTS (SELECT 1 FROM task_supervision_actions sa
-    JOIN tasks supervised_action ON supervised_action.id=sa.action_task_id
-    JOIN task_responsibilities current_helper ON current_helper.task_id=sa.source_task_id
-      AND current_helper.user_id=sa.supervisor_user_id AND current_helper.role='supervisor' AND current_helper.status='active'
-    WHERE sa.supervisor_user_id = ${me} AND sa.state = 'assigned'
-      AND supervised_action.status!='done' AND supervised_action.archived_at IS NULL
-      AND (${alias}.id = sa.source_task_id OR ${alias}.id = sa.action_task_id OR ${alias}.id = sa.counterpart_task_id))` : '';
-  return `(${base} AND (${ownSql(alias, me, projectionGuard)}${supervision}))`;
+  const ordinaryOwn=`(${alias}.created_by=${me} OR (${ownSql(alias,me,projectionGuard)} ${projectionGuard}))`;
+  return `((${base} AND (${household?'1':ordinaryOwn}))
+    OR (${taskAssignedSupervisionWhere(d,actor,alias)}))`;
 }
 
 export function taskCapabilities(d, actor, sourceTask) {
@@ -206,28 +262,28 @@ export function taskCapabilities(d, actor, sourceTask) {
   const assigned = assignments(d, task);
   const mappedSource = task?.id && supervisionTable(d) ? taskReadStatement(d,`SELECT t.* FROM task_supervision_actions a
     JOIN tasks t ON t.id=a.action_task_id WHERE a.counterpart_task_id=?`).get(task.id) : null;
-  const projection = !!mappedSource || (task?.id && supportTable(d)
-    && !!taskReadStatement(d,'SELECT 1 FROM task_activity_support_tasks WHERE task_id=?').get(task.id));
+  const supportSource=task?.id&&supportTable(d)
+    ?taskReadStatement(d,'SELECT source_task_id FROM task_activity_support_tasks WHERE task_id=?').get(task.id):null;
+  const projection = !!mappedSource || !!supportSource;
   const parentOwn = parent && (Number(parent.created_by) === me || assignments(d, parent).includes(me));
-  const supervised = task?.id && supervisionTable(d) ? taskReadStatement(d,`SELECT sa.action_task_id, sa.counterpart_task_id, sa.source_task_id
-    FROM task_supervision_actions sa JOIN tasks supervised_action ON supervised_action.id=sa.action_task_id
-    JOIN task_responsibilities current_helper ON current_helper.task_id=sa.source_task_id
-      AND current_helper.user_id=sa.supervisor_user_id AND current_helper.role='supervisor' AND current_helper.status='active'
-    WHERE sa.supervisor_user_id = ? AND sa.state = 'assigned'
-      AND supervised_action.status!='done' AND supervised_action.archived_at IS NULL
-      AND (? = sa.action_task_id OR ? = sa.counterpart_task_id OR ? = sa.source_task_id)`)
-    .all(me, task.id, task.id, task.id) : [];
-  const own = Number(task?.created_by) === me || assigned.includes(me) || (!projection && parent && !assigned.length && parentOwn);
+  const linked=task?.id&&supervisionTable(d)&&taskReadStatement(d,`SELECT 1 FROM task_supervision_actions
+    WHERE supervisor_user_id=? AND (action_task_id=? OR counterpart_task_id=?) LIMIT 1`).get(me,task.id,task.id);
+  const supervised=linked?taskAssignedSupervisionActions(d,actor)
+    .filter(row=>row.action_task_id===task.id||row.counterpart_task_id===task.id):[];
+  const own = Number(task?.created_by) === me || (!supportSource&&assigned.includes(me)&&(!mappedSource||supervised.length>0))
+    || (!projection && parent && !assigned.length && parentOwn);
   const canSeeRow = row => row && (row.visibility === 'all' || !row.visibility || Number(row.created_by) === me
     || (row.visibility === 'assignees' && assignments(d,row).includes(me)));
-  const visible = canSeeRow(task) && (!mappedSource || canSeeRow(mappedSource));
-  const view = Boolean(visible && (allow('view_household') || ((own || supervised.length) && allow('view_own'))));
+  const visible = canSeeRow(task) && (!mappedSource || canSeeRow(mappedSource))
+    &&(!supportSource||taskCapabilities(d,actor,{id:supportSource.source_task_id}).view);
+  const ordinaryView=visible&&(allow('view_household')||own&&allow('view_own'));
+  const view = Boolean(ordinaryView || supervised.length&&(allow('view_household')||allow('view_own')));
   const locked = task?.locked ? task : parent?.locked ? parent : null;
-  const definition = view && !projection && (p.admin || !locked || Number(locked.created_by) === me);
+  const definition = ordinaryView && !projection && (p.admin || !locked || Number(locked.created_by) === me);
   const result = { view, own: Boolean(own), create: allow('create'), edit: definition && allow(own ? 'edit_own' : 'edit_others'), complete: view && allow((own || supervised.some(row => row.action_task_id === task.id || row.counterpart_task_id === task.id)) ? 'complete_own' : 'complete_others') };
   for (const key of ['delete_archive', 'change_assignment', 'reassign', 'change_priority', 'change_points', 'change_category_tags', 'change_dates', 'change_required_skills']) result[key] = definition && allow(key);
   result.comment = view && allow('comment');
-  result.claim = view && !projection && allow('claim');
+  result.claim = ordinaryView && !projection && allow('claim');
   result.skip_occurrence = definition && allow('skip_occurrence');
   // Missing/draft Tasks retain their existing input-based fallback. Two such
   // inputs need not mean the same thing, so only persisted records are cached.

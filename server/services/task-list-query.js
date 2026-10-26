@@ -1,6 +1,6 @@
 import { normalizeCategoryFilter, taskCategoryWhere, taskScopeWhere, taskStartProjection } from './task-scope.js';
 import { taskUnskippedWhere } from './task-window.js';
-import { taskVisibilityWhere } from './task-access.js';
+import { taskVisibilityWhere,taskAssignedSupervisionWhere } from './task-access.js';
 import { normalizeTags, tagKey } from '../utils/task-tags.js';
 import { orderTaskWindow, sliceTaskWindow, taskWindowQueryKey } from './task-window-order.js';
 import { attachTaskLocations } from './task-locations.js';
@@ -15,7 +15,8 @@ const asList = value => value === undefined ? [] : [value].flat().filter(item =>
  * without applying the start projection as the full route does. */
 export function taskListWhere(d, actor, query = {}, { changedIds = null } = {}) {
   const { status, priority, assigned_to, category, tag, archived } = query;
-  let where = `WHERE ${taskScopeWhere('t', { includeFuture: true, includeSupervision: true })}`;
+  let where = `WHERE (${taskScopeWhere('t', { includeFuture: true, includeSupervision: true })}
+    OR ${taskAssignedSupervisionWhere(d,actor,'t')})`;
   const values = [];
   const rawStatuses = asList(status);
   const statuses = rawStatuses.filter(value => value !== 'archived');

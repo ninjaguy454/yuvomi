@@ -7,6 +7,20 @@ const recurring={is_recurring:true,recurrence_rule:'FREQ=DAILY;INTERVAL=7',start
 const rows=(f,table)=>f.d.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all();
 const finish=(f,id,complete_remaining)=>f.call('PATCH',`/tasks/${id}/status`,{status:'done',complete_remaining});
 
+test('compatibility reopen past deadline preserves progress without a self conflict',async t=>{
+  const f=await scoringFixture(t),root=(await f.create({...routine,start_date:'2026-10-30',due_date:'2026-11-02',expiration_policy:'expire_incomplete'})).data;
+  assert.equal((await finish(f,root.id,false)).status,200);
+  f.d.prepare("UPDATE tasks SET due_date='2026-10-31' WHERE id=?").run(root.id);
+  const before=root.subtasks.map(row=>f.row(row.id)),earned=rows(f,'reward_ledger');
+  const body={operation_id:'compatibility-reopen-after-deadline',expected_revision:f.row(root.id).revision};
+  const result=await f.call('POST',`/tasks/${root.id}/reopen-incomplete`,body);
+  assert.equal(result.status,200,JSON.stringify(result));
+  assert.equal(f.row(root.id).status,'open');assert.equal(f.row(root.id).expiration_policy,'keep_overdue');
+  assert.deepEqual(root.subtasks.map(row=>f.row(row.id)),before);assert.deepEqual(rows(f,'reward_ledger'),earned);
+  const changes=f.changes();assert.equal((await f.call('POST',`/tasks/${root.id}/reopen-incomplete`,body)).status,200);
+  assert.equal(f.changes(),changes,'exact compatibility retry performs no write');
+});
+
 for(const mode of ['subtasks','whole_task'])for(const choice of [false,true])test(`${mode}: completion choice ${choice} records ordinary done and only earns completed work`,async t=>{
   const f=await scoringFixture(t),root=(await f.create({...routine,scoring_mode:mode})).data;
   await f.finish(root.subtasks[0].id);

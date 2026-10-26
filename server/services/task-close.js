@@ -5,7 +5,6 @@ import {assertTaskMutation,taskDevicePrincipal} from './task-access.js';
 import {assertTaskRevision,assertTaskWindowAction,assertRecurringCompletionStarted,changeTaskStatus,TaskStateError} from './task-lifecycle.js';
 import {retiredRecurrenceOccurrence} from './task-recurrence-frontier.js';
 import {taskSkipScope} from './task-skip.js';
-import {taskDeadlineMs} from './task-window.js';
 import {authoritativeTaskRecurrence,taskSeriesState,seriesDefinitionForGeneration} from './task-series.js';
 
 const coupledRotation=task=>task?.assignment_mode==='round_robin'||task?.rotation_group||JSON.parse(task?.rotation_bindings_json||'[]').length>0;
@@ -89,9 +88,8 @@ export function reopenIncompleteTask(d,taskId,{principal,body={},now=new Date()}
     if(unsupported)throw new TaskStateError(unsupported,{reason:'close_incomplete_unsupported'});
     const progress=rows.some(row=>row.id!==taskId&&!row.archived_at&&['in_progress','done'].includes(row.status));
     const status=progress?'in_progress':'open';
-    const deadline=taskDeadlineMs(d,task);
-    const expiration=task.expiration_policy==='expire_incomplete'&&deadline!=null&&Number(now)>=deadline?'keep_overdue':task.expiration_policy;
-    d.prepare('UPDATE tasks SET expiration_policy=? WHERE id=?').run(expiration,taskId);
+    // Canonical reopening changes the retained-progress expiry policy after
+    // validating this revision. A separate write here would stale our own CAS.
     const actor=actorId(principal),at=now.toISOString();
     changeTaskStatus(d,taskId,status,{actorId:actor,principal,body:{expected_revision:task.revision},now,resumeProgress:true});
     d.prepare('INSERT INTO task_close_receipts(principal_key,operation_id,request_hash,task_id,action,created_at) VALUES(?,?,?,?,?,?)').run(identity.principalKey,body.operation_id,identity.requestHash,taskId,'reopen',at);

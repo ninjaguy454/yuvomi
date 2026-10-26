@@ -10,6 +10,8 @@
   "scripts": {
     "test:personal-sessions": "node --test --test-force-exit test/test-personal-session-security.js test/test-session-lifecycle.js test/test-device-auth.js test/test-two-factor.js test/test-auth-router-token-scope.js",
     "test:personal-sessions-browser": "node --test test/test-personal-session-browser.js",
+    "test:group-owner-extras": "node --experimental-sqlite --test test/test-group-owner-extras.js test/test-group-owner-extras-migration.js",
+    "test:group-owner-extras-browser": "node --test --test-concurrency=1 test/test-group-owner-extras-browser.js",
     "test:task-close-incomplete": "node --experimental-sqlite --test --test-concurrency=1 test/test-task-close-incomplete.js test/test-task-close-incomplete-migration.js test/test-task-completion-optional-choice.js",
     "test:task-close-incomplete-ui": "node --loader ./test/test-browser-loader.mjs --test test/test-task-close-incomplete-ui.js",
     "test:task-close-incomplete-browser": "node --test --test-concurrency=1 test/test-task-close-incomplete-browser.js",

@@ -1,3 +1,4 @@
+import {additionalAssigneeIds,persistAdditionalAssignees} from './task-additional-assignees.js';
 import {categoryAssigneePolicy,readTaskAssigneePolicy,persistTaskAssigneePolicy,assertActivityAssigneePolicy,TaskAssigneePolicyError} from './task-assignee-policy.js';
 /**
  * Connects ordinary Tasks to the reusable Activity Template / skill engine.
@@ -205,6 +206,7 @@ export function attachTaskActivityBindings(d, tasks) {
       binding.activity_assignment_policy = snapshot.assignment_policy || snapshot.assignment_strategy;
       binding.activity_assignment_override_allowed = snapshot.allow_assignment_override;
     }
+    task.additional_assignee_ids = additionalAssigneeIds(task);
     task.activity_definition_snapshot = Boolean(snapshot);
     task.activity_fixed_assignee_ids = snapshot?.fixed_assignee_ids ? [...snapshot.fixed_assignee_ids] : null;
     task.activity_template_id = binding?.activity_template_id ?? null;
@@ -402,6 +404,8 @@ export function applyTaskActivityBinding(d, taskId, {
     throw new TaskActivityBindingError(err.message);
   }
 
+  const extraIds=additionalAssigneeIds(preview.activity);
+  if(extraIds.length||preview.activity.additional_assignee_ids_json!=null)persistAdditionalAssignees(d,taskId,extraIds);
   if(preview.assigneePolicy){assertActivityAssigneePolicy(preview.assigneePolicy,preview.activity,preview.assignmentOverrideUserId?{...resolution,strategy:'fixed'}:resolution);persistTaskAssigneePolicy(d,taskId,preview.assigneePolicy,[...new Set((resolution.participants?.length?resolution.participants:resolution.primary?[resolution.primary]:[]).map(member=>Number(member.id)))]);}
   // Read before the upsert: after it, every first-time binding would look
   // existing and its authoring-time checklist would never be materialized.

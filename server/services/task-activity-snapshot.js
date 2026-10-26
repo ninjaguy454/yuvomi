@@ -19,7 +19,7 @@ export function captureActivityTemplateDefinition(d, activityTemplateId) {
   const checklist = d.prepare('SELECT id,title_template,sort_order,is_optional,points,assignment_group_json,fixed_user_id,assignment_rule_json,supervisor_pool_json FROM activity_template_checklist_items WHERE activity_template_id=? ORDER BY sort_order,id')
     .all(activity.id).map(item => ({ ...item, skill_ids: d.prepare('SELECT skill_id FROM activity_template_checklist_skills WHERE checklist_item_id=? ORDER BY sort_order,skill_id')
       .all(item.id).map(row => row.skill_id) }));
-  return { ...activity, fixed_assignee_ids:activity.fixed_assignee_ids_json?JSON.parse(activity.fixed_assignee_ids_json):null,
+  return { ...activity, additional_assignee_ids:activity.additional_assignee_ids_json?JSON.parse(activity.additional_assignee_ids_json):[], fixed_assignee_ids:activity.fixed_assignee_ids_json?JSON.parse(activity.fixed_assignee_ids_json):null,
     required_skill_ids, checklist };
 }
 

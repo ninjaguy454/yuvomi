@@ -31,6 +31,7 @@ export function createManualTaskDraft({ template = null, places = [], defaultPoi
     rotation_bindings: structuredClone(template?.rotation_bindings || JSON.parse(template?.rotation_bindings_json || '[]')),
     assigned_to: template?.assignment_strategy === 'fixed'
       ?template.fixed_assignee_ids?.length?[...template.fixed_assignee_ids]:Number(template.fixed_user_id)||null:null,
+    additional_assignee_ids:[...(template?.additional_assignee_ids??JSON.parse(template?.additional_assignee_ids_json||'[]'))],
     skill_ids: [...(template?.skill_ids || [])],
     subtasks: (template?.checklist || []).map((step) => ({ title: step.title_template || step.title || '', skill_ids: [...(step.skill_ids || [])], is_optional: step.is_optional ? 1 : 0,
       ...(step.assignment_rule||step.assignment_rule_json?{assignment_rule:structuredClone(typeof step.assignment_rule_json==='string'?JSON.parse(step.assignment_rule_json):step.assignment_rule),
@@ -89,6 +90,7 @@ export function taskDraftToActivity(draft, template = null) {
     place_id: location.kind === 'saved_place' ? location.place_id : null,
     assignment_strategy: assignmentStrategy, assignment_group_json:assignmentGroup,
     subtask_candidate_pool_json:draft.subtask_candidate_pool??template?.subtask_candidate_pool_json??null,
+    additional_assignee_ids:[...(draft.additional_assignee_ids??template?.additional_assignee_ids??JSON.parse(template?.additional_assignee_ids_json||'[]'))],
     fixed_user_id: assignmentGroup?null:fixedIds[0]||null,
     fixed_assignee_ids:assignmentGroup?null:fixedIds.length>1?fixedIds:null,
     subject_required: template?.subject_required ? 1 : 0,

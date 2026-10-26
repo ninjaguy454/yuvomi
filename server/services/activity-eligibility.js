@@ -450,7 +450,12 @@ export function resolveActivityAssignment(d, activity, {
     const selected=chooseGroupAssignee(d,activity.assignment_group_json,{consumerKey:activity.rotation_scope||`activity:${activity.id}`,
       eligibleIds:eligible.map(member=>member.id),commit:commitRotation,previousUserId:activity.rotation_cursor_user_id,dateKey});
     const primary=eligible.find(member=>member.id===selected);
-    return {primary,supervisor:null,subject,subjectProficiency:subject?activityProficiency(d,activity,subject,dateKey):null,
+    const extraIds=activity.additional_assignee_ids??JSON.parse(activity.additional_assignee_ids_json||'[]');
+    const extras=extraIds.filter(id=>id!==primary?.id).map(id=>members.find(member=>member.id===id));
+    if(extras.some(member=>!member||activityProficiency(d,activity,member,dateKey).proficiency!==PROFICIENCY.NORMAL))
+      throw new Error('Each additional assignee must be qualified to perform this Activity independently.');
+    if(extras.some(member=>!isPresent(member)))throw new Error('An additional assignee does not meet this Activity presence requirement.');
+    return {primary,participants:[...(primary?[primary]:[]),...extras],supervisor:null,subject,subjectProficiency:subject?activityProficiency(d,activity,subject,dateKey):null,
       eligible,strategy:'group_rotation'};
   }
 

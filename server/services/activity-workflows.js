@@ -1,3 +1,4 @@
+import {additionalAssigneeIds,persistAdditionalAssignees} from './task-additional-assignees.js';
 import {persistNewTaskAssignees,assertActivityAssigneePolicy,categoryAssigneePolicy} from './task-assignee-policy.js';
 import {assignNewTaskCardColor} from './task-card-colors.js';
 import { reconcileTaskSupervision, assertTaskSupervisionAssignee } from './task-supervision.js';
@@ -54,6 +55,7 @@ export function getActivityTemplate(d, id) {
   row.skills = loadSkillRequirements(d, row.id);
   row.checklist = loadActivityChecklist(d, row.id);
   row.tags = parseJson(row.tags_json, []);
+  row.additional_assignee_ids = parseJson(row.additional_assignee_ids_json, []);
   row.fixed_assignee_ids = parseJson(row.fixed_assignee_ids_json, null);
   row.rotation_bindings = parseRotationBindings(row.rotation_bindings_json);
   return row;
@@ -70,6 +72,7 @@ export function listActivityTemplates(d, { activeOnly = false } = {}) {
     skills: loadSkillRequirements(d, row.id),
     checklist: loadActivityChecklist(d, row.id),
     tags: parseJson(row.tags_json, []),
+    additional_assignee_ids: parseJson(row.additional_assignee_ids_json, []),
     fixed_assignee_ids: parseJson(row.fixed_assignee_ids_json, null),
     rotation_bindings: parseRotationBindings(row.rotation_bindings_json),
   }));
@@ -721,6 +724,7 @@ function instantiateWorkflowTasks(d, workflowId, {
         .forEach((checklistTaskId) => requireChecklistItem.run(primaryTaskId, checklistTaskId));
       if (resolution.primary) assertTaskSupervisionAssignee(d, primaryTaskId, resolution.primary.id);
       const stepTaskIds = [primaryTaskId];
+      if(additionalAssigneeIds(activity).length)persistAdditionalAssignees(d,primaryTaskId,additionalAssigneeIds(activity));
       recordTaskAssignment(d, primaryTaskId, activity, resolution, {
         source: 'workflow',
         strategy: assignment.policy,

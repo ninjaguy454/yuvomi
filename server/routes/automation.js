@@ -1,3 +1,4 @@
+import {additionalAssigneeIds,normalizeAdditionalAssignees,ownerAndAdditionalAssignees} from '../services/task-additional-assignees.js';
 import { assertTaskRevision } from '../services/task-lifecycle.js';
 /**
  * Household automation API.
@@ -49,7 +50,7 @@ import { normalizeActivityDueOffset } from '../../public/utils/activity-schedule
 import { normalizeRotationBindings, assertRotationBindingsChange, taskRotationContexts } from '../services/task-rotation.js';
 import { listRotationGroups, finalizeRotation, getRotationTrack } from '../services/rotation.js';
 import { rotationGroupUsage } from '../services/rotation-shared.js';
-import {normalizeGroupAssignment} from '../services/group-assignment.js';
+import {normalizeGroupAssignment,groupAssignmentMembers} from '../services/group-assignment.js';
 import {normalizeSubtaskCandidatePool} from '../services/subtask-candidate-pool.js';
 import {normalizeSubtaskRule,normalizeSupervisorPool,assertSubtaskCandidatePool} from '../services/subtask-assignment-rules.js';
 import { rotationOccurrenceOptions } from '../services/rotation-access.js';
@@ -186,6 +187,7 @@ function normalizeActivityInput(d, body, existing = null, actor = null) {
   const subjectRequired = assignmentStrategy === 'subject_skill'
     ? 1
     : bool(body.subject_required, !!existing?.subject_required);
+  const additionalIds=normalizeAdditionalAssignees(d,body.additional_assignee_ids,additionalAssigneeIds(existing));
   const oldFixedIds=existing?.fixed_assignee_ids||
     (existing?.fixed_assignee_ids_json?JSON.parse(existing.fixed_assignee_ids_json):null);
   const requestedFixedIds=body.fixed_assignee_ids==null
@@ -312,9 +314,15 @@ function normalizeActivityInput(d, body, existing = null, actor = null) {
     assertActivityAssigneePolicy(categoryAssigneePolicy(d,category),{participant_count:participantCount},{strategy:assignmentStrategy});
   if(assignmentStrategy==='fixed'&&(!existing||category!==existing.category||JSON.stringify(fixedAssigneeIds)!==JSON.stringify(oldFixedIds||[existing.fixed_user_id])))
     assertActivityAssigneePolicy(categoryAssigneePolicy(d,category),{}, {strategy:'fixed',participants:fixedAssigneeIds.map(id=>({id}))});
+  if(assignmentStrategy==='group_rotation'&&(!existing||category!==existing.category||JSON.stringify(additionalIds)!==JSON.stringify(additionalAssigneeIds(existing))||JSON.stringify(assignmentGroup)!==JSON.stringify(oldAssignmentGroup))){
+    const candidates=groupAssignmentMembers(d,assignmentGroup);
+    const direct=ownerAndAdditionalAssignees(candidates.find(id=>!additionalIds.includes(id))??candidates[0],additionalIds);
+    assertActivityAssigneePolicy(categoryAssigneePolicy(d,category),{}, {strategy:'fixed',participants:direct.map(id=>({id}))});
+  }
   return {
     assignmentGroup:assignmentStrategy==='group_rotation'?assignmentGroup:null,
     subtaskCandidatePool,
+    additionalIds,
     rotationBindings: normalizeRotationBindings(d, body.rotation_bindings ?? existing?.rotation_bindings ?? []),
     name,
     titleTemplate,
@@ -1575,7 +1583,7 @@ if(input.assignmentGroup||input.checklist.some(item=>item.assignmentGroup||item.
         input.dueDateOffsetDays,
       );
       saveActivitySkills(d, result.lastInsertRowid, input.skillIds);
-      d.prepare('UPDATE activity_templates SET rotation_bindings_json=?,scoring_mode=?,assignment_group_json=?,fixed_assignee_ids_json=?,subtask_candidate_pool_json=? WHERE id=?').run(JSON.stringify(input.rotationBindings),input.scoringMode,input.assignmentGroup?JSON.stringify(input.assignmentGroup):null,input.fixedAssigneeIds?JSON.stringify(input.fixedAssigneeIds):null,input.subtaskCandidatePool?JSON.stringify(input.subtaskCandidatePool):null,result.lastInsertRowid);
+      d.prepare('UPDATE activity_templates SET rotation_bindings_json=?,scoring_mode=?,assignment_group_json=?,fixed_assignee_ids_json=?,subtask_candidate_pool_json=?,additional_assignee_ids_json=? WHERE id=?').run(JSON.stringify(input.rotationBindings),input.scoringMode,input.assignmentGroup?JSON.stringify(input.assignmentGroup):null,input.fixedAssigneeIds?JSON.stringify(input.fixedAssigneeIds):null,input.subtaskCandidatePool?JSON.stringify(input.subtaskCandidatePool):null,JSON.stringify(input.additionalIds),result.lastInsertRowid);
       saveActivityChecklist(d, result.lastInsertRowid, input.checklist);
       return Number(result.lastInsertRowid);
     })();
@@ -1623,7 +1631,7 @@ router.put('/admin/activity-templates/:id', requireCapability('activities.edit')
         input.startTime, input.dueTime, input.recurrenceRule, input.recurrenceFromCompletion, input.dueDateOffsetDays, existing.id,
       );
       saveActivitySkills(d, existing.id, input.skillIds);
-      d.prepare('UPDATE activity_templates SET rotation_bindings_json=?,scoring_mode=?,assignment_group_json=?,fixed_assignee_ids_json=?,subtask_candidate_pool_json=? WHERE id=?').run(JSON.stringify(input.rotationBindings),input.scoringMode,input.assignmentGroup?JSON.stringify(input.assignmentGroup):null,input.fixedAssigneeIds?JSON.stringify(input.fixedAssigneeIds):null,input.subtaskCandidatePool?JSON.stringify(input.subtaskCandidatePool):null,existing.id);
+      d.prepare('UPDATE activity_templates SET rotation_bindings_json=?,scoring_mode=?,assignment_group_json=?,fixed_assignee_ids_json=?,subtask_candidate_pool_json=?,additional_assignee_ids_json=? WHERE id=?').run(JSON.stringify(input.rotationBindings),input.scoringMode,input.assignmentGroup?JSON.stringify(input.assignmentGroup):null,input.fixedAssigneeIds?JSON.stringify(input.fixedAssigneeIds):null,input.subtaskCandidatePool?JSON.stringify(input.subtaskCandidatePool):null,JSON.stringify(input.additionalIds),existing.id);
       saveActivityChecklist(d, existing.id, input.checklist);
     })();
     res.json({ data: getActivityTemplate(d, existing.id) });

@@ -1500,6 +1500,7 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
   const selectedSkills = activity?.skill_ids ?? activity?.skills ?? [];
   const strategy = activity?.assignment_policy || activity?.assignment_strategy || 'subject_skill';
   const initialAssignmentGroup=typeof activity?.assignment_group_json==='string'?JSON.parse(activity.assignment_group_json):activity?.assignment_group_json;
+  const initialAdditionalIds=activity?.additional_assignee_ids??JSON.parse(activity?.additional_assignee_ids_json||'[]');
   const initialFixedIds=activity?.fixed_assignee_ids?.length?activity.fixed_assignee_ids
     :activity?.fixed_user_id?[Number(activity.fixed_user_id)]:[];
   const initialPool=activity?.subtask_candidate_pool_json||null;
@@ -1551,6 +1552,10 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
       <select name="assignment_group_id" hidden aria-label="Selected Group"><option value="">Choose a Group</option>${initialAssignmentGroup&&!context.rotationGroups.some(group=>Number(group.id)===Number(initialAssignmentGroup.group_id))?`<option value="${Number(initialAssignmentGroup.group_id)}" selected>Saved Group</option>`:''}${context.rotationGroups.map(group=>`<option value="${Number(group.id)}" ${Number(group.id)===Number(initialAssignmentGroup?.group_id)?'selected':''} ${group.active||Number(group.id)===Number(initialAssignmentGroup?.group_id)?'':'disabled'}>${h(group.name)}${group.active?'':' (inactive)'}</option>`).join('')}</select>
       <div class="grid grid--2"><label class="form-label">Start with<select class="input" name="assignment_group_start"><option value="first">First member</option><option value="random">Random member, chosen once</option></select></label>
       <label class="form-label">Rotation direction<select class="input" name="assignment_group_direction"><option value="first_to_last">First to last</option><option value="last_to_first">Last to first</option></select></label></div>
+    </div>
+    <div id="automation-group-additional" ${strategy==='group_rotation'?'':'hidden'}>
+      <label class="label">Additional assignees</label>
+      ${renderUserMultiSelect(context.members,initialAdditionalIds,'template_additional','tasks.assignedLabel',{variant:'people'})}
     </div>
     <label class="automation-check-row"><input type="checkbox" name="subject_required" ${(activity?.subject_required ?? true) ? 'checked' : ''}> Requires a person this activity is for</label>
     <div id="automation-fixed-user" ${strategy === 'fixed' ? '' : 'hidden'}><label class="label" for="automation-fixed-owner-person">Owner: fixed Person</label>
@@ -1673,6 +1678,12 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
       const strategySelect = panel.querySelector('#automation-assignment-strategy');
       const fixed = panel.querySelector('#automation-fixed-user');
       bindUserMultiSelect(fixed,'template_fixed');
+      bindUserMultiSelect(panel,'template_additional');
+      let additionalOrder=[...initialAdditionalIds];
+      const selectedAdditionalIds=()=>{const selected=getSelectedUserIds(panel,'template_additional');
+        additionalOrder=[...additionalOrder.filter(id=>selected.includes(id)),...selected.filter(id=>!additionalOrder.includes(id))];return additionalOrder;};
+      panel.querySelector('[data-ms-name="template_additional"] .user-ms__label')?.remove();
+      panel.querySelector('[data-ms-name="template_additional"]')?.setAttribute('aria-label','Additional assignees');
       const fixedPrimary=fixed.querySelector('[name="fixed_user_id"]');
       const fixedOwner=fixed.querySelector('#automation-fixed-owner-person');
       const selectedFixedIds=()=>{
@@ -1737,12 +1748,17 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
         const initial=activity?.fixed_assignee_ids?.length?activity.fixed_assignee_ids:activity?.fixed_user_id?[Number(activity.fixed_user_id)]:[];
         const selected=selectedFixedIds();
         const fixedChanged=!editing||categorySelect.value!==activity.category||JSON.stringify(selected)!==JSON.stringify(initial);
-        categorySelect.setCustomValidity(fixedChanged&&strategySelect.value==='fixed'&&max!==null&&selected.length>max?t('tasks.assigneeLimitExceeded',{count:max}):'');
+        const extraIds=selectedAdditionalIds();
+        const groupMembers=groupCandidatePool(context.rotationGroups,[Number(groupSelect.value)]).userIds;
+        const groupCount=extraIds.length+(groupMembers.some(id=>!extraIds.includes(id))?1:0);
+        const groupChanged=!editing||categorySelect.value!==activity.category||JSON.stringify(extraIds)!==JSON.stringify(activity.additional_assignee_ids??JSON.parse(activity.additional_assignee_ids_json||'[]'))||Number(groupSelect.value)!==Number(initialAssignmentGroup?.group_id);
+        categorySelect.setCustomValidity(max!==null&&(fixedChanged&&strategySelect.value==='fixed'&&selected.length>max||groupChanged&&strategySelect.value==='group_rotation'&&groupCount>max)?t('tasks.assigneeLimitExceeded',{count:max}):'');
       };
       categorySelect.addEventListener('change',refreshAssigneeLimit);countInput.addEventListener('input',refreshAssigneeLimit);
-      strategySelect.addEventListener('change',refreshAssigneeLimit);fixed.addEventListener('change',refreshAssigneeLimit);refreshAssigneeLimit();
+      strategySelect.addEventListener('change',refreshAssigneeLimit);fixed.addEventListener('change',refreshAssigneeLimit);panel.querySelector('#automation-group-additional').addEventListener('change',refreshAssigneeLimit);groupSelect.addEventListener('change',refreshAssigneeLimit);refreshAssigneeLimit();
       const refreshAssignment = () => {
         fixed.hidden = strategySelect.value !== 'fixed';
+        panel.querySelector('#automation-group-additional').hidden=strategySelect.value!=='group_rotation';
         assignmentGroupPanel.hidden=strategySelect.value!=='group_rotation';
         participantCount.hidden = strategySelect.value !== 'rotating_multi';
         if(!initialPool&&!poolTouched){
@@ -1808,6 +1824,7 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
           subject_required: data.has('subject_required'),
           fixed_user_id: data.get('fixed_user_id') || null,
           fixed_assignee_ids: data.get('assignment_strategy')==='fixed'?selectedFixedIds():[],
+          additional_assignee_ids:data.get('assignment_strategy')==='group_rotation'?selectedAdditionalIds():[],
           allow_assignment_override: data.has('allow_assignment_override'),
           participant_count: Number(data.get('participant_count')) || 1,
           rotation_group: activity?.rotation_group || null,

@@ -1249,6 +1249,7 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
   const presetDueDate = task.due_date;
 
   const selectedIds = taskDirectAssigneeIds(task);
+  const initialAdditionalIds=task?.additional_assignee_ids??JSON.parse(task?.additional_assignee_ids_json||presetActivityTemplate?.additional_assignee_ids_json||'[]');
   const fixedOwnerId=ownerFromSavedTask(task)||(!isEdit&&Number(presetActivityTemplate?.fixed_user_id)&&selectedIds.includes(Number(presetActivityTemplate.fixed_user_id))?Number(presetActivityTemplate.fixed_user_id):null);
   const rotationIds = task?.rotation_user_ids ?? [];
   const assignmentMode = task?.assignment_mode || 'fixed';
@@ -1476,6 +1477,10 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
         <p class="task-field-hint">Round robin assigns each recurring occurrence to the next person in the ordered list.</p>
       </div>
 
+      <div id="task-group-additional" class="form-group" data-additional-order="${esc(JSON.stringify(initialAdditionalIds))}" hidden>
+        <label class="label">Additional assignees</label>
+        ${renderUserMultiSelect(users, initialAdditionalIds, 'task_additional', 'tasks.assignedLabel', { variant: 'people' })}
+      </div>
       <div id="task-fixed-assignment" class="form-group" style="margin-top:var(--space-4)"${isSoloHousehold() ? ' hidden' : ''}>
         <label class="label" for="task-owner-person">Owner: fixed Person</label>
         <select class="input" id="task-owner-person"><option value="">Choose Owner</option>${users.map(person=>`<option value="${Number(person.id)}" ${Number(person.id)===fixedOwnerId?'selected':''}>${esc(memberLabel(person,users))}</option>`).join('')}</select>
@@ -2340,6 +2345,14 @@ function selectedTaskGroupConfiguration(form,task=null){
     ...(prior?.legacy_exact_next&&Number(prior.group_id)===groupId?{legacy_exact_next:true}:{})};
 }
 
+function selectedAdditionalAssignees(form){
+  const root=form.querySelector('#task-group-additional'),selected=getSelectedUserIds(form,'task_additional');
+  const before=JSON.parse(root?.dataset.additionalOrder||'[]');
+  const ids=[...before.filter(id=>selected.includes(id)),...selected.filter(id=>!before.includes(id))];
+  if(root)root.dataset.additionalOrder=JSON.stringify(ids);
+  return ids;
+}
+
 function fixedActivityAssignees(form) {
   return orderedOwnerAssignees(form.querySelector('#task-owner-person')?.value,getSelectedUserIds(form,'task_assigned'));
 }
@@ -2450,6 +2463,10 @@ function wireAssignmentMode(panel, task) {
     if (subject) subject.hidden = !requiresSubject;
     if (modeWrap) modeWrap.hidden = !manualVisible;
     const roundRobin = manualVisible && mode.value === 'round_robin';
+    const additional=panel.querySelector('#task-group-additional');
+    if(groupPanel&&additional.previousElementSibling!==groupPanel)groupPanel.after(additional);
+    additional.hidden=!groupSelect?.value||managed&&!managedGroup;
+    additional.querySelectorAll('input').forEach(input=>input.disabled=!assignmentAllowed||!!task&&!canTask(task,'reassign'));
     fixed.hidden = (!manualVisible && !templateFixed) || roundRobin||!!groupSelect?.value;
     fixed.querySelectorAll('[data-ms-input="task_assigned"]').forEach(input => {
       input.disabled = !assignmentAllowed || (templateFixed && !overrideAllowed);
@@ -2713,6 +2730,7 @@ async function saveTaskAsTemplate(form) {
     tags: normalizeTagList([...modalTags, ...form.querySelector('#task-tag-input').value.split(',')]),
     location: readTaskLocation(form), assigned_users: templateOwnerRoster
       ?? (form.querySelector('#task-assignment-mode')?.value==='round_robin'?getSelectedUserIds(form,'task_assigned'):[]),
+    additional_assignee_ids:selectedAdditionalAssignees(form),
     assignment_group:selectedTaskGroupConfiguration(form,controls.originalTask),
     subtask_candidate_pool:controls.pool?.getValue(),
     skill_ids: controls.skills.getValue(), subtasks: controls.subtasks.getValue().filter((step) => step.title.trim()),
@@ -2842,6 +2860,9 @@ function wireTaskForm(panel, {
   // RRULE-Events binden
   bindRRuleEvents(panel, 'task');
   bindUserMultiSelect(panel, 'task_assigned');
+  bindUserMultiSelect(panel, 'task_additional');
+  panel.querySelector('[data-ms-name="task_additional"] .user-ms__label')?.remove();
+  panel.querySelector('[data-ms-name="task_additional"]')?.setAttribute('aria-label','Additional assignees');
   const refreshAssignment = wireAssignmentMode(panel, task);
 
   wireVisibilityWarning(panel, '#task-visibility', 'task_assigned', '#task-visibility-warning');
@@ -3071,6 +3092,7 @@ function bindTaskScoringForm(form, controls) {
     if (key) controls.rootIntent.add(key);
     if (event.target.name === 'scoring_mode') controls.rootIntent.add('scoring_mode');
     if (event.target.matches('[data-ms-input="task_assigned"]')) controls.rootIntent.add('assigned_to');
+    if (event.target.matches('[data-ms-input="task_additional"]')) controls.rootIntent.add('additional_assignee_ids');
     if (event.target.closest('#task-group-assignment')) controls.rootIntent.add('assignment_group');
     if (event.target.closest('#task-root-skills')) controls.rootIntent.add('skill_ids');
     if (event.target.closest('#task-tags-editor')) controls.rootIntent.add('tags');
@@ -3101,7 +3123,7 @@ function snapshotTaskScoringForm(form, controls) {
   return {colorChoice:controls.colorPicker?.getValue(),colorChanged:controls.colorPicker?.isChanged(), fields: Object.fromEntries(Object.keys(scoringFormFields).map(id=>{const node=form.querySelector(`#${id}`);return [id,node?.type==='checkbox'?node.checked:node?.value];})),
     group:selectedTaskGroupConfiguration(form,controls.originalTask),pool:controls.pool?.getValue(),
     poolTouched:controls.poolTouched,poolExplicit:controls.poolExplicit,
-    mode:form.querySelector('[name="scoring_mode"]:checked')?.value, assigned:getSelectedUserIds(form,'task_assigned'), skills:controls.skills.getValue(),
+    additional:selectedAdditionalAssignees(form),mode:form.querySelector('[name="scoring_mode"]:checked')?.value, assigned:getSelectedUserIds(form,'task_assigned'), skills:controls.skills.getValue(),
     subtasks:controls.subtasks?.getValue({withKeys:true}) || [], rotationIds:getRotationUserIds(form), bindings:controls.rotations.getValue(), tags:[...modalTags], recurrence:getRRuleValues(form,'task'), intent:[...controls.rootIntent], modeTouched:controls.modeTouched };
 }
 
@@ -3117,6 +3139,9 @@ function applyScoringFormSnapshot(form, controls, snapshot) {
   if(snapshot.pool)controls.pool?.setValue(snapshot.pool,{silent:true});
   controls.poolTouched=!!snapshot.poolTouched;controls.poolExplicit=!!snapshot.poolExplicit;
   for(const node of form.querySelectorAll('[name="scoring_mode"]'))node.checked=node.value===snapshot.mode;
+  form.querySelector('#task-group-additional').dataset.additionalOrder=JSON.stringify(snapshot.additional||[]);
+  for(const node of form.querySelectorAll('[data-ms-input="task_additional"]'))node.checked=(snapshot.additional||[]).includes(Number(node.value));
+  const additionalNone=form.querySelector('[data-ms-input="task_additional"].user-ms__none');if(additionalNone)additionalNone.checked=!(snapshot.additional||[]).length;
   for(const node of form.querySelectorAll('[data-ms-input="task_assigned"]'))node.checked=snapshot.assigned.includes(Number(node.value));
   const none=form.querySelector('.user-ms__none');if(none)none.checked=!snapshot.assigned.length;
   form.querySelector('[data-ms-input="task_assigned"]')?.dispatchEvent(new Event('change',{bubbles:true}));
@@ -3151,7 +3176,7 @@ async function changeTaskScoringScope(form, controls, scope) {
       const future=controls.scopeSnapshots.get('future_only') || { fields:Object.fromEntries(Object.entries(scoringFormFields).map(([id,key])=>[id,id==='task-owner-person'?fields.owner_user_id??'':key==='rotation_slot'?Number(fields[key]||0)+1:fields[key]])),
         group:fields.assignment_group,pool:fields.subtask_candidate_pool,
         poolTouched:false,poolExplicit:!!fields.subtask_candidate_pool,
-        mode:fields.scoring_mode,assigned:fields.direct_assignee_ids??fields.assigned_to??[],skills:fields.skill_ids||[],subtasks:definition.actions.map(action=>({...action.fields,action_key:action.action_key,permissions:action.permissions})),
+        additional:fields.additional_assignee_ids||[],mode:fields.scoring_mode,assigned:fields.direct_assignee_ids??fields.assigned_to??[],skills:fields.skill_ids||[],subtasks:definition.actions.map(action=>({...action.fields,action_key:action.action_key,permissions:action.permissions})),
         rotationIds:fields.rotation_user_ids||[],bindings:fields.rotation_bindings||[],tags:fields.tags||[],recurrence:fields,intent:[],modeTouched:false };
       applyScoringFormSnapshot(form,controls,future);
       const permissions=definition.permissions;
@@ -3226,7 +3251,7 @@ function applyTaskFormPermissions(panel, task, controls) {
     change_priority: '#task-priority', change_points: '#task-points',
     change_category_tags: '#task-category, #task-tag-input, #task-tags',
     change_dates: '[name="start_date"], [name="start_time"], [name="due_date"], [name="due_time"], #task-expiration-policy, #task-rrule-fields input, #task-rrule-fields select, #task-rrule-fields button, #task-rrule-fields yuvomi-datepicker, #task-countdown',
-    change_assignment: '#task-assignment-mode, #task-owner-person, #task-activity-subject-user, [data-ms-input="task_assigned"], #task-rotation-order input, #task-rotation-group, #task-rotation-position, #task-activity-template, [data-activity-reassign], [data-activity-reassign-submit], #task-group-assignment button, #task-group-assignment select, [data-subtask-candidate-pool]',
+    change_assignment: '#task-assignment-mode, #task-owner-person, #task-activity-subject-user, [data-ms-input="task_assigned"], [data-ms-input="task_additional"], #task-rotation-order input, #task-rotation-group, #task-rotation-position, #task-activity-template, [data-activity-reassign], [data-activity-reassign-submit], #task-group-assignment button, #task-group-assignment select, [data-subtask-candidate-pool]',
     complete: '#task-status',
   };
   for (const [action, selectors] of Object.entries(gates)) {
@@ -3287,7 +3312,7 @@ function permittedTaskBody(body, task) {
     change_priority: ['priority'], change_points: ['points','scoring_mode'], change_category_tags: ['category', 'tags'],
     edit:['card_color_choice'],
     change_dates: ['start_date', 'start_time', 'due_date', 'due_time', 'expiration_policy', 'is_recurring', 'recurrence_rule', 'recurrence_from_completion', 'countdown'],
-    change_assignment: ['assigned_to', 'owner_user_id', 'subtask_candidate_pool', 'assignment_mode', 'rotation_user_ids', 'rotation_group', 'rotation_slot', 'activity_template_id', 'activity_subject_user_id', 'activity_inputs'],
+    change_assignment: ['assigned_to', 'owner_user_id', 'additional_assignee_ids', 'subtask_candidate_pool', 'assignment_mode', 'rotation_user_ids', 'rotation_group', 'rotation_slot', 'activity_template_id', 'activity_subject_user_id', 'activity_inputs'],
     change_required_skills: ['skill_ids'], complete: ['status'],
   };
   for (const [action, keys] of Object.entries(gates)) {
@@ -3459,6 +3484,7 @@ function readTaskEditState(form, controls) {
     ...(form.querySelector('[data-task-assignment-group]')?.value?{assigned_to:[]}:fixedActivityAssignees(form)===null?{}:{assigned_to:fixedActivityAssignees(form)}),
     owner_user_id:form.querySelector('[data-task-assignment-group]')?.value?null:Number(value('task-owner-person'))||null,
     assignment_mode: value('task-assignment-mode'),
+    additional_assignee_ids:selectedAdditionalAssignees(form),
     assignment_group:selectedTaskGroupConfiguration(form,controls.originalTask),
     subtask_candidate_pool:controls.pool?.getValue(),
     rotation_user_ids: getRotationUserIds(form), rotation_group: value('task-rotation-group'), rotation_slot: Number(value('task-rotation-position') || 1) - 1,
@@ -3635,6 +3661,7 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
       &&assignmentMode==='fixed'&&!selectedGroupId&&fixedRoster?.length
       &&(!taskId||Number(fixedRoster[0])!==Number(ownerFromSavedTask(originalTask)))
       ?{owner_user_id:fixedRoster[0]}:{}),
+    ...(selectedGroupId?{additional_assignee_ids:selectedAdditionalAssignees(form)}:{}),
     assignment_group:selectedGroupId?selectedTaskGroupConfiguration(form,originalTask):null,
     activity_template_id: managedActivity ? activityTemplateId : null,
     activity_subject_user_id: managedActivity ? activitySubjectUserId : null,
@@ -3815,7 +3842,7 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
   }
 
   const permittedBody=permittedTaskBody(body,controls?.originalTask);
-  if((!managedActivity||Array.isArray(selectedTemplate?.fixed_assignee_ids))&&assignmentMode==='fixed'&&Array.isArray(permittedBody.assigned_to))permittedBody.direct_assignee_ids=[...permittedBody.assigned_to];
+  if(!selectedGroupId&&(!managedActivity||Array.isArray(selectedTemplate?.fixed_assignee_ids))&&assignmentMode==='fixed'&&Array.isArray(permittedBody.assigned_to))permittedBody.direct_assignee_ids=[...permittedBody.assigned_to];
   const countError=controls?.assigneePolicy?.validate();if(countError){resetSubmit(countError);return;}
   if(taskId && controls?.editBaseline && hasTaskScoringChanges(controls.editBaseline.definition,readTaskEditState(form,controls).definition)) {
     if(body.status && body.status!==controls.originalTask.status){resetSubmit(t('tasks.scoringSeparate'));return;}

@@ -1,3 +1,4 @@
+import {normalizeAdditionalAssignees,ownerAndAdditionalAssignees,additionalAssigneeIds} from './task-additional-assignees.js';
 import {persistCapturedTaskAssignees} from './task-assignee-policy.js';
 /** Transactional reconciliation of already materialized series occurrences.
  * The existing recurrence generator remains the only generator. */
@@ -13,6 +14,7 @@ import { setTags } from '../utils/task-tags.js';
 import { applyTaskActivityBinding, clearTaskActivityBinding } from './task-activity-bindings.js';
 import { captureTaskActivityBindingDefinition, updateTaskActivitySnapshotSkills } from './task-activity-snapshot.js';
 import { reconcileTaskSupervision, assertTaskSupervisionAssignee } from './task-supervision.js';
+import {recordTaskAssignment} from './assignment-responsibilities.js';
 import { assertTaskAssignmentAvailability } from './assignment-responsibilities.js';
 import { setTaskLocation } from './task-locations.js';
 import { bindTaskRotations, assertRotationBindingsChange } from './task-rotation.js';
@@ -24,7 +26,7 @@ import {materializeSavedSubtaskOccurrence} from './subtask-occurrence-resolution
 
 const ROOT_FIELDS = ['title','description','category','priority','start_date','start_time','due_date','due_time',
   'due_date_offset_days','is_recurring','recurrence_rule','recurrence_from_completion','assignment_mode',
-  'rotation_group','rotation_slot','rotation_bindings_json','assignment_group_json','subtask_candidate_pool_json','points','visibility','countdown','locked','expiration_policy','scoring_mode','scoring_review_required'];
+  'rotation_group','rotation_slot','rotation_bindings_json','assignment_group_json','additional_assignee_ids_json','subtask_candidate_pool_json','points','visibility','countdown','locked','expiration_policy','scoring_mode','scoring_review_required'];
 const ACTION_FIELDS = ['title','description','category','priority','start_date','start_time','due_date','due_time',
   'points','visibility','locked','expiration_policy','is_optional','sort_order','assignment_group_json'];
 const actorId = actor => typeof actor === 'number' ? actor : actor.authUserId || actor.session?.userId;
@@ -66,7 +68,7 @@ export function proposedFutureSeriesDefinition(d,actor,root,before,patch,{valida
   if(!object(patch)||Object.keys(patch).some(key=>!['fields','actions'].includes(key)))bad();
   const after=clone(before),fields=patch.fields??{},operations=patch.actions??{};
   if(!object(fields)||!object(operations)||Object.keys(operations).some(key=>!['update','add','remove','order'].includes(key)))bad();
-  const rootAllowed=ROOT_FIELDS.filter(key=>!['scoring_review_required','rotation_bindings_json','assignment_group_json','subtask_candidate_pool_json'].includes(key)).concat(['assigned_to','owner_user_id','rotation_user_ids','skill_ids','tags','location','rotation_bindings','card_color_choice','assignment_group','subtask_candidate_pool']);
+  const rootAllowed=ROOT_FIELDS.filter(key=>!['scoring_review_required','rotation_bindings_json','assignment_group_json','additional_assignee_ids_json','subtask_candidate_pool_json'].includes(key)).concat(['assigned_to','owner_user_id','rotation_user_ids','skill_ids','tags','location','rotation_bindings','card_color_choice','assignment_group','additional_assignee_ids','subtask_candidate_pool']);
   const actionAllowed=ACTION_FIELDS.filter(key=>!['sort_order','assignment_group_json'].includes(key)).concat(['assigned_user_ids','skill_ids','tags','assignment_group','assignment_rule','supervisor_pool']);
   const apply=(target,input,allowed)=>{
     if(!object(input)||Object.keys(input).some(key=>!allowed.includes(key)))bad();input=validateFields(input)||input;
@@ -112,6 +114,16 @@ export function proposedFutureSeriesDefinition(d,actor,root,before,patch,{valida
       else if(key==='supervisor_pool'){
         if(target===after)bad('Choose a future subtask for this supervisor.');
         target.supervisor_pool=normalizeSupervisorPool(d,value);
+      }
+      else if(key==='additional_assignee_ids'){
+        if(target!==after)bad('Choose additional assignees on the Activity.');
+        const ids=normalizeAdditionalAssignees(d,value);
+        if(ids.length&&!target.task.assignment_group_json)bad('Choose fixed additional people with the fixed assignee selection.');
+        target.task.additional_assignee_ids_json=JSON.stringify(ids);
+        const primary=target.owner_user_id??root.assigned_to;
+        target.assigned_user_ids=ownerAndAdditionalAssignees(primary,ids);
+        if(target.binding?.snapshot){target.binding.snapshot.additional_assignee_ids=ids;
+          target.binding.snapshot.additional_assignee_ids_json=JSON.stringify(ids);}
       }
       else if(key==='subtask_candidate_pool'){
         const prior=target.task.subtask_candidate_pool_json?JSON.parse(target.task.subtask_candidate_pool_json):null;
@@ -282,7 +294,7 @@ export function assertSeriesDefinitionMutation(d,actor,task,before,after,{future
     throw new TaskStateError('You cannot use Rotation Groups.',{reason:'series_definition_permission',capability:'rotations.view'},403);};
   const fields={change_points:['points','scoring_mode'],change_priority:['priority'],change_category_tags:['category'],
     change_dates:['calendar_lead_days','due_date_offset_days','start_time','due_time','expiration_policy','is_recurring','recurrence_rule','recurrence_from_completion'],
-    change_assignment:['assignment_mode','rotation_group','rotation_slot','assignment_group_json','subtask_candidate_pool_json']};
+    change_assignment:['assignment_mode','rotation_group','rotation_slot','assignment_group_json','additional_assignee_ids_json','subtask_candidate_pool_json']};
   const assertConfiguration=(old,newValue,capabilities)=>{
     if(!same(old.task?.card_color_policy,newValue.task?.card_color_policy))requireCapability(capabilities,'edit');
     if(!same(old.assignment_rule,newValue.assignment_rule)){
@@ -371,10 +383,10 @@ export function normalizedSeriesLocation(location) {
     latitude:location.latitude,longitude:location.longitude};
 }
 
-function assignments(d,id,users) {
+function assignments(d,id,users,{primary=users[0]??null}={}) {
   d.prepare('DELETE FROM task_assignments WHERE task_id=?').run(id);
   for(const user of users)d.prepare('INSERT INTO task_assignments(task_id,user_id) VALUES(?,?)').run(id,user);
-  d.prepare('UPDATE tasks SET assigned_to=? WHERE id=?').run(users[0]??null,id);
+  d.prepare('UPDATE tasks SET assigned_to=? WHERE id=?').run(primary,id);
 }
 
 function treeState(d,id) {
@@ -410,13 +422,18 @@ function reconcileOccurrence(d,task,definition,window,actor) {
   if((fields.assignment_group_json||null)!==(task.assignment_group_json||null))
     throw new TaskStateError('This future Activity has a different Group assignment plan. Preserve it and apply the new plan to later occurrences.',{reason:'rotation_snapshot'},409);
   const existingBinding=data.binding?captureTaskActivityBindingDefinition(d,task.id):null;
-  const retainBinding=!!existingBinding&&sameSeriesBindingPolicy(existingBinding,data.binding,{includeRequirements:true});
+  const withoutExtras=binding=>{if(!binding)return binding;const value=clone(binding);
+    if(value.snapshot){delete value.snapshot.additional_assignee_ids;delete value.snapshot.additional_assignee_ids_json;}return value;};
+  const retainBinding=!!existingBinding&&sameSeriesBindingPolicy(withoutExtras(existingBinding),withoutExtras(data.binding),{includeRequirements:true});
   const actualAssigned=retainBinding?d.prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(task.id).map(row=>row.user_id):[];
-  const assigned=retainBinding||fields.assignment_group_json
+  const extrasChanged=fields.additional_assignee_ids_json!==task.additional_assignee_ids_json;
+  const groupDirect=fields.assignment_group_json?ownerAndAdditionalAssignees(task.assigned_to,additionalAssigneeIds(fields)):null;
+  const childPeople=fields.assignment_group_json?d.prepare("SELECT user_id FROM task_responsibilities WHERE task_id=? AND role='participant' AND source='subtasks' AND status='active'").all(task.id).map(row=>row.user_id):[];
+  const assigned=fields.assignment_group_json&&extrasChanged?[...new Set([...groupDirect,...childPeople])]:retainBinding||fields.assignment_group_json
     ?(task.assigned_to?[task.assigned_to,...(retainBinding?actualAssigned:d.prepare('SELECT user_id FROM task_assignments WHERE task_id=?').all(task.id).map(row=>row.user_id)).filter(id=>id!==task.assigned_to)]:actualAssigned)
     :seriesRotationAssignment(task,data).assigned_user_ids;
   const body={...fields,assigned_to:assigned,skill_ids:data.skill_ids,tags:data.tags,subtasks:[]};
-  persistCapturedTaskAssignees(d,task.id,data.assignee_policy,assigned,{rotating:fields.assignment_mode==='round_robin'});
+  persistCapturedTaskAssignees(d,task.id,data.assignee_policy,groupDirect??assigned,{rotating:fields.assignment_mode==='round_robin'||!!fields.assignment_group_json});
   assertTaskMutation(d,actor,task,body,{operation:'update'});
   const capabilities=taskCapabilities(d,actor,task);
   if(!capabilities.edit||!capabilities.change_dates)throw new TaskStateError('This future occurrence cannot be edited with your permissions.',{},403);
@@ -451,7 +468,7 @@ function reconcileOccurrence(d,task,definition,window,actor) {
       return {...(existing?{id:existing.id}:{}),title:action.task.title,points:action.task.points,assigned_user_ids:actionAssignments(action)};})});
   d.prepare(`UPDATE tasks SET ${ROOT_FIELDS.map(key=>`${key}=?`).join(',')} WHERE id=?`)
     .run(...ROOT_FIELDS.map(key=>fields[key]??null),task.id);
-  assignments(d,task.id,assigned);setTaskSkills(d,task.id,data.skill_ids);setTags(d,task.id,data.tags);
+  assignments(d,task.id,assigned,{primary:fields.assignment_group_json?task.assigned_to:assigned[0]??null});setTaskSkills(d,task.id,data.skill_ids);setTags(d,task.id,data.tags);
   d.prepare('DELETE FROM task_rotation_members WHERE task_id=?').run(task.id);
   data.rotation_user_ids.forEach((id,order)=>d.prepare('INSERT INTO task_rotation_members(task_id,user_id,sort_order) VALUES(?,?,?)').run(task.id,id,order));
   const wanted=new Set(data.subtasks.map(child=>child.action_key));
@@ -487,7 +504,13 @@ function reconcileOccurrence(d,task,definition,window,actor) {
   // A pristine bound target already consumed its turn. Preserve that actual
   // assignment when its policy is unchanged, then re-evaluate supervision
   // against the edited frozen requirements and complete concrete checklist.
-  if(retainBinding)updateTaskActivitySnapshotSkills(d,task.id,data.binding.snapshot.required_skill_ids??data.skill_ids);
+  if(retainBinding){updateTaskActivitySnapshotSkills(d,task.id,data.binding.snapshot.required_skill_ids??data.skill_ids);
+    if(extrasChanged){d.prepare('UPDATE task_activity_bindings SET definition_snapshot_json=? WHERE task_id=?').run(JSON.stringify(data.binding.snapshot),task.id);
+      if(groupDirect){const members=d.prepare('SELECT * FROM users').all();
+        recordTaskAssignment(d,task.id,data.binding.snapshot,{primary:members.find(member=>member.id===task.assigned_to)??null,
+          participants:groupDirect.map(id=>members.find(member=>member.id===id)).filter(Boolean),eligible:[],strategy:'group_rotation'});}
+    }
+  }
   else if(data.binding)applyTaskActivityBinding(d,task.id,{activityTemplateId:data.binding.activity_template_id,
     subjectUserId:data.binding.subject_user_id,assignmentOverrideUserId:data.binding.assignment_override_user_id,
     activitySnapshot:data.binding.snapshot,commitRotation:false,allowInactive:true,

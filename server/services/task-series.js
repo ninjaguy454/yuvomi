@@ -41,7 +41,7 @@ export const TASK_SERIES_SCHEMA_SQL = `
 
 const TASK_FIELDS = ['title','description','category','priority','start_date','start_time','due_date','due_time',
   'due_date_offset_days','is_recurring','recurrence_rule','recurrence_from_completion','assignment_mode',
-  'rotation_group','rotation_slot','rotation_bindings_json','assignment_group_json','subtask_candidate_pool_json','points','visibility','countdown','locked','expiration_policy','is_optional','sort_order','activity_template_checklist_item_id','scoring_mode','scoring_review_required'];
+  'rotation_group','rotation_slot','rotation_bindings_json','assignment_group_json','additional_assignee_ids_json','subtask_candidate_pool_json','points','visibility','countdown','locked','expiration_policy','is_optional','sort_order','activity_template_checklist_item_id','scoring_mode','scoring_review_required'];
 const selectedTask = row => ({...Object.fromEntries(TASK_FIELDS.map(key => [key, row[key] ?? (key==='rotation_bindings_json'?'[]':null)])),card_color_policy:Object.hasOwn(row,'card_color_policy')?normalizeCardColorChoice(row.card_color_policy):taskCardColorPolicy(row)});
 const parseDefinition = row => row ? { ...row, data: JSON.parse(row.definition_json) } : null;
 const occurrenceRow = (d,taskId) => d.prepare('SELECT * FROM task_recurrence_occurrences WHERE task_id=?').get(taskId) || null;
@@ -309,8 +309,8 @@ export function prepareSeriesOccurrenceWork(source,definition,window,{qualify,as
   const rootGroup=rootGroupConfigured
     ?resolveGroupAssignment({sourceTaskId:source.id,configuration:definition.task.assignment_group_json,
       skills:definition.skill_ids,window,previousUserId:definition.assigned_user_ids?.[0]??source.assigned_to,actionKey:'root'}) : null;
-  const rootAssigned=qualify(rootGroupConfigured?(rootGroup?[rootGroup]:[]):selection.assigned_user_ids,definition.skill_ids,window.due_date,false);
-  const primary=rootGroupConfigured?(rootAssigned[0]??null):(!definition.skill_ids.length||rootAssigned.includes(selection.primary_user_id)
+  const rootAssigned=qualify(rootGroupConfigured?[...new Set([...(rootGroup?[rootGroup]:[]),...JSON.parse(definition.task.additional_assignee_ids_json||'[]')])]:selection.assigned_user_ids,definition.skill_ids,window.due_date,false);
+  const primary=rootGroupConfigured?(rootAssigned.includes(rootGroup)?rootGroup:null):(!definition.skill_ids.length||rootAssigned.includes(selection.primary_user_id)
     ?selection.primary_user_id:rootAssigned[0]??null);
   const relative=window.relative??(definition.task.due_date_offset_days!=null);
   const nextAnchor=relative?window.start_date:window.due_date;

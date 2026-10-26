@@ -1,3 +1,5 @@
+import {recordTaskAssignment} from '../services/assignment-responsibilities.js';
+import {additionalAssigneeIds,normalizeAdditionalAssignees,ownerAndAdditionalAssignees,persistAdditionalAssignees} from '../services/task-additional-assignees.js';
 import {setTaskAssignments as setAssignments} from '../services/task-assignments.js';
 import {parseCategoryAssigneeLimit,categoryAssigneePolicy,assertAssigneeCount,proposedTaskAssigneePolicy,persistTaskAssigneePolicy,persistNewTaskAssignees,assigneePolicyProjection,readTaskAssigneePolicy,persistCapturedTaskAssignees,proposeDefinitionAssigneePolicies,proposedBoundTaskCategoryPolicy,taskDirectAssignmentSelection} from '../services/task-assignee-policy.js';
 import {isTripStep,tripTaskState,markTripTaskOverrides} from '../services/trip-task-state.js';
@@ -309,6 +311,7 @@ function futureEditContext(req,task) {
     if (fields.owner_user_id !== undefined && (!Number.isSafeInteger(fields.owner_user_id) || fields.owner_user_id < 1
       || !fields.assigned_to?.includes(fields.owner_user_id)))
       throw new TaskStateError('Choose an Owner from the selected assignees.',{reason:'invalid_assignment'},400);
+    if(fields.additional_assignee_ids!==undefined)fields.additional_assignee_ids=normalizeAdditionalAssignees(db.get(),fields.additional_assignee_ids);
     if(fields.skill_ids!==undefined)fields.skill_ids=normalizeSkillIds(db.get(),fields.skill_ids);
     if(fields.rotation_bindings!==undefined)fields.rotation_bindings=normalizeRotationBindings(db.get(),fields.rotation_bindings);
     if(fields.tags!==undefined)fields.tags=normalizeTags(fields.tags);
@@ -354,7 +357,7 @@ function futureEditContext(req,task) {
     definition.authorization = { ...definition.authorization, assigned_user_ids: [...definition.assigned_user_ids] };
   }
   proposeDefinitionAssigneePolicies(db.get(),before,definition,{assignmentIntent:req.body.future_patch,
-    resolveRootDirectIds:definition.task.assignment_mode==='round_robin'?()=>seriesRotationAssignment(task,definition,{advance:true}).assigned_user_ids:null});
+    resolveRootDirectIds:definition.task.assignment_group_json?()=>ownerAndAdditionalAssignees(task.assigned_to,additionalAssigneeIds(definition.task)):definition.task.assignment_mode==='round_robin'?()=>seriesRotationAssignment(task,definition,{advance:true}).assigned_user_ids:null});
   if(!futureRootCapabilities(db.get(),req,task,definition).view)throw new TaskStateError('This future definition is unavailable.',{},404);
   assertSeriesDefinitionMutation(db.get(),req,task,before,definition,{futureOnly:true});
   validateFutureDefinitionWindows(req,task,definition);
@@ -413,13 +416,14 @@ function assertFutureSharedGroupOrder(req,task,state,stored,before,definition) {
  * Default/canonical no-ops and derived child participation keep their policy. */
 function assertFutureIndependentAssignmentIntent(req,task,state,stored,before,definition) {
   const sharedBinding = before.binding?.snapshot?.fixed_assignee_ids && definition.binding?.snapshot?.fixed_assignee_ids;
-  if(!Object.hasOwn(req.body.future_patch?.fields??{},'assigned_to')||definition.binding&&!sharedBinding
+  const extrasIntent=Object.hasOwn(req.body.future_patch?.fields??{},'additional_assignee_ids')&&definition.task.additional_assignee_ids_json!==before.task.additional_assignee_ids_json;
+  if(!extrasIntent&&(!Object.hasOwn(req.body.future_patch?.fields??{},'assigned_to')||definition.binding&&!sharedBinding
     ||(definition.task.assignment_mode??'fixed')!=='fixed'
     ||sameIdOrder(before.assignee_policy?.direct_assignee_ids??before.assigned_user_ids,definition.assignee_policy?.direct_assignee_ids??definition.assigned_user_ids)
-      &&before.assigned_user_ids?.[0]===definition.assigned_user_ids?.[0]&&before.owner_user_id===definition.owner_user_id)return;
+      &&before.assigned_user_ids?.[0]===definition.assigned_user_ids?.[0]&&before.owner_user_id===definition.owner_user_id))return;
   const d=db.get(),skills=definition.skill_ids,assigned=definition.assignee_policy?.direct_assignee_ids??definition.assigned_user_ids;
   // The central empty-list/no-requirement rule needs no future date proof.
-  if(!sharedBinding&&(!skills.length||!assigned.length))return assertTaskSkillAssignments(d,skills,assigned);
+  if(!extrasIntent&&!sharedBinding&&(!skills.length||!assigned.length))return assertTaskSkillAssignments(d,skills,assigned);
   const asOfDate=todayInHouseholdZone(),canonicalUnchanged=!!stored&&definitionEqual(stored.data,definition);
   const record=canonicalUnchanged?{...stored,data:definition}:{...stored,id:null,data:definition};
   let window;
@@ -433,13 +437,14 @@ function assertFutureIndependentAssignmentIntent(req,task,state,stored,before,de
     window=prospectiveRootWindow(task,state,record,definition,asOfDate,target,{preserveActual:canonicalUnchanged});
   }catch(error){throw prospectiveUnavailable('projection_evidence_unavailable');}
   if(!window)throw prospectiveUnavailable(definition.task.is_recurring?'next_occurrence_unavailable':'recurrence_ended');
-  if (sharedBinding) {
+  if (sharedBinding||extrasIntent&&definition.binding) {
     previewTaskActivityBinding(d, { activityTemplateId: definition.binding.activity_template_id,
       subjectUserId: definition.binding.subject_user_id, assignmentOverrideUserId: definition.binding.assignment_override_user_id,
       activitySnapshot: definition.binding.snapshot, task: { ...definition.task, ...window },
       assigneePolicy: definition.binding.snapshot.assignee_policy, allowInactive: true,
       dateKey: window.due_date || window.start_date || asOfDate });
-  } else assertTaskSkillAssignments(d,skills,assigned,window.due_date||window.start_date||asOfDate,{allowDelegation:false});
+  } else {assertTaskSkillAssignments(d,skills,assigned,window.due_date||window.start_date||asOfDate,{allowDelegation:false});
+    if(extrasIntent)assertTaskAssignmentAvailability(d,task.id,assigned,{task:{...definition.task,...window}});}
 }
 function futureScoringWires(req,task,before,after) {
   const visible=definition=>definition.subtasks.filter(action=>futureActionCapabilities(db.get(),req,task,action).view);
@@ -459,6 +464,16 @@ function scoringAssignmentIntent(task,body) {
   const existing=getTaskActivityBinding(d,task.id),binding=parseTaskActivityBinding(body,existing);
   if(binding.error)throw new TaskStateError(binding.error,{},400);
   const bindingChanged=!sameTaskActivityBinding(binding.binding,existing);
+  if(task.assignment_group_json&&!bindingChanged&&body.additional_assignee_ids!==undefined){
+    const ids=normalizeAdditionalAssignees(d,body.additional_assignee_ids,additionalAssigneeIds(task));
+    const direct=ownerAndAdditionalAssignees(task.assigned_to,ids),extraChanged=JSON.stringify(ids)!==JSON.stringify(additionalAssigneeIds(task));
+    const childIds=d.prepare("SELECT user_id FROM task_responsibilities WHERE task_id=? AND role='participant' AND source='subtasks' AND status='active'").all(task.id).map(row=>row.user_id);
+    const next=[...new Set([...direct,...childIds])];
+    if(extraChanged){assertTaskSkillAssignments(d,taskSkillInput(body,task.id),direct,body.due_date??task.due_date??todayInHouseholdZone(),{allowDelegation:false});
+      assertTaskAssignmentAvailability(d,task.id,direct,{task:{...task,...body}});
+      assertAssigneeCount(categoryAssigneePolicy(d,body.category??task.category),direct);}
+    return {assigned:next,primary:task.assigned_to,changed:extraChanged,binding:binding.binding,bindingChanged:false,policyAssigned:direct};
+  }
   if(binding.binding){
     if(!bindingChanged)return {assigned,changed:false,binding:binding.binding,bindingChanged:false};
     const desired=binding.binding,activity=existing?.activity_template_id===desired.activityTemplateId
@@ -641,11 +656,13 @@ function compatibleFutureDefinition(req,task,series,before,edited,{normalizeSche
   const pool=normalizeSubtaskCandidatePool(db.get(),body.subtask_candidate_pool,
     {previous:oldPool??(templatePool?JSON.parse(templatePool):null)});
   fields.subtask_candidate_pool_json=pool?JSON.stringify(pool):null;
+  if(body.additional_assignee_ids!==undefined)fields.additional_assignee_ids_json=JSON.stringify(normalizeAdditionalAssignees(db.get(),body.additional_assignee_ids,additionalAssigneeIds(before.task)));
   let binding=null;
   if(desired)binding={activity_template_id:desired.activityTemplateId,subject_user_id:desired.subjectUserId,
     assignment_override_user_id:desired.assignmentOverrideUserId,snapshot:overrideTaskActivityAssignees(before.binding?.activity_template_id===desired.activityTemplateId
       ?structuredClone(before.binding.snapshot):captureActivityTemplateDefinition(db.get(),desired.activityTemplateId),desired.assignmentOverrideUserIds)};
-  if(binding)binding.snapshot.required_skill_ids=[...skills];
+  if(binding){binding.snapshot.required_skill_ids=[...skills];
+    if(body.additional_assignee_ids!==undefined){binding.snapshot.additional_assignee_ids=JSON.parse(fields.additional_assignee_ids_json);binding.snapshot.additional_assignee_ids_json=fields.additional_assignee_ids_json;}}
   if(desired&&!sameTaskActivityBinding(desired,existing)) {
     if(task.rotation_group)throw new TaskStateError('Remove this task from its rotation group before attaching an Activity Template.',{},409);
     const error=validateTaskActivityBindingRequest(desired,fields.due_date||todayInHouseholdZone(),{
@@ -925,6 +942,7 @@ function futureEditProjection(req,task,definition,state) {
   fields.assignee_policy=definition.assignee_policy??null;fields.direct_assignee_ids=definition.assignee_policy?.direct_assignee_ids??null;
   fields.rotation_user_ids=definition.rotation_user_ids;fields.rotation_bindings=parseRotationBindings(definition.task.rotation_bindings_json);
   fields.assignment_group=definition.task.assignment_group_json?JSON.parse(definition.task.assignment_group_json):null;
+  fields.additional_assignee_ids=additionalAssigneeIds(definition.task);
   fields.subtask_candidate_pool=definition.task.subtask_candidate_pool_json?JSON.parse(definition.task.subtask_candidate_pool_json):null;
   return {task_id:task.id,effective_generation:state.occurrence.generation+1,review_required:!!definition.task.scoring_review_required,permissions:futureRootCapabilities(db.get(),req,task,definition),fields,
     actions:definition.subtasks.filter(a=>futureActionCapabilities(db.get(),req,task,a).view).map(action=>({action_key:action.action_key,
@@ -2764,6 +2782,13 @@ export function createTaskDefinition(req, res) {
           return res.status(400).json({error:'This shared Group uses its Group-owned order.',code:400});}
       if(req.body.assignment_group)assertCapability(db.get(),req,'rotations.view');
     }
+    const additionalIds=normalizeAdditionalAssignees(db.get(),req.body.additional_assignee_ids,
+      additionalAssigneeIds(activitySkillSnapshot));
+    if(req.body.additional_assignee_ids?.length&&!assignmentGroup&&(activitySkillSnapshot?.assignment_policy||activitySkillSnapshot?.assignment_strategy)!=='group_rotation')
+      throw new TaskSkillError('Choose fixed additional people with the fixed assignee selection.');
+    if(parent_task_id&&req.body.additional_assignee_ids!==undefined)throw new TaskSkillError('Choose additional Activity assignees on the parent Activity.');
+    if(activitySkillSnapshot&&req.body.additional_assignee_ids!==undefined)
+      activitySkillSnapshot={...activitySkillSnapshot,additional_assignee_ids:additionalIds,additional_assignee_ids_json:JSON.stringify(additionalIds)};
     const templatePool=activitySkillSnapshot?.subtask_candidate_pool_json
       ?JSON.parse(activitySkillSnapshot.subtask_candidate_pool_json):null;
     const subtaskPool=normalizeSubtaskCandidatePool(db.get(),req.body.subtask_candidate_pool,
@@ -2890,6 +2915,7 @@ export function createTaskDefinition(req, res) {
         assignmentMode, rotationIndex, rotationGroup, rotationSlot || 0, rotationCycle,
         points, visibility, countdown ? 1 : 0, req.body.locked ? 1 : 0, start_time, expiration_policy, is_optional ? 1 : 0, due_date_offset_days
       );
+      if(req.body.additional_assignee_ids!==undefined||additionalIds.length)persistAdditionalAssignees(db.get(),result.lastInsertRowid,additionalIds);
       if(subtaskPool)db.get().prepare('UPDATE tasks SET subtask_candidate_pool_json=? WHERE id=?')
         .run(JSON.stringify(subtaskPool),result.lastInsertRowid);
       const groupSeriesId=is_recurring&&!parent_task_id?registerRecurrenceOccurrence(db.get(),Number(result.lastInsertRowid))?.series_id:null;
@@ -2980,10 +3006,13 @@ export function createTaskDefinition(req, res) {
       if(assignmentGroup){
         const selected=selectTaskGroupMember(Number(result.lastInsertRowid),assignmentGroup,skillIds,
           {consumerKey:groupSeriesId?`series:${groupSeriesId}:root`:`task:${result.lastInsertRowid}`,allowDelegation:false});
-        assertTaskMutation(db.get(),req,null,{...req.body,assigned_to:[selected]},{operation:'create'});
+        const direct=ownerAndAdditionalAssignees(selected,additionalIds);
+        assertTaskSkillAssignments(db.get(),skillIds,direct,due_date||todayInHouseholdZone(),{allowDelegation:false});
+        assertTaskAssignmentAvailability(db.get(),Number(result.lastInsertRowid),direct);
+        assertTaskMutation(db.get(),req,null,{...req.body,assigned_to:direct},{operation:'create'});
         db.get().prepare('UPDATE tasks SET assigned_to=? WHERE id=?').run(selected,result.lastInsertRowid);
-        setAssignments(db.get(),result.lastInsertRowid,[selected]);
-        persistNewTaskAssignees(db.get(),result.lastInsertRowid,[selected]);
+        setAssignments(db.get(),result.lastInsertRowid,direct);
+        persistNewTaskAssignees(db.get(),result.lastInsertRowid,direct);
         recordGroupAssignment(db.get(),Number(result.lastInsertRowid),assignmentGroup,selected);
       }
       bindTaskRotations(db.get(),Number(result.lastInsertRowid),{actorId:req.authUserId||req.session.userId});
@@ -3046,6 +3075,8 @@ router.post('/:id/scoring-preview',(req,res)=>{
         if(req.body.include_edit_definition)preview.edit_definition=futureEditProjection(req,task,before,state);
       } else {
         const errors=validateTaskInput(req.body,false,task.recurrence_rule);if(errors.length)throw new TaskStateError(errors.join(' '),{},400);
+        if(req.body.additional_assignee_ids!==undefined&&JSON.stringify(normalizeAdditionalAssignees(db.get(),req.body.additional_assignee_ids))!==JSON.stringify(additionalAssigneeIds(task))
+          &&(!capabilities.change_assignment||!capabilities.reassign))throw new TaskStateError('Your permissions do not allow changing additional assignees.',{},403);
         assertTaskMutation(db.get(),req,task,req.body,{operation:'update'});
         const historical=scope==='future'&&(!!task.archived_at||['done','expired','skipped','closed_incomplete'].includes(task.status));
         const series=scope==='future'?taskSeriesState(db.get(),task.id):null;
@@ -3234,6 +3265,13 @@ export function updateTaskDefinition(req, res) {
           return res.status(400).json({error:'This shared Group uses its Group-owned order.',code:400});
         assertCapability(db.get(),req,'rotations.view');}
     }
+    const additionalIds=normalizeAdditionalAssignees(db.get(),req.body.additional_assignee_ids,additionalAssigneeIds(task));
+    const additionalChanged=JSON.stringify(additionalIds)!==JSON.stringify(additionalAssigneeIds(task));
+    if(additionalChanged&&additionalIds.length&&!assignmentGroup)throw new TaskSkillError('Choose fixed additional people with the fixed assignee selection.');
+    if(req.body.additional_assignee_ids!==undefined&&task.parent_task_id)throw new TaskSkillError('Choose additional Activity assignees on the parent Activity.');
+    if(additionalChanged&&!historicalSeriesOnly&&['done','expired','skipped','closed_incomplete'].includes(task.status))throw new TaskStateError('Preserve completed assignments; edit future occurrences instead.',{},409);
+    if(additionalChanged){const permissions=taskCapabilities(db.get(),req,task);
+      if(!permissions.change_assignment||!permissions.reassign)return res.status(403).json({error:'Your permissions do not allow changing additional assignees.',code:403});}
     const groupConfigurationChanged=JSON.stringify(assignmentGroup)!==(task.assignment_group_json||'null');
     if(groupConfigurationChanged&&assignmentGroup&&sharedGroupOnDate(db.get(),assignmentGroup.group_id,due_date||todayInHouseholdZone())
       &&(assignmentGroup.member_order||priorGroup&&Number(priorGroup.group_id)===Number(assignmentGroup.group_id)))
@@ -3304,15 +3342,22 @@ export function updateTaskDefinition(req, res) {
       ?selectTaskGroupMember(task.id,assignmentGroup,skillIds,{consumerKey:taskSeriesState(db.get(),task.id)?.series_id?`series:${taskSeriesState(db.get(),task.id).series_id}:root`:`task:${task.id}`,
         commit:false,allowDelegation:false})
       :Number(task.assigned_to)||null):null;
-    if(assignmentGroup&&groupSelected)req.body.assigned_to=[groupSelected];
+    if(assignmentGroup){req.body.assigned_to=ownerAndAdditionalAssignees(groupSelected,additionalIds);
+      if(req.body.direct_assignee_ids!==undefined)req.body.direct_assignee_ids=[...req.body.assigned_to];}
+    if(assignmentGroup&&additionalChanged){
+      assertTaskSkillAssignments(db.get(),skillIds,req.body.assigned_to,due_date||todayInHouseholdZone(),{allowDelegation:false});
+      assertTaskAssignmentAvailability(db.get(),task.id,req.body.assigned_to,{task:{...task,start_date,start_time,due_date,due_time}});
+    }
+    const childParticipantIds=assignmentGroup?db.get().prepare("SELECT user_id FROM task_responsibilities WHERE task_id=? AND role='participant' AND source='subtasks' AND status='active'").all(task.id).map(row=>row.user_id):[];
+    const groupPeople=assignmentGroup?[...new Set([...req.body.assigned_to,...childParticipantIds])]:null;
     const requestedUserIds = desiredActivityBinding
-      ? assignedBefore
-      : (req.body.assigned_to !== undefined ? parseAssignedTo(req.body.assigned_to) : assignedBefore);
+      ? assignmentGroup&&additionalChanged?groupPeople:assignedBefore
+      : assignmentGroup?groupPeople:(req.body.assigned_to !== undefined ? parseAssignedTo(req.body.assigned_to) : assignedBefore);
     let rotationIndex = 0;
     let rotationCycle = 0;
     let userIds;
     if (desiredActivityBinding) {
-      userIds = assignedBefore;
+      userIds = requestedUserIds;
     } else if (assignmentMode === 'round_robin') {
       if (rotationGroup) {
         rotationIndex = groupState.rotationIndex;
@@ -3333,12 +3378,12 @@ export function updateTaskDefinition(req, res) {
       rotationIndex=Number(task.rotation_index||0);
       rotationCycle=Number(task.rotation_cycle||0);
     }
-    const firstUid = desiredActivityBinding || req.body.assigned_to === undefined && assignmentMode === 'fixed'
+    const firstUid = assignmentGroup ? groupSelected : desiredActivityBinding || req.body.assigned_to === undefined && assignmentMode === 'fixed'
       ? task.assigned_to : (userIds[0] ?? null);
     const directSelection=taskDirectAssignmentSelection(db.get(),task,req.body);
-    const directChanged=!desiredActivityBinding&&!sameIdOrder(directSelection.previous,directSelection.selected);
+    const directChanged=!desiredActivityBinding&&!sameIdOrder([...directSelection.previous].sort((a,b)=>a-b),[...directSelection.selected].sort((a,b)=>a-b));
     const independentIds=directChanged?directSelection.selected:independentlyAssignedTaskMembers(task.id,userIds,assignedBefore,firstUid);
-    if (!desiredActivityBinding && (!sameIdOrder(skillIds, skillsBefore) || !sameIdOrder(userIds, assignedBefore)
+    if (!desiredActivityBinding && (!sameIdOrder(skillIds, skillsBefore) || !sameIdOrder([...userIds].sort((a,b)=>a-b),[...assignedBefore].sort((a,b)=>a-b))
         || firstUid !== task.assigned_to || !sameIdOrder(rotationUserIds, rotationBefore)
         || directChanged || bindingChanged || due_date !== task.due_date)) {
       assertTaskSkillAssignments(db.get(), skillIds,
@@ -3346,7 +3391,7 @@ export function updateTaskDefinition(req, res) {
           : independentIds,
         due_date || todayInHouseholdZone(), {allowDelegation:!!task.parent_task_id});
     }
-    const performersChanged = !desiredActivityBinding && (directChanged || !sameIdOrder(userIds, assignedBefore) || firstUid !== task.assigned_to);
+    const performersChanged = !desiredActivityBinding && (directChanged || !sameIdOrder([...userIds].sort((a,b)=>a-b),[...assignedBefore].sort((a,b)=>a-b)) || firstUid !== task.assigned_to);
     if (!historicalSeriesOnly && !bindingChanged && status !== 'done' && (taskWindowChanged || performersChanged)) {
       // Keep the occurrence's policy, including authored supervisor Tasks
       // without an Activity binding. Reapplying an Activity would advance its
@@ -3402,7 +3447,7 @@ export function updateTaskDefinition(req, res) {
       if (!sameIdOrder(skillIds, skillsBefore)) touchesDefinition = true;
       if (bindingChanged) touchesDefinition = true;
       if(groupConfigurationChanged)touchesDefinition=true;
-      if(subtaskPoolChanged)touchesDefinition=true;
+      if(subtaskPoolChanged||additionalChanged)touchesDefinition=true;
       if (taskLocation !== undefined
           && JSON.stringify(taskLocation) !== JSON.stringify(storedTaskLocation(db.get(), task.id))) {
         touchesDefinition = true;
@@ -3439,6 +3484,7 @@ export function updateTaskDefinition(req, res) {
       recurrence_from_completion:recurrence_from_completion?1:0,assignment_mode:assignmentMode,
       rotation_group:rotationGroup,rotation_slot:rotationSlot||0,rotation_bindings_json:rotationBindingsJson,points,scoring_mode:scoringMode,
       assignment_group_json:assignmentGroup?JSON.stringify(assignmentGroup):null,
+      additional_assignee_ids_json:additionalChanged?JSON.stringify(additionalIds):task.additional_assignee_ids_json,
       subtask_candidate_pool_json:subtaskPool?JSON.stringify(subtaskPool):null,
       scoring_review_required:req.body.scoring_mode===undefined?task.scoring_review_required:0,visibility,countdown:countdown?1:0,locked,expiration_policy,is_optional:is_optional?1:0};
     const currentChildren=editedSubtasks?ordinaryActivitySubtasks(db.get(),task.id).filter(row=>!row.archived_at):null;
@@ -3450,16 +3496,17 @@ export function updateTaskDefinition(req, res) {
         ||child.points!==Number(currentChildren[index]?.points||0)
         ||child.assignedUsers!==undefined&&!sameIdOrder(child.assignedUsers,db.get().prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(child.id).map(row=>row.user_id))
         ||!sameIdOrder(child.skillIds,loadTaskSkillIds(db.get(),child.id))));
-    const countProposal=!desiredActivityBinding?proposedTaskAssigneePolicy(db.get(),task,req.body,{category,directIds:userIds}):!bindingChanged?proposedBoundTaskCategoryPolicy(db.get(),task,req.body,readTaskActivityDefinition(db.get(),task.id),existingActivityBinding):null;
-    const definitionChanged=groupConfigurationChanged||!!countProposal||req.body.card_color_choice!==undefined||Object.entries(definitionFields).some(([key,value])=>!sameFieldValue(value,task[key]))
+    const countProposal=additionalChanged&&assignmentGroup?{...categoryAssigneePolicy(db.get(),category),direct_assignee_ids:req.body.assigned_to}:!desiredActivityBinding?proposedTaskAssigneePolicy(db.get(),task,req.body,{category,directIds:userIds}):!bindingChanged?proposedBoundTaskCategoryPolicy(db.get(),task,req.body,readTaskActivityDefinition(db.get(),task.id),existingActivityBinding):null;
+    if(countProposal)assertAssigneeCount(countProposal,countProposal.direct_assignee_ids);
+    const definitionChanged=firstUid!==task.assigned_to||additionalChanged||groupConfigurationChanged||!!countProposal||req.body.card_color_choice!==undefined||Object.entries(definitionFields).some(([key,value])=>!sameFieldValue(value,task[key]))
       ||childrenChanged||bindingChanged||!sameIdOrder(skillIds,skillsBefore)
-      ||!sameIdOrder(userIds,assignedBefore)||!sameIdOrder(rotationUserIds,rotationBefore)
+      ||!sameIdOrder([...userIds].sort((a,b)=>a-b),[...assignedBefore].sort((a,b)=>a-b))||!sameIdOrder(rotationUserIds,rotationBefore)
       ||req.body.tags!==undefined&&tagsKey(normalizeTags(req.body.tags))!==tagsKey(tagsBefore)
       ||taskLocation!==undefined&&JSON.stringify(taskLocation)!==JSON.stringify(storedTaskLocation(db.get(),task.id));
     const syncChanged=syncTarget!==undefined&&(!sameFieldValue(syncTarget?.accountId,task.target_caldav_account_id)
       ||!sameFieldValue(syncTarget?.listUrl,task.target_caldav_list_url));
     const noOccurrenceChange=!definitionChanged&&status===task.status&&!(archiveRequested&&!task.archived_at)&&!syncChanged;
-    assertScoringProgressIntent(task,req.body,editedSubtasks,{performersChanged:performersChanged||bindingChanged});
+    assertScoringProgressIntent(task,req.body,editedSubtasks,{performersChanged:performersChanged||bindingChanged||additionalChanged});
     if(noOccurrenceChange&&editScope!=='future')
       return res.json({data:hydrateTask(task,req.authUserId||req.session.userId),unchanged:true});
     if(historical&&editScope!=='future'&&definitionChanged&&taskSeriesState(db.get(),task.id))
@@ -3514,7 +3561,7 @@ export function updateTaskDefinition(req, res) {
         }
       }
       assertTaskScoringMutation(db.get(),current.id,scoringMutationWire(req.body,editedSubtasks,current),{scope:editScope});
-      const proposal=!desiredActivityBinding?proposedTaskAssigneePolicy(db.get(),current,req.body,{category,directIds:userIds}):!bindingChanged?proposedBoundTaskCategoryPolicy(db.get(),current,req.body,readTaskActivityDefinition(db.get(),current.id),existingActivityBinding):null;
+      const proposal=additionalChanged&&assignmentGroup?countProposal:!desiredActivityBinding?proposedTaskAssigneePolicy(db.get(),current,req.body,{category,directIds:userIds}):!bindingChanged?proposedBoundTaskCategoryPolicy(db.get(),current,req.body,readTaskActivityDefinition(db.get(),current.id),existingActivityBinding):null;
       if(proposal)persistTaskAssigneePolicy(db.get(),current.id,proposal,proposal.direct_assignee_ids);
       assertTaskWindowAction(db.get(),current.id);
       if(tripTaskState(db.get(),current.id)&&(is_recurring||desiredActivityBinding||rotationBindings.length))
@@ -3538,6 +3585,7 @@ export function updateTaskDefinition(req, res) {
              assignmentMode, rotationIndex, rotationGroup, rotationSlot || 0, rotationCycle,
              points, visibility, countdown ? 1 : 0, locked, start_time, expiration_policy, is_optional ? 1 : 0, dueDateOffset, req.params.id);
       if(req.body.card_color_choice!==undefined)setTaskCardColor(db.get(),current.id,req.body.card_color_choice);
+      if(additionalChanged)persistAdditionalAssignees(db.get(),current.id,additionalIds);
       if(subtaskPoolChanged)db.get().prepare('UPDATE tasks SET subtask_candidate_pool_json=? WHERE id=?')
         .run(subtaskPool?JSON.stringify(subtaskPool):null,current.id);
       if(req.body.scoring_mode!==undefined)db.get().prepare('UPDATE tasks SET scoring_mode=?,scoring_review_required=0 WHERE id=?').run(scoringMode,current.id);
@@ -3557,9 +3605,19 @@ export function updateTaskDefinition(req, res) {
       }
       setTaskSkills(db.get(), task.id, skillIds);
       updateTaskActivitySnapshotSkills(db.get(),task.id,skillIds);
+      if(additionalChanged&&assignmentGroup&&desiredActivityBinding&&!bindingChanged){
+        const snapshot=readTaskActivityDefinition(db.get(),task.id);
+        if(snapshot){snapshot.additional_assignee_ids=additionalIds;snapshot.additional_assignee_ids_json=JSON.stringify(additionalIds);
+          db.get().prepare('UPDATE task_activity_bindings SET definition_snapshot_json=? WHERE task_id=?').run(JSON.stringify(snapshot),task.id);
+          const primary=groupSelected?householdMembers(db.get()).find(member=>member.id===groupSelected):null;
+          const participants=householdMembers(db.get()).filter(member=>req.body.assigned_to.includes(member.id));
+          recordTaskAssignment(db.get(),task.id,snapshot,{primary,participants,eligible:[],strategy:'group_rotation'});
+        }
+      }
       if(groupConfigurationChanged&&desiredActivityBinding&&!bindingChanged&&assignmentGroup){
         const snapshot=activitySkillSnapshot||readTaskActivityDefinition(db.get(),task.id);
         if(snapshot){snapshot.assignment_group_json=JSON.stringify(assignmentGroup);
+          if(additionalChanged){snapshot.additional_assignee_ids=additionalIds;snapshot.additional_assignee_ids_json=JSON.stringify(additionalIds);}
           db.get().prepare('UPDATE task_activity_bindings SET definition_snapshot_json=? WHERE task_id=?').run(JSON.stringify(snapshot),task.id);}
       }
       if(desiredActivityBinding&&!bindingChanged&&activitySkillSnapshot&&!existingActivityBinding?.definition_snapshot_json&&!groupConfigurationChanged)
@@ -4032,13 +4090,14 @@ function spawnRecurrenceFollowupSingle(task, {expirationAnchor=false}={}) {
     db.get().prepare('UPDATE tasks SET rotation_bindings_json=? WHERE id=?').run(task.rotation_bindings_json||'[]',newTask.lastInsertRowid);
     if(definition.task.subtask_candidate_pool_json)db.get().prepare('UPDATE tasks SET subtask_candidate_pool_json=? WHERE id=?')
       .run(definition.task.subtask_candidate_pool_json,newTask.lastInsertRowid);
+    if(definition.task.additional_assignee_ids_json)persistAdditionalAssignees(db.get(),newTask.lastInsertRowid,JSON.parse(definition.task.additional_assignee_ids_json));
     setAssignments(db.get(), newTask.lastInsertRowid, followupAssignments);
     if(definition.task.assignment_group_json&&!definition.binding){
       if(nextAssignedTo)recordGroupAssignment(db.get(),Number(newTask.lastInsertRowid),definition.task.assignment_group_json,nextAssignedTo);
       else db.get().prepare('UPDATE tasks SET assignment_group_json=? WHERE id=?')
         .run(definition.task.assignment_group_json,Number(newTask.lastInsertRowid));
     }
-    persistCapturedTaskAssignees(db.get(),newTask.lastInsertRowid,definition.assignee_policy,followupAssignments,{rotating:task.assignment_mode==='round_robin'});
+    persistCapturedTaskAssignees(db.get(),newTask.lastInsertRowid,definition.assignee_policy,followupAssignments,{rotating:task.assignment_mode==='round_robin'||!!definition.task.assignment_group_json});
     setRotationMembers(db.get(), newTask.lastInsertRowid, task.assignment_mode === 'round_robin' ? rotationUserIds : []);
     setTags(db.get(), newTask.lastInsertRowid, existingTags);
     setTaskSkills(db.get(), newTask.lastInsertRowid,definition.skill_ids);

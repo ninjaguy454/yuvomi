@@ -9329,6 +9329,10 @@ FORK_MIGRATIONS.push({version:10078,description:'Scope linked supervision to ind
     CHECK(supervisor_scope IN ('single','per_action'));
 `});
 FORK_MIGRATIONS.push({version:10079,description:'Ordinary activity completion with optional remaining subtask completion',up:addTaskCompletionChoiceSchema});
+FORK_MIGRATIONS.push({version:10080,description:'Persist explicit additional Activity assignees independently from Owner',up:`
+  ALTER TABLE tasks ADD COLUMN additional_assignee_ids_json TEXT CHECK(additional_assignee_ids_json IS NULL OR (json_valid(additional_assignee_ids_json) AND json_type(additional_assignee_ids_json)='array'));
+  ALTER TABLE activity_templates ADD COLUMN additional_assignee_ids_json TEXT CHECK(additional_assignee_ids_json IS NULL OR (json_valid(additional_assignee_ids_json) AND json_type(additional_assignee_ids_json)='array'));
+`});
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];
 
 const FORK_MIGRATION_REMAPS = [

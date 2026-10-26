@@ -77,11 +77,11 @@ export function assertActivityAssigneePolicy(policy,activity,resolution){
 }
 const bindingAssignmentConfiguration=binding=>binding?{
   ...Object.fromEntries(['activity_template_id','subject_user_id','assignment_override_user_id'].map(key=>[key,binding[key]??null])),
-  ...Object.fromEntries(['assignment_policy','assignment_strategy','fixed_user_id','fixed_assignee_ids','participant_count','rotation_group'].map(key=>[key,binding.snapshot?.[key]??null]))
+  ...Object.fromEntries(['assignment_policy','assignment_strategy','fixed_user_id','fixed_assignee_ids','additional_assignee_ids','participant_count','rotation_group'].map(key=>[key,binding.snapshot?.[key]??null]))
 }:null;
 function changedRootAssignmentConfiguration(before,after){
   return JSON.stringify(bindingAssignmentConfiguration(before.binding))!==JSON.stringify(bindingAssignmentConfiguration(after.binding))
-    ||['assignment_mode','rotation_group','rotation_slot'].some(key=>(before.task[key]??(key==='rotation_slot'?0:key==='assignment_mode'?'fixed':null))!==(after.task[key]??(key==='rotation_slot'?0:key==='assignment_mode'?'fixed':null)))
+    ||['assignment_mode','rotation_group','rotation_slot','additional_assignee_ids_json'].some(key=>(before.task[key]??(key==='rotation_slot'?0:key==='assignment_mode'?'fixed':null))!==(after.task[key]??(key==='rotation_slot'?0:key==='assignment_mode'?'fixed':null)))
     ||JSON.stringify(before.rotation_user_ids??[])!==JSON.stringify(after.rotation_user_ids??[]);
 }
 /** Pure validation/enrollment for an explicitly authored future definition. */

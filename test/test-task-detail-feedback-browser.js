@@ -27,15 +27,16 @@ app.use('/api/v1',(req,res)=>{
 test.before(async()=>{
   server=app.listen(0,'127.0.0.1');await new Promise(resolve=>server.once('listening',resolve));base=`http://127.0.0.1:${server.address().port}`;
   const edge='C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
-  browser=await puppeteer.launch({headless:true,executablePath:process.env.PUPPETEER_EXECUTABLE_PATH||(process.platform==='win32'&&existsSync(edge)?edge:undefined),args:['--no-sandbox','--disable-dev-shm-usage']});
+  browser=await puppeteer.launch({headless:true,executablePath:process.env.PUPPETEER_EXECUTABLE_PATH||(process.platform==='win32'&&existsSync(edge)?edge:undefined),args:['--disable-dev-shm-usage']});
 });
 test.after(async()=>{await browser?.close();server?.closeAllConnections();await new Promise(resolve=>server?.close(resolve)||resolve());});
 const selector=id=>`[data-subtask-id="${id}"] .detail-subtask__toggle`;
-async function mounted({mobile=false,optional=false,count=8,finalRequired=false,rotations,workflowOperations}={}){
+async function mounted({mobile=false,optional=false,count=8,finalRequired=false,rootStatus='open',rotations,workflowOperations}={}){
   fixture={writes:[],reads:0,requests:[],task:{id:1,revision:9,title:'Morning routine',status:'open',assigned_to:1,created_by:1,points:2,documents:[],
     permissions:{complete:true,edit:false,comment:false},subtasks:Array.from({length:count},(_,index)=>({id:index+2,revision:3,parent_task_id:1,parent_revision:9,title:`Routine step ${index+1}`,
       status:'open',points:0,is_optional:optional&&index===0?1:0,skill_ids:[1],skills:[{id:1,name:'Independence'}],permissions:{complete:true}}))}};
   if(finalRequired){fixture.task.status='in_progress';fixture.task.subtasks.slice(0,-1).forEach(child=>child.status='done');}
+  if(rootStatus!=='open')fixture.task.status=rootStatus;
   if(rotations)fixture.task.rotations=rotations;
   if(workflowOperations)fixture.task.workflow_rotation_operations=workflowOperations;
   const page=await browser.newPage();await page.setViewport(mobile?{width:390,height:844,isMobile:true,hasTouch:true}:{width:1024,height:800});
@@ -61,6 +62,82 @@ function acknowledge(write,{lostResponse=false}={}){
   else write.res.json({data:{...fixture.task.subtasks.find(child=>child.id===id),parent_task:fixture.task}});
 }
 async function settled(page,id){await page.waitForFunction(sel=>{const button=document.querySelector(sel);return button&&button.getAttribute('aria-busy')!=='true'&&!button.disabled;},{timeout:5000},selector(id));}
+
+const rootSelect='.detail-view__pane .task-detail-status select';
+async function rootIntent(page,status){
+  await page.select(rootSelect,status);
+  if(status==='done'){
+    await page.waitForSelector('#confirm-modal-checkbox');await page.click('#confirm-modal-checkbox');await page.click('#confirm-modal-ok');
+  }
+  return writeAt();
+}
+function acknowledgeRoot(write){fixture.task.status=write.body.status;fixture.task.revision++;write.res.json({data:fixture.task});}
+async function rootSettled(page,status){await page.waitForFunction(({selector,status})=>{const select=document.querySelector(selector);return select?.value===status&&select.getAttribute('aria-busy')==='false'&&!select.disabled;},{timeout:5000},{selector:rootSelect,status});}
+async function rootFrame(page){return page.evaluate(async()=>{await new Promise(requestAnimationFrame);const select=document.querySelector('.detail-view__pane .task-detail-status select');return{value:select.value,busy:select.getAttribute('aria-busy'),disabled:select.disabled,pending:document.querySelector('.detail-view__pane [data-root-status-pending]')?.textContent||null,status:fixtureTask.status,points:fixtureTask.points,children:fixtureTask.subtasks.map(child=>child.status)};});}
+
+for(const intent of [{from:'open',to:'done',mobile:true},{from:'done',to:'in_progress',mobile:false}])test(`root status ${intent.to} paints pending in the first request frame without mutating canonical progress`,async()=>{
+  const page=await mounted({mobile:intent.mobile,count:2,rootStatus:intent.from});try{
+    const first=await rootIntent(page,intent.to);
+    assert.deepEqual(await rootFrame(page),{value:intent.to,busy:'true',disabled:true,pending:'Saving status.',status:intent.from,points:2,children:['open','open']});
+    await page.$eval(rootSelect,select=>{select.value='open';select.dispatchEvent(new Event('change',{bubbles:true}));});
+    assert.equal(fixture.writes.length,1);assert.equal((await rootFrame(page)).value,intent.to,'overlapping changes retain the pending projection');
+    acknowledgeRoot(first);await rootSettled(page,intent.to);assert.equal((await rootFrame(page)).pending,null);
+  }finally{await page.close();}
+});
+
+test('root completion Cancel never paints a pending status or sends a write',async()=>{
+  const page=await mounted({mobile:true,count:2});try{
+    await page.select(rootSelect,'done');await page.waitForSelector('#confirm-modal-checkbox');
+    assert.equal((await rootFrame(page)).value,'open');assert.equal((await rootFrame(page)).busy,'false');assert.equal(fixture.writes.length,0);
+    await page.click('#confirm-modal-cancel');await page.waitForSelector('#confirm-modal-checkbox',{hidden:true});await rootSettled(page,'open');
+    assert.equal((await rootFrame(page)).pending,null);assert.equal(fixture.writes.length,0);
+  }finally{await page.close();}
+});
+
+for(const code of [400,409])test(`root pending status rolls back on ${code} and accepts current canonical state`,async()=>{
+  const page=await mounted({count:2});try{
+    const first=await rootIntent(page,'done');assert.equal((await rootFrame(page)).value,'done');
+    if(code===409){fixture.task.status='in_progress';fixture.task.revision++;}
+    first.res.status(code).json({error:'Synthetic root status rejected'});
+    await rootSettled(page,code===409?'in_progress':'open');assert.equal((await rootFrame(page)).pending,null);
+    assert.deepEqual(await page.evaluate(()=>fixtureTask.subtasks.map(child=>child.status)),['open','open']);
+  }finally{await page.close();}
+});
+
+test('uncertain root status shows canonical progress while checking then settles the original retry',async()=>{
+  const page=await mounted({count:2});try{
+    const first=await rootIntent(page,'done');fixture.failDetailRead=true;first.res.status(503).json({error:'Synthetic root outage'});
+    await page.waitForFunction(()=>document.querySelector('.detail-view__pane .task-detail-summary')?.textContent.includes('Checking automatically'));
+    const checking=await rootFrame(page);assert.equal(checking.value,'open');assert.equal(checking.busy,'true');assert.equal(checking.pending,null);assert.equal(checking.status,'open');
+    fixture.failDetailRead=false;const retry=await writeAt(1);assert.deepEqual(retry.body,first.body);acknowledgeRoot(retry);await rootSettled(page,'done');
+    assert.equal((await rootFrame(page)).pending,null);assert.equal(fixture.writes.length,2);
+  }finally{await page.close();}
+});
+
+test('newer live root snapshot clears pending projection and a stale ACK cannot replace it',async()=>{
+  const page=await mounted({count:2});try{
+    const first=await rootIntent(page,'done'),old=structuredClone(fixture.task);
+    fixture.task.status='in_progress';fixture.task.revision=11;
+    await page.evaluate(()=>window.live[0].listeners.get('change')({data:'{"version":11}'}));
+    await page.waitForFunction(()=>fixtureTask.revision===11);
+    assert.equal((await rootFrame(page)).value,'in_progress');assert.equal((await rootFrame(page)).pending,null);
+    first.res.json({data:{...old,status:'done',revision:10}});await rootSettled(page,'in_progress');assert.equal(await page.evaluate(()=>fixtureTask.revision),11);
+  }finally{await page.close();}
+});
+
+test('closing a pending root operation cannot paint or overwrite a subsequently opened detail',async()=>{
+  const page=await mounted({count:2,rootStatus:'done'});try{
+    const first=await rootIntent(page,'in_progress');assert.equal((await rootFrame(page)).value,'in_progress');
+    await page.evaluate(async()=>{
+      await(await import('/components/detail-view.js')).closeDetailView({force:true});
+      const next=structuredClone(fixtureTask);next.id=99;next.status='open';next.title='Next activity';window.nextTask=next;
+      (await import('/components/task-detail.js')).openTaskDetail({task:next,currentUserId:1,isAdmin:true});
+    });
+    first.res.json({data:{...fixture.task,status:'in_progress',revision:10}});
+    await page.waitForFunction(()=>document.querySelector('.detail-view__pane .task-detail-status select')?.value==='open');
+    assert.equal(await page.evaluate(()=>nextTask.status),'open');assert.equal(await page.$eval(rootSelect,select=>select.getAttribute('aria-busy')),'false');
+  }finally{await page.close();}
+});
 
 test('the optimistic checkbox is a real SVG in its first frame before any server response',async()=>{
   const page=await mounted();try{
@@ -218,7 +295,11 @@ test('a live comments refresh received during a pending write is deferred until 
     await page.click(selector(2));const first=await writeAt();
     const commentReads=()=>fixture.requests.filter(request=>request.method==='GET'&&request.path==='/tasks/1/comments').length;
     const before=commentReads();
-    await page.evaluate(()=>window.live[0].listeners.get('change')({data:'{"version":9}'}));
+    // A comment advances this Task's revision; an unrelated global clock event
+    // with an unchanged Task snapshot must not trigger another comments GET.
+    fixture.task.revision++;
+    fixture.task.subtasks.forEach(child=>{child.parent_revision=fixture.task.revision;});
+    await page.evaluate(()=>window.live[0].listeners.get('change')({data:'{"version":10}'}));
     for(let retry=0;retry<50&&!fixture.reads;retry++)await new Promise(resolve=>setTimeout(resolve,10));
     assert.ok(fixture.reads>0,'the live detail snapshot was fetched');
     assert.equal(commentReads(),before,'the active child write must not trigger a comments fetch');

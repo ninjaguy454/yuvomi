@@ -680,6 +680,7 @@ function patchTaskDetailNode(current, fresh) {
 }
 
 function pendingParentStatus(task, ctx) {
+  if(ctx.pendingRootStatus&&!ctx.statusChecking)return ctx.pendingRootStatus.status;
   const pending = ctx.pendingSubtasks;
   if (!pending?.size || isArchived(task) || isClosedOccurrence(task) || task.is_supervision_projection) return task.status;
   const required = actionableSubtasks(task).filter(child => !child.is_optional);
@@ -1242,17 +1243,20 @@ function statusSummaryNode(task, ctx) {
     const option = document.createElement('option'); option.value = task.status; option.textContent = closedOccurrenceLabel(task); select.appendChild(option);
   }
   select.value = pendingParentStatus(task, ctx);
-  select.setAttribute('aria-busy', String(!!ctx.pendingSubtasks?.size));
+  select.setAttribute('aria-busy', String(!!ctx.pendingRootStatus||!!ctx.statusChecking||!!ctx.pendingSubtasks?.size));
   select.disabled = !!ctx.busy || !!ctx.queue?.busy || !!ctx.refreshRequired || isArchived(task) || isClosedOccurrence(task) || !canTask(task, 'complete') || task.supervision_action?.can_complete === false;
   select.addEventListener('change', async event => {
     const requested = select.value;
-    select.value = task.status;
-    await ctx.runMutation(select, () => changeTaskStatus(task, requested,{gesture:event,signal:ctx.personCardController.signal,
-      onUncertain:()=>{ctx.statusChecking=true;ctx.renderOperationState();}}));
-    if (select.isConnected) select.value = task.status;
+    select.value = pendingParentStatus(task,ctx);
+    await ctx.runMutation(select, beforeRequest => changeTaskStatus(task, requested,{gesture:event,signal:ctx.personCardController.signal,beforeRequest,
+      onUncertain:()=>{ctx.statusChecking=true;ctx.renderOperationState();}}),{status:requested});
+    if (select.isConnected) select.value = pendingParentStatus(task,ctx);
   });
   control.append(label, select);
   summary.appendChild(control);
+  if(ctx.pendingRootStatus&&!ctx.statusChecking){
+    const saving=document.createElement('span');saving.className='task-detail-progress';saving.dataset.rootStatusPending='';saving.setAttribute('role','status');saving.textContent='Saving status.';summary.appendChild(saving);
+  }
   if (canApproveDeviceTask(task)) {
     const approve = document.createElement('button'); approve.type = 'button';
     approve.className = 'btn btn--secondary btn--icon';
@@ -1739,16 +1743,19 @@ function mergeAcknowledgedSubtask(task, fresh) {
 }
 
 async function runTaskDetailMutation(ctx, button, operation, { subtask, status } = {}) {
-  if (ctx.busy || ctx.queue?.busy || ctx.refreshRequired) return;
+  if (ctx.closed || ctx.busy || ctx.queue?.busy || ctx.refreshRequired) return;
   // Disabling a focused button can move focus to the document before refresh
   // captures it. Keep that key, but never take focus away from a newer action.
   const focusKey = document.activeElement === button ? button.dataset.focusKey : null;
   ctx.busy = true;
   ctx.sentLiveEpoch = ctx.liveSnapshotEpoch || 0;
+  const requestedRevision=Number(ctx.task.revision||0);
   button.disabled = true;
   ctx.loader?.invalidate();
-  const beginPending = subtask ? () => {
-    ctx.pendingSubtask = { id: subtask.id, status };
+  const beginPending = subtask||status ? () => {
+    if(ctx.closed)return;
+    if(subtask)ctx.pendingSubtask = { id: subtask.id, status };
+    else if(Number(ctx.task.revision||0)===requestedRevision)ctx.pendingRootStatus={status,revision:requestedRevision};
     ctx.renderOperationState?.();
   } : undefined;
   try {
@@ -1781,6 +1788,7 @@ async function runTaskDetailMutation(ctx, button, operation, { subtask, status }
         // mutation as failed if that independent read fails.
         void Promise.resolve().then(() => ctx.onChanged()).catch(() => {});
       } else {
+        ctx.pendingRootStatus=null;
         const fresh = taskStatusResponseSnapshot(ctx.task, result);
         if (fresh && ctx.acceptSnapshot) {
           ctx.loader?.invalidate(); ctx.acceptSnapshot(fresh, 'ack');
@@ -1790,6 +1798,8 @@ async function runTaskDetailMutation(ctx, button, operation, { subtask, status }
     }
   } catch (error) {
     if (ctx.closed) return;
+    ctx.pendingRootStatus=null;
+    if(!subtask)ctx.renderOperationState?.();
     if (subtask) { ctx.loader?.invalidate(); ctx.pendingSubtask = null; ctx.renderOperationState?.(); }
     window.yuvomi?.showToast(error.status === 409
       ? (error.data?.error || 'This Task changed. Review its current state before trying again.')
@@ -1800,6 +1810,7 @@ async function runTaskDetailMutation(ctx, button, operation, { subtask, status }
     }
   } finally {
     if (subtask) ctx.pendingSubtask = null;
+    ctx.pendingRootStatus=null;
     ctx.busy = false;
     ctx.statusChecking = false;
     // Reopening refreshes while busy too: repaint after clearing it so newly
@@ -1986,6 +1997,7 @@ export function openTaskDetail({
       }) };
     }
     if (!mergeTaskDetailSnapshot(task, fresh, ctx.minimumTaskRevision || 0)) return false;
+    if(ctx.pendingRootStatus&&(source==='ack'||Number(task.revision)>ctx.pendingRootStatus.revision||!canTask(task,'complete')))ctx.pendingRootStatus=null;
     ctx.minimumTaskRevision = 0; ctx.refreshRequired = false;
     if (source === 'live') { ctx.liveSnapshotEpoch = (ctx.liveSnapshotEpoch || 0) + 1; ctx.queue?.invalidate(fresh); }
     const pane = document.querySelector('.detail-view__pane');
